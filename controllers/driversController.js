@@ -168,19 +168,19 @@ const registerVehicle = async (req, res) => {
       return null;
     };
 
-    const vehicleRegistrationCardFront = req.files?.vehicleRegistrationCardFront
+    const vehicleRegistrationCardFront = req.files && req.files.vehicleRegistrationCardFront
       ? await uploadToCloudinary(req.files.vehicleRegistrationCardFront[0])
-      : vehicleRegistrationCard?.front;
-    const vehicleRegistrationCardBack = req.files?.vehicleRegistrationCardBack
+      : vehicleRegistrationCard && vehicleRegistrationCard.front;
+    const vehicleRegistrationCardBack = req.files && req.files.vehicleRegistrationCardBack
       ? await uploadToCloudinary(req.files.vehicleRegistrationCardBack[0])
-      : vehicleRegistrationCard?.back;
-    const roadAuthorityCertificateUrl = req.files?.roadAuthorityCertificate
+      : vehicleRegistrationCard && vehicleRegistrationCard.back;
+    const roadAuthorityCertificateUrl = req.files && req.files.roadAuthorityCertificate
       ? await uploadToCloudinary(req.files.roadAuthorityCertificate[0])
       : roadAuthorityCertificate;
-    const insuranceCertificateUrl = req.files?.insuranceCertificate
+    const insuranceCertificateUrl = req.files && req.files.insuranceCertificate
       ? await uploadToCloudinary(req.files.insuranceCertificate[0])
       : insuranceCertificate;
-    const vehicleImagesUrls = req.files?.vehicleImages
+    const vehicleImagesUrls = req.files && req.files.vehicleImages
       ? await Promise.all(req.files.vehicleImages.map(uploadToCloudinary))
       : vehicleImages;
 
@@ -269,19 +269,19 @@ const updateVehicle = async (req, res) => {
       return null;
     };
 
-    const vehicleRegistrationCardFront = req.files?.vehicleRegistrationCardFront
+    const vehicleRegistrationCardFront = req.files && req.files.vehicleRegistrationCardFront
       ? await uploadToCloudinary(req.files.vehicleRegistrationCardFront[0])
       : vehicle.vehicleRegistrationCard.front;
-    const vehicleRegistrationCardBack = req.files?.vehicleRegistrationCardBack
+    const vehicleRegistrationCardBack = req.files && req.files.vehicleRegistrationCardBack
       ? await uploadToCloudinary(req.files.vehicleRegistrationCardBack[0])
       : vehicle.vehicleRegistrationCard.back;
-    const roadAuthorityCertificateUrl = req.files?.roadAuthorityCertificate
+    const roadAuthorityCertificateUrl = req.files && req.files.roadAuthorityCertificate
       ? await uploadToCloudinary(req.files.roadAuthorityCertificate[0])
       : vehicle.roadAuthorityCertificate;
-    const insuranceCertificateUrl = req.files?.insuranceCertificate
+    const insuranceCertificateUrl = req.files && req.files.insuranceCertificate
       ? await uploadToCloudinary(req.files.insuranceCertificate[0])
       : vehicle.insuranceCertificate;
-    const vehicleImagesUrls = req.files?.vehicleImages
+    const vehicleImagesUrls = req.files && req.files.vehicleImages
       ? await Promise.all(req.files.vehicleImages.map(uploadToCloudinary))
       : vehicle.vehicleImages;
 

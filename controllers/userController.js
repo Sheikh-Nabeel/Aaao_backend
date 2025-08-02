@@ -368,9 +368,9 @@ cloudinary.config({
 });
 const submitKYC = asyncHandler(async (req, res) => {
   const { userId, fullName, country, gender } = req.body;
-  const frontImage = req?.files?.frontImage;
-  const backImage = req?.files?.backImage;
-  const selfieImage = req?.files?.selfieImage;
+  const frontImage = req.files && req.files.frontImage;
+  const backImage = req.files && req.files.backImage;
+  const selfieImage = req.files && req.files.selfieImage;
   if (!userId) {
     res.status(400);
     throw new Error("User ID is required");
