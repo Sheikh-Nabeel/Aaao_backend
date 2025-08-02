@@ -1,14 +1,14 @@
 // Importing required modules and configurations
-const dotenv = require("dotenv");
+import dotenv from "dotenv";
 dotenv.config({path:'./.env'});
-const express = require("express");
-const cookieParser = require("cookie-parser");
-const errorHandler = require("./middlewares/errorMiddleware"); // Import error handling middleware
-const connectDB = require("./config/connectDB");
-const cors = require("cors");
-const userRoutes = require("./routes/userRoutes");
-const driversRoutes = require("./routes/driversRoutes"); // Updated from vehicleRoutes
-require("colors");
+import express from "express";
+import cookieParser from "cookie-parser";
+import errorHandler from "./middlewares/errorMiddleware.js"; // Import error handling middleware
+import connectDB from "./config/connectDB.js";
+import cors from "cors";
+import userRoutes from "./routes/userRoutes.js";
+import driversRoutes from "./routes/driversRoutes.js"; // Updated from vehicleRoutes
+import "colors";
 
 // Initialize Express app
 const app = express();

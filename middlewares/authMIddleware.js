@@ -1,7 +1,7 @@
 // Importing required modules for handling asynchronous operations and JWT
-const handler = require("express-async-handler");
-const jwt = require("jsonwebtoken");
-const userModel = require("../models/userModel");
+import handler from "express-async-handler";
+import jwt from "jsonwebtoken";
+import userModel from "../models/userModel.js";
 
 // Authentication middleware to verify JWT tokens from cookies
 const authHandler = handler(async (req, res, next) => {
@@ -34,4 +34,4 @@ const authHandler = handler(async (req, res, next) => {
   }
 });
 
-module.exports = authHandler;
+export default authHandler;

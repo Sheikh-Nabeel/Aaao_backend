@@ -1,15 +1,15 @@
-const express = require("express");
-const {
+import express from "express";
+import {
   uploadLicense,
   handleVehicleDecision,
   registerVehicle,
   updateVehicle,
   getUserVehicleInfo,
   getCurrentUser,
-} = require("../controllers/driversController");
-const authHandler = require("../middlewares/authMIddleware");
-const multer = require("multer");
-const path = require("path");
+} from "../controllers/driversController.js";
+import authHandler from "../middlewares/authMIddleware.js";
+import multer from "multer";
+import path from "path";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "uploads/"),
@@ -55,4 +55,4 @@ router.get("/user-vehicle-info", authHandler, getUserVehicleInfo);
 router.get("/get-current-user", authHandler, getCurrentUser);
 
 
-module.exports = router;
+export default router;
