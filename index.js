@@ -1,5 +1,5 @@
 // Importing required modules and configurations
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import cookieParser from "cookie-parser";
 import errorHandler from "./middlewares/errorMiddleware.js"; // Import error handling middleware
@@ -9,6 +9,7 @@ import userRoutes from "./routes/userRoutes.js";
 import driversRoutes from "./routes/driversRoutes.js"; // Updated from vehicleRoutes
 import "colors";
 
+dotenv.config()
 // Initialize Express app
 const app = express();
 
