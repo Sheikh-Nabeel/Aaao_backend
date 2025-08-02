@@ -31,5 +31,5 @@ app.use(errorHandler);
 
 // Start the server on the specified port
 app.listen(process.env.PORT, () =>
-  console.log(`Server started on port:${process.env.PORT.yellow}`)
+  console.log(`Server started on port:${process.env.PORT}`)
 );

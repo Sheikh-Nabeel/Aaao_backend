@@ -6,18 +6,13 @@ import cloudinary from "cloudinary";
 import jwt from "jsonwebtoken"; // Import JWT for token generation
 import { v4 as uuidv4 } from "uuid"; // Import uuid (kept for potential future use)
 
-// Validate environment variables for email configuration
-if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
-  console.error(
-    "Missing email credentials: MAIL_USER or MAIL_PASS is undefined"
-  ); // Log error if email credentials are missing
-  throw new Error("Server configuration error: Email credentials missing");
-}
-
 // Configure Nodemailer transporter for sending emails
 const transporter = nodemailer.createTransport({
   service: "gmail",
-  auth: { user: process.env.MAIL_USER, pass: process.env.MAIL_PASS },
+  auth: { 
+    user: "chyousafawais667@gmail.com", 
+    pass: "mfhequkvepgtwusf" 
+  },
 }); // Set up email transporter
 transporter.verify((error) => {
   if (error) console.error("Nodemailer configuration error:", error.message);
@@ -118,7 +113,7 @@ const signupUser = asyncHandler(async (req, res) => {
   }
 
   await transporter.sendMail({
-    from: `"Your App" <${process.env.MAIL_USER}>`, // Sender email
+    from: `"Your App" <chyousafawais667@gmail.com>`, // Sender email
     to: email, // Recipient email
     subject: "Your OTP for Account Verification", // Email subject
     text: `Hello ${firstName} ${lastName},\nYour OTP for account verification is: ${otp}\nPlease enter this OTP to verify within 10 minutes.`,
@@ -298,7 +293,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
     { new: true, runValidators: true }
   );
   await transporter.sendMail({
-    from: `"Your App" <${process.env.MAIL_USER}>`,
+    from: `"Your App" <chyousafawais667@gmail.com>`,
     to: email,
     subject: "Your OTP for Password Reset",
     text: `Hello ${user.firstName} ${user.lastName},\nYour OTP for password reset is: ${resetOtp}\nPlease use this OTP within 10 minutes.`,
@@ -482,7 +477,7 @@ const resendOtp = asyncHandler(async (req, res) => {
   user.otpExpires = otpExpires;
   await user.save();
   await transporter.sendMail({
-    from: `"Your App" <${process.env.MAIL_USER}>`,
+    from: `"Your App" <chyousafawais667@gmail.com>`,
     to: email,
     subject: "Your New OTP for Account Verification",
     text: `Hello ${user.firstName} ${user.lastName},\nYour new OTP for account verification is: ${newOtp}\nPlease enter this OTP to verify within 10 minutes.`,
