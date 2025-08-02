@@ -1,6 +1,6 @@
 // Importing required modules and controllers
-import express from "express";
-import {
+const express = require("express");
+const {
   signupUser,
   verifyOTPUser,
   loginUser,
@@ -9,10 +9,10 @@ import {
   submitKYC,
   logout,
   resendOtp,
-} from "../controllers/userController.js";
-import multer from "multer";
-import path from "path";
-import authHandler from "../middlewares/authMIddleware.js"; // Correct casing
+} = require("../controllers/userController");
+const multer = require("multer");
+const path = require("path");
+const authHandler = require("../middlewares/authMIddleware"); // Correct casing
 
 // Multer setup for handling file uploads
 const storage = multer.diskStorage({
@@ -56,4 +56,4 @@ router.post("/logout", authHandler, logout);
 router.post("/resend-otp", resendOtp); // Keep as is
 
 // Export router for use in main application
-export default router;
+module.exports = router;

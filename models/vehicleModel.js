@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+const mongoose = require("mongoose");
 
 const vehicleSchema = new mongoose.Schema({
   userId: {
@@ -47,4 +47,4 @@ const vehicleSchema = new mongoose.Schema({
   },
 });
 
-export default mongoose.model("Vehicle", vehicleSchema);
+module.exports = mongoose.model("Vehicle", vehicleSchema);

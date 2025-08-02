@@ -1,10 +1,10 @@
 // Importing required modules and models
-import User from "../models/userModel.js";
-import asyncHandler from "express-async-handler";
-import nodemailer from "nodemailer";
-import cloudinary from "cloudinary";
-import jwt from "jsonwebtoken"; // Import JWT for token generation
-import { v4 as uuidv4 } from "uuid"; // Import uuid (kept for potential future use)
+const User = require("../models/userModel");
+const asyncHandler = require("express-async-handler");
+const nodemailer = require("nodemailer");
+const cloudinary = require("cloudinary");
+const jwt = require("jsonwebtoken"); // Import JWT for token generation
+const { v4: uuidv4 } = require("uuid"); // Import uuid (kept for potential future use)
 
 // Validate environment variables for email configuration
 if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
@@ -567,7 +567,7 @@ async function updateSponsorLevels(userId) {
 }
 
 // Export all controller functions
-export {
+module.exports = {
   signupUser,
   verifyOTPUser,
   loginUser,

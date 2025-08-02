@@ -1,8 +1,8 @@
 // Import required modules for vehicle and user management, cloud storage, and JWT
-import Vehicle from "../models/vehicleModel.js";
-import User from "../models/userModel.js";
-import cloudinary from "cloudinary";
-import jwt from "jsonwebtoken";
+const Vehicle = require("../models/vehicleModel");
+const User = require("../models/userModel");
+const cloudinary = require("cloudinary");
+const jwt = require("jsonwebtoken");
 
 // Configure Cloudinary with environment variables
 cloudinary.config({
@@ -402,7 +402,7 @@ const getCurrentUser = async (req, res) => {
 };
 
 // Export all controller functions
-export {
+module.exports = {
   uploadLicense,
   handleVehicleDecision,
   registerVehicle,

@@ -1,7 +1,7 @@
 // Importing required modules for MongoDB schema definition and password hashing
-import mongoose from "mongoose";
-import bcrypt from "bcrypt";
-import { v4 as uuidv4 } from "uuid"; // Import uuid for unique sponsorId
+const mongoose = require("mongoose");
+const bcrypt = require("bcrypt");
+const { v4: uuidv4 } = require("uuid"); // Import uuid for unique sponsorId
 
 // Defining the user schema with validation rules
 const userSchema = new mongoose.Schema({
@@ -126,4 +126,4 @@ userSchema.methods.comparePassword = async function (password) {
   return await bcrypt.compare(password, this.password); // Compare input password with hashed password
 };
 
-export default mongoose.model("User", userSchema);
+module.exports = mongoose.model("User", userSchema);
