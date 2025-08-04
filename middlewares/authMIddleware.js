@@ -3,13 +3,23 @@ import handler from "express-async-handler";
 import jwt from "jsonwebtoken";
 import userModel from "../models/userModel.js";
 
-// Authentication middleware to verify JWT tokens from cookies
+// Authentication middleware to verify JWT tokens from Authorization header or cookies
 const authHandler = handler(async (req, res, next) => {
-  let token = req.cookies.token; // Extract token from cookies
+  let token = req.headers.authorization; // Extract token from Authorization header
+
+  // If no token in header, try to get from cookies
+  if (!token) {
+    token = req.cookies.token;
+  }
 
   if (!token) {
     res.status(401);
     throw new Error("Token not found");
+  }
+
+  // Remove "Bearer " prefix if present (only for Authorization header)
+  if (req.headers.authorization && token.startsWith('Bearer ')) {
+    token = token.slice(7);
   }
 
   try {
