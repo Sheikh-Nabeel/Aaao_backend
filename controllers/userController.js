@@ -1,33 +1,27 @@
-// Importing required modules and models
 import User from "../models/userModel.js";
 import asyncHandler from "express-async-handler";
 import nodemailer from "nodemailer";
 import cloudinary from "cloudinary";
-import jwt from "jsonwebtoken"; // Import JWT for token generation
-import { v4 as uuidv4 } from "uuid"; // Import uuid (kept for potential future use)
+import jwt from "jsonwebtoken";
+import { v4 as uuidv4 } from "uuid";
 import mongoose from "mongoose";
 
-// Configure Nodemailer transporter for sending emails
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: "chyousafawais667@gmail.com",
     pass: "mfhequkvepgtwusf",
   },
-}); // Set up email transporter
+});
 transporter.verify((error) => {
   if (error) console.error("Nodemailer configuration error:", error.message);
-  // Log configuration errors
-  else console.log("Nodemailer is ready to send emails"); // Confirm transporter is ready
+  else console.log("Nodemailer is ready to send emails");
 });
 
-// Generate a 6-digit OTP for verification or password reset
 const generateOTP = () =>
-  Math.floor(100000 + Math.random() * 900000).toString(); // Generate a random 6-digit OTP
+  Math.floor(100000 + Math.random() * 900000).toString();
 
-// Function to handle user signup and send OTP via email
 const signupUser = asyncHandler(async (req, res) => {
-  // Extract registration data from request body
   const {
     firstName,
     lastName,
@@ -38,7 +32,6 @@ const signupUser = asyncHandler(async (req, res) => {
     gender,
   } = req.body;
 
-  // Check for missing required fields
   if (!firstName) {
     res.status(400);
     throw new Error("First name is required");
@@ -64,7 +57,6 @@ const signupUser = asyncHandler(async (req, res) => {
     throw new Error("Gender is required");
   }
 
-  // Validate sponsorBy if provided
   if (sponsorBy) {
     const sponsor = await User.findOne({ sponsorId: sponsorBy });
     if (!sponsor) {
@@ -73,7 +65,6 @@ const signupUser = asyncHandler(async (req, res) => {
     }
   }
 
-  // Check if email or phoneNumber already exists (partial user or verified)
   const existingUser = await User.findOne({
     $or: [{ email }, { phoneNumber }],
   });
@@ -83,7 +74,6 @@ const signupUser = asyncHandler(async (req, res) => {
       res.status(400);
       throw new Error("A user with this email or phone number already exists");
     }
-    // Update existing unverified user
     otp = generateOTP();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
     existingUser.otp = otp;
@@ -109,14 +99,14 @@ const signupUser = asyncHandler(async (req, res) => {
       otpExpires: new Date(Date.now() + 10 * 60 * 1000),
       isVerified: false,
     });
-    otp = user.otp; // Assign the OTP from the created user
+    otp = user.otp;
     console.log("Created new user:", user.email, user.otp);
   }
 
   await transporter.sendMail({
-    from: `"Your App" <chyousafawais667@gmail.com>`, // Sender email
-    to: email, // Recipient email
-    subject: "Your OTP for Account Verification", // Email subject
+    from: `"Your App" <chyousafawais667@gmail.com>`,
+    to: email,
+    subject: "Your OTP for Account Verification",
     text: `Hello ${firstName} ${lastName},\nYour OTP for account verification is: ${otp}\nPlease enter this OTP to verify within 10 minutes.`,
     html: `<h2>Hello ${firstName} ${lastName},</h2><p>Your OTP is: <strong>${otp}</strong></p><p>Verify within 10 minutes.</p>`,
   });
@@ -125,12 +115,9 @@ const signupUser = asyncHandler(async (req, res) => {
   });
 });
 
-// Function to verify OTP and complete user registration
 const verifyOTPUser = asyncHandler(async (req, res) => {
-  // Extract email and OTP from request body
   const { email, otp } = req.body;
 
-  // Check for missing required fields
   if (!email) {
     res.status(400);
     throw new Error("Email is required");
@@ -155,14 +142,14 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     throw new Error("Invalid OTP");
   }
 
-  // Complete registration and update referral tree
   let sponsorName = null;
   if (user.sponsorBy) {
     console.log(`User has sponsorBy: ${user.sponsorBy}`);
     const sponsor = await User.findOne({ sponsorId: user.sponsorBy });
     if (sponsor) {
-      console.log(`Found sponsor: ${sponsor.sponsorId} (${sponsor.firstName} ${sponsor.lastName})`);
-      // Update referral tree with new user
+      console.log(
+        `Found sponsor: ${sponsor.sponsorId} (${sponsor.firstName} ${sponsor.lastName})`
+      );
       await updateReferralTree(user._id, user.sponsorBy);
       sponsorName = `${sponsor.firstName} ${sponsor.lastName}`;
     } else {
@@ -182,9 +169,9 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
   });
   res.cookie("token", token, {
     httpOnly: true,
-    maxAge: 3600000, // 1 hour
-    sameSite: "lax", // Adjust for local dev; use "none" with secure: true for cross-origin if needed
-    secure: process.env.NODE_ENV === "production", // Only secure in production
+    maxAge: 3600000,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
   });
   const sponsoredUsers = user.sponsorTree
     .map((s) => `${s.firstName} ${s.lastName}`)
@@ -200,7 +187,7 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
       name: `${s.firstName} ${s.lastName}`,
     })),
     sponsoredUsers: sponsoredUsers || "No sponsored users",
-    sponsorName: sponsorName, // Add sponsor name to response
+    sponsorName: sponsorName,
     user: {
       firstName: user.firstName,
       lastName: user.lastName,
@@ -214,9 +201,7 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
   });
 });
 
-// Function to handle user login
 const loginUser = asyncHandler(async (req, res) => {
-  // Extract login credentials from request body
   const { email, phoneNumber, password } = req.body;
   if ((!email && !phoneNumber) || !password) {
     res.status(400);
@@ -251,9 +236,9 @@ const loginUser = asyncHandler(async (req, res) => {
   res
     .cookie("token", token, {
       httpOnly: true,
-      maxAge: 3600000, // 1 hour
-      sameSite: "lax", // Adjust for local dev; use "none" with secure: true for cross-origin if needed
-      secure: process.env.NODE_ENV === "production", // Only secure in production
+      maxAge: 3600000,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
     })
     .status(200)
     .json({
@@ -267,7 +252,7 @@ const loginUser = asyncHandler(async (req, res) => {
         name: `${s.firstName} ${s.lastName}`,
       })),
       sponsoredUsers: sponsoredUsers || "No sponsored users",
-      sponsorName: sponsorName, // Add sponsor name to response
+      sponsorName: sponsorName,
       user: {
         firstName: user.firstName,
         lastName: user.lastName,
@@ -281,7 +266,6 @@ const loginUser = asyncHandler(async (req, res) => {
     });
 });
 
-// Function to handle forgot password request and send OTP
 const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
   if (!email) {
@@ -311,14 +295,13 @@ const forgotPassword = asyncHandler(async (req, res) => {
   });
   res.cookie("token", token, {
     httpOnly: true,
-    maxAge: 3600000, // 1 hour
+    maxAge: 3600000,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
   });
   res.status(200).json({ message: "Reset OTP sent to email", token });
 });
 
-// Function to reset user password using OTP
 const resetPassword = asyncHandler(async (req, res) => {
   const { userId, resetOtp, password } = req.body;
   if (!userId) {
@@ -355,116 +338,121 @@ const resetPassword = asyncHandler(async (req, res) => {
   });
   res.cookie("token", token, {
     httpOnly: true,
-    maxAge: 3600000, // 1 hour
+    maxAge: 3600000,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
   });
   res.status(200).json({ message: "Password reset successful", token });
 });
 
-// Function to handle KYC Level 1 submission
 cloudinary.config({
   cloud_name: process.env.Cloud_Name,
   api_key: process.env.API_Key,
   api_secret: process.env.API_Secret,
 });
 
-const submitKYC = async (req, res) => {
-  const { email, firstName, lastName } = req.body;
+const submitKYC = asyncHandler(async (req, res) => {
+  console.log("Request Body:", req.body); // Log the body
+  console.log("Received Files:", req.files); // Log the files
+  console.log("Full Request Headers:", req.headers); // Log headers to check Content-Type
+
+  const { userId, fullName } = req.body;
 
   // Validate required fields
-  if (!email || !firstName || !lastName) {
+  if (!userId || !fullName) {
     return res.status(400).json({
-      message: "Email, first name, and last name are required",
-      email: email || null,
+      message: "User ID and full name are required",
+      userId: userId || null,
     });
   }
 
-  // Find user by email
-  const user = await User.findOne({ email });
+  // Split fullName into firstName and lastName
+  const [firstName, ...lastNameParts] = fullName.trim().split(" ");
+  const lastName = lastNameParts.join(" ");
+
+  if (!firstName || !lastName) {
+    return res.status(400).json({
+      message: "Full name must contain both first and last names",
+      userId,
+    });
+  }
+
+  // Find user by ID
+  const user = await User.findById(userId);
   if (!user) {
-    return res.status(404).json({ message: "User not found", email });
+    return res.status(404).json({ message: "User not found", userId });
   }
 
-  // Verify full name matches
+  // Update user's firstName and lastName if they differ
   if (user.firstName !== firstName || user.lastName !== lastName) {
-    return res.status(400).json({
-      message: "Provided first name or last name does not match user record",
-      email,
-    });
+    user.firstName = firstName;
+    user.lastName = lastName;
+    await user.save();
   }
 
   // Check if KYC Level 1 is already completed
   if (user.kycLevel >= 1) {
     return res
       .status(403)
-      .json({ message: "KYC Level 1 already completed", email });
+      .json({ message: "KYC Level 1 already completed", userId });
   }
 
-  try {
-    // Verify file uploads
-    if (
-      !req.files ||
-      !req.files.frontImage ||
-      !req.files.backImage ||
-      !req.files.selfieImage
-    ) {
-      return res.status(400).json({
-        message: "Front, back, and selfie images are required",
-        email,
-      });
-    }
-
-    // Upload images to Cloudinary
-    const uploadToCloudinary = async (file, folder) => {
-      const result = await cloudinary.uploader.upload(file.path, { folder });
-      return result.secure_url;
-    };
-
-    const frontImageUrl = await uploadToCloudinary(
-      req.files.frontImage[0],
-      "kyc/cnic"
-    );
-    const backImageUrl = await uploadToCloudinary(
-      req.files.backImage[0],
-      "kyc/cnic"
-    );
-    const selfieImageUrl = await uploadToCloudinary(
-      req.files.selfieImage[0],
-      "kyc/selfie"
-    );
-
-    // Update user with KYC details
-    user.cnicImages = {
-      front: frontImageUrl,
-      back: backImageUrl,
-    };
-    user.selfieImage = selfieImageUrl;
-    user.kycLevel = 1;
-    await user.save();
-
-    // Respond with success
-    res.status(200).json({
-      message: "KYC Level 1 submitted successfully",
-      email,
+  // Verify file uploads
+  if (
+    !req.files ||
+    !req.files.frontImage ||
+    !req.files.backImage ||
+    !req.files.selfieImage
+  ) {
+    return res.status(400).json({
+      message: "Front, back, and selfie images are required",
+      userId,
     });
-  } catch (error) {
-    console.error("Error submitting KYC:", error);
-    res.status(500).json({ message: error.message, email });
   }
-};
 
-// Handle user logout by clearing the token cookie
+  // Upload images to Cloudinary
+  const uploadToCloudinary = async (file, folder) => {
+    const result = await cloudinary.uploader.upload(file.path, { folder });
+    return result.secure_url;
+  };
+
+  const frontImageUrl = await uploadToCloudinary(
+    req.files.frontImage[0],
+    "kyc/cnic"
+  );
+  const backImageUrl = await uploadToCloudinary(
+    req.files.backImage[0],
+    "kyc/cnic"
+  );
+  const selfieImageUrl = await uploadToCloudinary(
+    req.files.selfieImage[0],
+    "kyc/selfie"
+  );
+
+  // Update user with KYC details
+  user.cnicImages = {
+    front: frontImageUrl,
+    back: backImageUrl,
+  };
+  user.selfieImage = selfieImageUrl;
+  user.kycLevel = 1;
+  await user.save();
+
+  // Respond with success
+  res.status(200).json({
+    message: "KYC Level 1 submitted successfully",
+    userId,
+  });
+});
+
 const logout = async (req, res) => {
   try {
-    // Clear the cookie regardless of its existence
     res.clearCookie("token", {
       httpOnly: true,
       maxAge: 0,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
     });
-    // Check if token exists in request cookies and log for debugging
     if (!req.cookies || !req.cookies.token) {
       console.log("No token found in request cookies during logout");
     }
@@ -475,7 +463,6 @@ const logout = async (req, res) => {
   }
 };
 
-// Function to resend OTP to user's email
 const resendOtp = asyncHandler(async (req, res) => {
   const { email } = req.body;
   if (!email) {
@@ -506,33 +493,35 @@ const resendOtp = asyncHandler(async (req, res) => {
   res.status(200).json({ message: "New OTP sent successfully" });
 });
 
-// Helper function to update referral tree when a new user is added
 async function updateReferralTree(newUserId, sponsorId) {
   try {
     const newUser = await User.findById(newUserId);
     if (!newUser) return;
 
-    // Find the sponsor using sponsorId
     const sponsor = await User.findOne({ sponsorId: sponsorId });
     if (!sponsor) {
       console.error(`Sponsor not found with sponsorId: ${sponsorId}`);
       return;
     }
 
-    console.log(`Adding user ${newUserId} to sponsor ${sponsor._id} (${sponsor.sponsorId})`);
+    console.log(
+      `Adding user ${newUserId} to sponsor ${sponsor._id} (${sponsor.sponsorId})`
+    );
 
-    // Add new user to sponsor's direct referrals (Level 1)
     if (!sponsor.directReferrals.includes(newUserId)) {
       sponsor.directReferrals.push(newUserId);
-      console.log(`Added to directReferrals. Current count: ${sponsor.directReferrals.length}`);
+      console.log(
+        `Added to directReferrals. Current count: ${sponsor.directReferrals.length}`
+      );
     } else {
       console.log(`User already in directReferrals`);
     }
 
-    // Update sponsor tree for backward compatibility
     if (!sponsor.sponsorTree.includes(newUserId)) {
       sponsor.sponsorTree.push(newUserId);
-      console.log(`Added to sponsorTree. Current count: ${sponsor.sponsorTree.length}`);
+      console.log(
+        `Added to sponsorTree. Current count: ${sponsor.sponsorTree.length}`
+      );
     } else {
       console.log(`User already in sponsorTree`);
     }
@@ -540,32 +529,22 @@ async function updateReferralTree(newUserId, sponsorId) {
     await sponsor.save();
     console.log(`Sponsor saved successfully`);
 
-    // Update all levels in the referral chain
     await updateAllLevels(sponsor._id);
   } catch (error) {
     console.error("Error updating referral tree:", error);
   }
 }
 
-// Helper function to update all levels in the referral chain
 async function updateAllLevels(userId) {
   try {
     const user = await User.findById(userId);
     if (!user) return;
 
-    // Update Level 2 referrals
     await updateLevel2Referrals(user);
-
-    // Update Level 3 referrals
     await updateLevel3Referrals(user);
-
-    // Update Level 4 referrals
     await updateLevel4Referrals(user);
-
-    // Check and update user's level
     await checkAndUpdateUserLevel(user);
 
-    // Recursively update parent sponsors
     if (user.sponsorBy) {
       const parentSponsor = await User.findOne({ sponsorId: user.sponsorBy });
       if (parentSponsor) {
@@ -577,54 +556,49 @@ async function updateAllLevels(userId) {
   }
 }
 
-// Helper function to update Level 2 referrals
 async function updateLevel2Referrals(user) {
   user.level2Referrals = [];
-  
+
   for (const directReferralId of user.directReferrals) {
     const directReferral = await User.findById(directReferralId);
     if (directReferral && directReferral.directReferrals.length > 0) {
       user.level2Referrals.push(...directReferral.directReferrals);
     }
   }
-  
+
   await user.save();
 }
 
-// Helper function to update Level 3 referrals
 async function updateLevel3Referrals(user) {
   user.level3Referrals = [];
-  
+
   for (const level2ReferralId of user.level2Referrals) {
     const level2Referral = await User.findById(level2ReferralId);
-    if (level2Referral && level2Referral.directReferrals.length > 0) {
+    if (level2Referral && directReferral.directReferrals.length > 0) {
       user.level3Referrals.push(...level2Referral.directReferrals);
     }
   }
-  
+
   await user.save();
 }
 
-// Helper function to update Level 4 referrals
 async function updateLevel4Referrals(user) {
   user.level4Referrals = [];
-  
+
   for (const level3ReferralId of user.level3Referrals) {
     const level3Referral = await User.findById(level3ReferralId);
     if (level3Referral && level3Referral.directReferrals.length > 0) {
       user.level4Referrals.push(...level3Referral.directReferrals);
     }
   }
-  
+
   await user.save();
 }
 
-// Helper function to check and update user's level
 async function checkAndUpdateUserLevel(user) {
   const stats = user.getReferralStats();
   let newLevel = user.level;
 
-  // Check if user can level up
   if (stats.level1 >= 3 && user.level < 1) {
     newLevel = 1;
   }
@@ -638,7 +612,6 @@ async function checkAndUpdateUserLevel(user) {
     newLevel = 4;
   }
 
-  // Update level if changed
   if (newLevel !== user.level) {
     user.level = newLevel;
     await user.save();
@@ -646,31 +619,39 @@ async function checkAndUpdateUserLevel(user) {
   }
 }
 
-
-
-
-
-// Function to get complete referral tree with counts and all member details (OPTIMIZED)
 const getReferralTree = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  
+
   const user = await User.findById(userId);
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
 
-  // Get referral statistics
   const stats = user.getReferralStats();
-  
-  // Debug: Log the actual arrays
+
   console.log(`User ${user.sponsorId} referral arrays:`);
-  console.log(`directReferrals: ${user.directReferrals.length} - [${user.directReferrals.join(', ')}]`);
-  console.log(`level2Referrals: ${user.level2Referrals.length} - [${user.level2Referrals.join(', ')}]`);
-  console.log(`level3Referrals: ${user.level3Referrals.length} - [${user.level3Referrals.join(', ')}]`);
-  console.log(`level4Referrals: ${user.level4Referrals.length} - [${user.level4Referrals.join(', ')}]`);
-  
-  // Prepare response structure
+  console.log(
+    `directReferrals: ${
+      user.directReferrals.length
+    } - [${user.directReferrals.join(", ")}]`
+  );
+  console.log(
+    `level2Referrals: ${
+      user.level2Referrals.length
+    } - [${user.level2Referrals.join(", ")}]`
+  );
+  console.log(
+    `level3Referrals: ${
+      user.level3Referrals.length
+    } - [${user.level3Referrals.join(", ")}]`
+  );
+  console.log(
+    `level4Referrals: ${
+      user.level4Referrals.length
+    } - [${user.level4Referrals.join(", ")}]`
+  );
+
   const referralTree = {
     user: {
       id: user._id,
@@ -678,66 +659,66 @@ const getReferralTree = asyncHandler(async (req, res) => {
       email: user.email,
       sponsorId: user.sponsorId,
       level: user.level,
-      sponsorBy: user.sponsorBy
+      sponsorBy: user.sponsorBy,
     },
     counts: {
       totalReferrals: stats.totalReferrals,
       level1: stats.level1,
       level2: stats.level2,
       level3: stats.level3,
-      level4: stats.level4
+      level4: stats.level4,
     },
     members: {
       level1: [],
       level2: [],
       level3: [],
-      level4: []
-    }
+      level4: [],
+    },
   };
 
-  // Get all referral IDs from all levels
   const allReferralIds = [
     ...user.directReferrals,
     ...user.level2Referrals,
     ...user.level3Referrals,
-    ...user.level4Referrals
+    ...user.level4Referrals,
   ];
 
   if (allReferralIds.length > 0) {
-    // Fetch all users in one optimized query using aggregation
     const allMembers = await User.aggregate([
       {
         $match: {
-          _id: { $in: allReferralIds.map(id => new mongoose.Types.ObjectId(id)) }
-        }
+          _id: {
+            $in: allReferralIds.map((id) => new mongoose.Types.ObjectId(id)),
+          },
+        },
       },
       {
         $project: {
-          _id: 0, // Exclude the original _id
-          id: '$_id', // Create id field from _id
-          name: { $concat: ['$firstName', ' ', '$lastName'] },
+          _id: 0,
+          id: "$_id",
+          name: { $concat: ["$firstName", " ", "$lastName"] },
           email: 1,
           sponsorId: 1,
           level: 1,
           kycLevel: 1,
           role: 1,
-          joinedDate: '$createdAt'
-        }
+          joinedDate: "$createdAt",
+        },
       },
       {
-        $sort: { joinedDate: -1 }
-      }
+        $sort: { joinedDate: -1 },
+      },
     ]);
 
-    // Create a map for fast lookup
     const membersMap = new Map();
-    allMembers.forEach(member => {
+    allMembers.forEach((member) => {
       membersMap.set(member.id.toString(), member);
     });
 
-    // Populate level 1 members (direct referrals)
-    console.log(`Processing ${user.directReferrals.length} direct referrals...`);
-    user.directReferrals.forEach(id => {
+    console.log(
+      `Processing ${user.directReferrals.length} direct referrals...`
+    );
+    user.directReferrals.forEach((id) => {
       const member = membersMap.get(id.toString());
       if (member) {
         referralTree.members.level1.push(member);
@@ -746,26 +727,25 @@ const getReferralTree = asyncHandler(async (req, res) => {
         console.log(`Member not found for ID: ${id}`);
       }
     });
-    console.log(`Final level1 members count: ${referralTree.members.level1.length}`);
+    console.log(
+      `Final level1 members count: ${referralTree.members.level1.length}`
+    );
 
-    // Populate level 2 members
-    user.level2Referrals.forEach(id => {
+    user.level2Referrals.forEach((id) => {
       const member = membersMap.get(id.toString());
       if (member) {
         referralTree.members.level2.push(member);
       }
     });
 
-    // Populate level 3 members
-    user.level3Referrals.forEach(id => {
+    user.level3Referrals.forEach((id) => {
       const member = membersMap.get(id.toString());
       if (member) {
         referralTree.members.level3.push(member);
       }
     });
 
-    // Populate level 4 members
-    user.level4Referrals.forEach(id => {
+    user.level4Referrals.forEach((id) => {
       const member = membersMap.get(id.toString());
       if (member) {
         referralTree.members.level4.push(member);
@@ -775,72 +755,70 @@ const getReferralTree = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     message: "Referral tree retrieved successfully",
-    referralTree
+    referralTree,
   });
 });
 
-
-
-
-
-
-
-
-
-// Function to get all users in the system (for admin purposes)
 const getAllUsers = asyncHandler(async (req, res) => {
-  const users = await User.find({}, {
-    firstName: 1,
-    lastName: 1,
-    email: 1,
-    sponsorId: 1,
-    sponsorBy: 1,
-    level: 1,
-    kycLevel: 1,
-    role: 1,
-    createdAt: 1
-  }).sort({ createdAt: -1 });
+  const users = await User.find(
+    {},
+    {
+      firstName: 1,
+      lastName: 1,
+      email: 1,
+      sponsorId: 1,
+      sponsorBy: 1,
+      level: 1,
+      kycLevel: 1,
+      role: 1,
+      createdAt: 1,
+    }
+  ).sort({ createdAt: -1 });
 
   res.status(200).json({
     message: "All users retrieved successfully",
     users,
-    totalUsers: users.length
+    totalUsers: users.length,
   });
 });
 
-// Function to fix referral relationships for all users
 const fixReferralRelationships = asyncHandler(async (req, res) => {
   try {
     console.log("Starting to fix referral relationships...");
-    
-    // Get all users who have a sponsorBy field
-    const usersWithSponsors = await User.find({ sponsorBy: { $exists: true, $ne: null } });
+
+    const usersWithSponsors = await User.find({
+      sponsorBy: { $exists: true, $ne: null },
+    });
     console.log(`Found ${usersWithSponsors.length} users with sponsors`);
-    
+
     let fixedCount = 0;
     let errorCount = 0;
-    
+
     for (const user of usersWithSponsors) {
       try {
         if (user.sponsorBy) {
           const sponsor = await User.findOne({ sponsorId: user.sponsorBy });
           if (sponsor) {
-            // Check if user is already in sponsor's directReferrals
             if (!sponsor.directReferrals.includes(user._id)) {
               sponsor.directReferrals.push(user._id);
-              console.log(`Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} directReferrals`);
+              console.log(
+                `Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} directReferrals`
+              );
             }
-            
-            // Check if user is already in sponsor's sponsorTree
+
             if (!sponsor.sponsorTree.includes(user._id)) {
               sponsor.sponsorTree.push(user._id);
-              console.log(`Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} sponsorTree`);
+              console.log(
+                `Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} sponsorTree`
+              );
             }
-            
+
             await sponsor.save();
             fixedCount++;
           } else {
-            console.error(`Sponsor not found for user ${user.sponsorId} with sponsorBy: ${user.sponsorBy}`);
+            console.error(
+              `Sponsor not found for user ${user.sponsorId} with sponsorBy: ${user.sponsorBy}`
+            );
             errorCount++;
           }
         }
@@ -849,34 +827,35 @@ const fixReferralRelationships = asyncHandler(async (req, res) => {
         errorCount++;
       }
     }
-    
-    // Now update all levels for all users
+
     console.log("Updating all levels...");
     const allUsers = await User.find({});
     for (const user of allUsers) {
       try {
         await updateAllLevels(user._id);
       } catch (error) {
-        console.error(`Error updating levels for user ${user.sponsorId}:`, error);
+        console.error(
+          `Error updating levels for user ${user.sponsorId}:`,
+          error
+        );
       }
     }
-    
+
     res.status(200).json({
       message: "Referral relationships fixed successfully",
       fixedCount,
       errorCount,
-      totalUsersProcessed: usersWithSponsors.length
+      totalUsersProcessed: usersWithSponsors.length,
     });
   } catch (error) {
     console.error("Error in fixReferralRelationships:", error);
     res.status(500).json({
       message: "Error fixing referral relationships",
-      error: error.message
+      error: error.message,
     });
   }
 });
 
-// Export all controller functions
 export {
   signupUser,
   verifyOTPUser,
@@ -890,4 +869,3 @@ export {
   getAllUsers,
   fixReferralRelationships,
 };
-
