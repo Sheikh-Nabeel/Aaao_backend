@@ -9,9 +9,9 @@ import { v4 as uuidv4 } from "uuid"; // Import uuid (kept for potential future u
 // Configure Nodemailer transporter for sending emails
 const transporter = nodemailer.createTransport({
   service: "gmail",
-  auth: {
-    user: "chyousafawais667@gmail.com",
-    pass: "mfhequkvepgtwusf",
+  auth: { 
+    user: "chyousafawais667@gmail.com", 
+    pass: "mfhequkvepgtwusf" 
   },
 }); // Set up email transporter
 transporter.verify((error) => {
@@ -361,91 +361,78 @@ cloudinary.config({
   api_key: process.env.API_Key,
   api_secret: process.env.API_Secret,
 });
-
-const submitKYC = async (req, res) => {
-  const { email, firstName, lastName } = req.body;
-
-  // Validate required fields
-  if (!email || !firstName || !lastName) {
-    return res.status(400).json({
-      message: "Email, first name, and last name are required",
-      email: email || null,
-    });
+const submitKYC = asyncHandler(async (req, res) => {
+  const { userId, fullName, country, gender } = req.body;
+  const frontImage = req.files && req.files.frontImage;
+  const backImage = req.files && req.files.backImage;
+  const selfieImage = req.files && req.files.selfieImage;
+  if (!userId) {
+    res.status(400);
+    throw new Error("User ID is required");
   }
-
-  // Find user by email
-  const user = await User.findOne({ email });
+  if (!fullName) {
+    res.status(400);
+    throw new Error("Full name is required");
+  }
+  if (!country) {
+    res.status(400);
+    throw new Error("Country is required");
+  }
+  if (!frontImage) {
+    res.status(400);
+    throw new Error("Front image is required");
+  }
+  if (!backImage) {
+    res.status(400);
+    throw new Error("Back image is required");
+  }
+  if (!selfieImage) {
+    res.status(400);
+    throw new Error("Selfie image is required");
+  }
+  const [firstName, lastName] = fullName.split(" ").filter(Boolean);
+  if (!firstName || !lastName) {
+    res.status(400);
+    throw new Error("Full name must contain both first and last names");
+  }
+  const user = await User.findById(userId);
   if (!user) {
-    return res.status(404).json({ message: "User not found", email });
+    res.status(404);
+    throw new Error("User not found. Please provide a valid user ID.");
   }
-
-  // Verify full name matches
-  if (user.firstName !== firstName || user.lastName !== lastName) {
-    return res.status(400).json({
-      message: "Provided first name or last name does not match user record",
-      email,
-    });
-  }
-
-  // Check if KYC Level 1 is already completed
-  if (user.kycLevel >= 1) {
-    return res
-      .status(403)
-      .json({ message: "KYC Level 1 already completed", email });
-  }
-
-  try {
-    // Verify file uploads
-    if (
-      !req.files ||
-      !req.files.frontImage ||
-      !req.files.backImage ||
-      !req.files.selfieImage
-    ) {
-      return res.status(400).json({
-        message: "Front, back, and selfie images are required",
-        email,
-      });
-    }
-
-    // Upload images to Cloudinary
-    const uploadToCloudinary = async (file, folder) => {
-      const result = await cloudinary.uploader.upload(file.path, { folder });
-      return result.secure_url;
-    };
-
-    const frontImageUrl = await uploadToCloudinary(
-      req.files.frontImage[0],
-      "kyc/cnic"
-    );
-    const backImageUrl = await uploadToCloudinary(
-      req.files.backImage[0],
-      "kyc/cnic"
-    );
-    const selfieImageUrl = await uploadToCloudinary(
-      req.files.selfieImage[0],
-      "kyc/selfie"
-    );
-
-    // Update user with KYC details
-    user.cnicImages = {
-      front: frontImageUrl,
-      back: backImageUrl,
-    };
-    user.selfieImage = selfieImageUrl;
-    user.kycLevel = 1;
-    await user.save();
-
-    // Respond with success
-    res.status(200).json({
-      message: "KYC Level 1 submitted successfully",
-      email,
-    });
-  } catch (error) {
-    console.error("Error submitting KYC:", error);
-    res.status(500).json({ message: error.message, email });
-  }
-};
+  const frontUpload = await cloudinary.uploader.upload(frontImage[0].path, {
+    folder: "kyc/front",
+  });
+  const backUpload = await cloudinary.uploader.upload(backImage[0].path, {
+    folder: "kyc/back",
+  });
+  const selfieUpload = await cloudinary.uploader.upload(selfieImage[0].path, {
+    folder: "kyc/selfie",
+  });
+  user.firstName = firstName;
+  user.lastName = lastName;
+  user.country = country;
+  user.gender = gender;
+  user.cnicImages = {
+    front: frontUpload.secure_url,
+    back: backUpload.secure_url,
+  };
+  user.selfieImage = selfieUpload.secure_url;
+  user.kycLevel = 1;
+  await user.save();
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, {
+    httpOnly: true,
+    maxAge: 3600000, // 1 hour
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+  res
+    .status(200)
+    .json({ message: "KYC Level 1 completed successfully", token });
+});
 
 // Handle user logout by clearing the token cookie
 const logout = async (req, res) => {

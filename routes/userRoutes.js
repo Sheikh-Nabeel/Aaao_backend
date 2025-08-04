@@ -41,7 +41,7 @@ router.post("/reset-password", authHandler, resetPassword);
 // Route to submit KYC Level 1 with CNIC images and selfie, requiring authentication
 router.post(
   "/submit-kyc",
-
+  authHandler,
   upload.fields([
     { name: "frontImage" },
     { name: "backImage" },
