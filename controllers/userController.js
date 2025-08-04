@@ -663,6 +663,13 @@ const getReferralTree = asyncHandler(async (req, res) => {
   // Get referral statistics
   const stats = user.getReferralStats();
   
+  // Debug: Log the actual arrays
+  console.log(`User ${user.sponsorId} referral arrays:`);
+  console.log(`directReferrals: ${user.directReferrals.length} - [${user.directReferrals.join(', ')}]`);
+  console.log(`level2Referrals: ${user.level2Referrals.length} - [${user.level2Referrals.join(', ')}]`);
+  console.log(`level3Referrals: ${user.level3Referrals.length} - [${user.level3Referrals.join(', ')}]`);
+  console.log(`level4Referrals: ${user.level4Referrals.length} - [${user.level4Referrals.join(', ')}]`);
+  
   // Prepare response structure
   const referralTree = {
     user: {
@@ -706,7 +713,8 @@ const getReferralTree = asyncHandler(async (req, res) => {
       },
       {
         $project: {
-          id: '$_id',
+          _id: 0, // Exclude the original _id
+          id: '$_id', // Create id field from _id
           name: { $concat: ['$firstName', ' ', '$lastName'] },
           email: 1,
           sponsorId: 1,
@@ -728,12 +736,17 @@ const getReferralTree = asyncHandler(async (req, res) => {
     });
 
     // Populate level 1 members (direct referrals)
+    console.log(`Processing ${user.directReferrals.length} direct referrals...`);
     user.directReferrals.forEach(id => {
       const member = membersMap.get(id.toString());
       if (member) {
         referralTree.members.level1.push(member);
+        console.log(`Added member: ${member.name} (${member.id})`);
+      } else {
+        console.log(`Member not found for ID: ${id}`);
       }
     });
+    console.log(`Final level1 members count: ${referralTree.members.level1.length}`);
 
     // Populate level 2 members
     user.level2Referrals.forEach(id => {
