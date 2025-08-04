@@ -620,9 +620,18 @@ async function checkAndUpdateUserLevel(user) {
 }
 
 const getReferralTree = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-
-  const user = await User.findById(userId);
+  // Get user ID from query parameter or use authenticated user
+  const targetUserId = req.query.userId || req.user._id;
+  
+  console.log("Query parameters:", req.query);
+  console.log("Target User ID:", targetUserId);
+  console.log("Authenticated User ID:", req.user._id);
+  
+  // If userId is provided in query, validate that the authenticated user has permission
+  // For now, allowing any authenticated user to view any referral tree
+  // You can add role-based restrictions here if needed
+  
+  const user = await User.findById(targetUserId);
   if (!user) {
     res.status(404);
     throw new Error("User not found");
