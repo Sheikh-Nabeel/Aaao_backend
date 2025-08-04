@@ -9,6 +9,9 @@ import {
   submitKYC,
   logout,
   resendOtp,
+  getReferralTree,
+  getAllUsers,
+  fixReferralRelationships,
 } from "../controllers/userController.js";
 import multer from "multer";
 import path from "path";
@@ -54,6 +57,11 @@ router.post("/logout", authHandler, logout);
 
 // Route to resend OTP to user's email, requiring no authentication
 router.post("/resend-otp", resendOtp); // Keep as is
+
+// New routes for referral system
+router.get("/referral-tree", authHandler, getReferralTree);
+router.get("/all-users", authHandler, getAllUsers);
+router.post("/fix-referrals", authHandler, fixReferralRelationships); // Admin route to fix referral relationships
 
 // Export router for use in main application
 export default router;

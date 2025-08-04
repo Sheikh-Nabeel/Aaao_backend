@@ -5,6 +5,7 @@ import nodemailer from "nodemailer";
 import cloudinary from "cloudinary";
 import jwt from "jsonwebtoken"; // Import JWT for token generation
 import { v4 as uuidv4 } from "uuid"; // Import uuid (kept for potential future use)
+import mongoose from "mongoose";
 
 // Configure Nodemailer transporter for sending emails
 const transporter = nodemailer.createTransport({
@@ -154,15 +155,21 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     throw new Error("Invalid OTP");
   }
 
-  // Complete registration (sponsor validation already done in signup)
+  // Complete registration and update referral tree
   let sponsorName = null;
   if (user.sponsorBy) {
+    console.log(`User has sponsorBy: ${user.sponsorBy}`);
     const sponsor = await User.findOne({ sponsorId: user.sponsorBy });
     if (sponsor) {
-      sponsor.sponsorTree.push(user._id);
-      await sponsor.save();
+      console.log(`Found sponsor: ${sponsor.sponsorId} (${sponsor.firstName} ${sponsor.lastName})`);
+      // Update referral tree with new user
+      await updateReferralTree(user._id, user.sponsorBy);
       sponsorName = `${sponsor.firstName} ${sponsor.lastName}`;
+    } else {
+      console.error(`Sponsor not found with sponsorId: ${user.sponsorBy}`);
     }
+  } else {
+    console.log(`User has no sponsorBy`);
   }
 
   user.isVerified = true;
@@ -499,80 +506,362 @@ const resendOtp = asyncHandler(async (req, res) => {
   res.status(200).json({ message: "New OTP sent successfully" });
 });
 
-// Helper function to update sponsor levels recursively
-async function updateSponsorLevels(userId) {
-  const user = await User.findById(userId);
-  if (!user) return;
+// Helper function to update referral tree when a new user is added
+async function updateReferralTree(newUserId, sponsorId) {
+  try {
+    const newUser = await User.findById(newUserId);
+    if (!newUser) return;
 
-  const directReferrals = user.sponsorTree.length;
-  if (directReferrals >= 3 && user.level < 1) {
-    user.level = 1;
-  }
-
-  const allReferrals = await User.find({ sponsorBy: user.sponsorId });
-  let totalLevel2Referrals = 0;
-  for (const referral of allReferrals) {
-    const subReferrals = await User.find({ sponsorBy: referral.sponsorId });
-    if (subReferrals.length >= 3 && referral.level < 2) {
-      referral.level = 2;
-      await referral.save();
-      totalLevel2Referrals += 1;
+    // Find the sponsor using sponsorId
+    const sponsor = await User.findOne({ sponsorId: sponsorId });
+    if (!sponsor) {
+      console.error(`Sponsor not found with sponsorId: ${sponsorId}`);
+      return;
     }
-  }
-  if (totalLevel2Referrals >= 3 && user.level < 2) {
-    user.level = 2;
-  }
 
-  const level3Referrals = await User.find({
-    level: 2,
-    sponsorBy: user.sponsorId,
-  });
-  let totalLevel3Referrals = 0;
-  for (const level2Referral of level3Referrals) {
-    const subSubReferrals = await User.find({
-      sponsorBy: level2Referral.sponsorId,
-      level: 2,
-    });
-    if (subSubReferrals.length >= 3 && level2Referral.level < 3) {
-      level2Referral.level = 3;
-      await level2Referral.save();
-      totalLevel3Referrals += 1;
+    console.log(`Adding user ${newUserId} to sponsor ${sponsor._id} (${sponsor.sponsorId})`);
+
+    // Add new user to sponsor's direct referrals (Level 1)
+    if (!sponsor.directReferrals.includes(newUserId)) {
+      sponsor.directReferrals.push(newUserId);
+      console.log(`Added to directReferrals. Current count: ${sponsor.directReferrals.length}`);
+    } else {
+      console.log(`User already in directReferrals`);
     }
-  }
-  if (totalLevel3Referrals >= 3 && user.level < 3) {
-    user.level = 3;
-  }
 
-  const level4Referrals = await User.find({
-    level: 3,
-    sponsorBy: user.sponsorId,
-  });
-  let totalLevel4Referrals = 0;
-  for (const level3Referral of level4Referrals) {
-    const subSubSubReferrals = await User.find({
-      sponsorBy: level3Referral.sponsorId,
-      level: 3,
-    });
-    if (subSubSubReferrals.length >= 3 && level3Referral.level < 4) {
-      level3Referral.level = 4;
-      await level3Referral.save();
-      totalLevel4Referrals += 1;
+    // Update sponsor tree for backward compatibility
+    if (!sponsor.sponsorTree.includes(newUserId)) {
+      sponsor.sponsorTree.push(newUserId);
+      console.log(`Added to sponsorTree. Current count: ${sponsor.sponsorTree.length}`);
+    } else {
+      console.log(`User already in sponsorTree`);
     }
-  }
-  if (totalLevel4Referrals >= 3 && user.level < 4) {
-    user.level = 4;
-  }
 
-  if (user.level > 4) user.level = 4;
-  await user.save();
+    await sponsor.save();
+    console.log(`Sponsor saved successfully`);
 
-  if (user.sponsorBy && user.sponsorBy !== "root") {
-    const parentSponsor = await User.findOne({ sponsorId: user.sponsorBy });
-    if (parentSponsor) {
-      await updateSponsorLevels(parentSponsor._id);
-    }
+    // Update all levels in the referral chain
+    await updateAllLevels(sponsor._id);
+  } catch (error) {
+    console.error("Error updating referral tree:", error);
   }
 }
+
+// Helper function to update all levels in the referral chain
+async function updateAllLevels(userId) {
+  try {
+    const user = await User.findById(userId);
+    if (!user) return;
+
+    // Update Level 2 referrals
+    await updateLevel2Referrals(user);
+
+    // Update Level 3 referrals
+    await updateLevel3Referrals(user);
+
+    // Update Level 4 referrals
+    await updateLevel4Referrals(user);
+
+    // Check and update user's level
+    await checkAndUpdateUserLevel(user);
+
+    // Recursively update parent sponsors
+    if (user.sponsorBy) {
+      const parentSponsor = await User.findOne({ sponsorId: user.sponsorBy });
+      if (parentSponsor) {
+        await updateAllLevels(parentSponsor._id);
+      }
+    }
+  } catch (error) {
+    console.error("Error updating all levels:", error);
+  }
+}
+
+// Helper function to update Level 2 referrals
+async function updateLevel2Referrals(user) {
+  user.level2Referrals = [];
+  
+  for (const directReferralId of user.directReferrals) {
+    const directReferral = await User.findById(directReferralId);
+    if (directReferral && directReferral.directReferrals.length > 0) {
+      user.level2Referrals.push(...directReferral.directReferrals);
+    }
+  }
+  
+  await user.save();
+}
+
+// Helper function to update Level 3 referrals
+async function updateLevel3Referrals(user) {
+  user.level3Referrals = [];
+  
+  for (const level2ReferralId of user.level2Referrals) {
+    const level2Referral = await User.findById(level2ReferralId);
+    if (level2Referral && level2Referral.directReferrals.length > 0) {
+      user.level3Referrals.push(...level2Referral.directReferrals);
+    }
+  }
+  
+  await user.save();
+}
+
+// Helper function to update Level 4 referrals
+async function updateLevel4Referrals(user) {
+  user.level4Referrals = [];
+  
+  for (const level3ReferralId of user.level3Referrals) {
+    const level3Referral = await User.findById(level3ReferralId);
+    if (level3Referral && level3Referral.directReferrals.length > 0) {
+      user.level4Referrals.push(...level3Referral.directReferrals);
+    }
+  }
+  
+  await user.save();
+}
+
+// Helper function to check and update user's level
+async function checkAndUpdateUserLevel(user) {
+  const stats = user.getReferralStats();
+  let newLevel = user.level;
+
+  // Check if user can level up
+  if (stats.level1 >= 3 && user.level < 1) {
+    newLevel = 1;
+  }
+  if (stats.level2 >= 3 && user.level < 2) {
+    newLevel = 2;
+  }
+  if (stats.level3 >= 3 && user.level < 3) {
+    newLevel = 3;
+  }
+  if (stats.level4 >= 3 && user.level < 4) {
+    newLevel = 4;
+  }
+
+  // Update level if changed
+  if (newLevel !== user.level) {
+    user.level = newLevel;
+    await user.save();
+    console.log(`User ${user.email} leveled up to level ${newLevel}`);
+  }
+}
+
+
+
+
+
+// Function to get complete referral tree with counts and all member details (OPTIMIZED)
+const getReferralTree = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  // Get referral statistics
+  const stats = user.getReferralStats();
+  
+  // Prepare response structure
+  const referralTree = {
+    user: {
+      id: user._id,
+      name: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+      sponsorId: user.sponsorId,
+      level: user.level,
+      sponsorBy: user.sponsorBy
+    },
+    counts: {
+      totalReferrals: stats.totalReferrals,
+      level1: stats.level1,
+      level2: stats.level2,
+      level3: stats.level3,
+      level4: stats.level4
+    },
+    members: {
+      level1: [],
+      level2: [],
+      level3: [],
+      level4: []
+    }
+  };
+
+  // Get all referral IDs from all levels
+  const allReferralIds = [
+    ...user.directReferrals,
+    ...user.level2Referrals,
+    ...user.level3Referrals,
+    ...user.level4Referrals
+  ];
+
+  if (allReferralIds.length > 0) {
+    // Fetch all users in one optimized query using aggregation
+    const allMembers = await User.aggregate([
+      {
+        $match: {
+          _id: { $in: allReferralIds.map(id => new mongoose.Types.ObjectId(id)) }
+        }
+      },
+      {
+        $project: {
+          id: '$_id',
+          name: { $concat: ['$firstName', ' ', '$lastName'] },
+          email: 1,
+          sponsorId: 1,
+          level: 1,
+          kycLevel: 1,
+          role: 1,
+          joinedDate: '$createdAt'
+        }
+      },
+      {
+        $sort: { joinedDate: -1 }
+      }
+    ]);
+
+    // Create a map for fast lookup
+    const membersMap = new Map();
+    allMembers.forEach(member => {
+      membersMap.set(member.id.toString(), member);
+    });
+
+    // Populate level 1 members (direct referrals)
+    user.directReferrals.forEach(id => {
+      const member = membersMap.get(id.toString());
+      if (member) {
+        referralTree.members.level1.push(member);
+      }
+    });
+
+    // Populate level 2 members
+    user.level2Referrals.forEach(id => {
+      const member = membersMap.get(id.toString());
+      if (member) {
+        referralTree.members.level2.push(member);
+      }
+    });
+
+    // Populate level 3 members
+    user.level3Referrals.forEach(id => {
+      const member = membersMap.get(id.toString());
+      if (member) {
+        referralTree.members.level3.push(member);
+      }
+    });
+
+    // Populate level 4 members
+    user.level4Referrals.forEach(id => {
+      const member = membersMap.get(id.toString());
+      if (member) {
+        referralTree.members.level4.push(member);
+      }
+    });
+  }
+
+  res.status(200).json({
+    message: "Referral tree retrieved successfully",
+    referralTree
+  });
+});
+
+
+
+
+
+
+
+
+
+// Function to get all users in the system (for admin purposes)
+const getAllUsers = asyncHandler(async (req, res) => {
+  const users = await User.find({}, {
+    firstName: 1,
+    lastName: 1,
+    email: 1,
+    sponsorId: 1,
+    sponsorBy: 1,
+    level: 1,
+    kycLevel: 1,
+    role: 1,
+    createdAt: 1
+  }).sort({ createdAt: -1 });
+
+  res.status(200).json({
+    message: "All users retrieved successfully",
+    users,
+    totalUsers: users.length
+  });
+});
+
+// Function to fix referral relationships for all users
+const fixReferralRelationships = asyncHandler(async (req, res) => {
+  try {
+    console.log("Starting to fix referral relationships...");
+    
+    // Get all users who have a sponsorBy field
+    const usersWithSponsors = await User.find({ sponsorBy: { $exists: true, $ne: null } });
+    console.log(`Found ${usersWithSponsors.length} users with sponsors`);
+    
+    let fixedCount = 0;
+    let errorCount = 0;
+    
+    for (const user of usersWithSponsors) {
+      try {
+        if (user.sponsorBy) {
+          const sponsor = await User.findOne({ sponsorId: user.sponsorBy });
+          if (sponsor) {
+            // Check if user is already in sponsor's directReferrals
+            if (!sponsor.directReferrals.includes(user._id)) {
+              sponsor.directReferrals.push(user._id);
+              console.log(`Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} directReferrals`);
+            }
+            
+            // Check if user is already in sponsor's sponsorTree
+            if (!sponsor.sponsorTree.includes(user._id)) {
+              sponsor.sponsorTree.push(user._id);
+              console.log(`Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} sponsorTree`);
+            }
+            
+            await sponsor.save();
+            fixedCount++;
+          } else {
+            console.error(`Sponsor not found for user ${user.sponsorId} with sponsorBy: ${user.sponsorBy}`);
+            errorCount++;
+          }
+        }
+      } catch (error) {
+        console.error(`Error fixing user ${user.sponsorId}:`, error);
+        errorCount++;
+      }
+    }
+    
+    // Now update all levels for all users
+    console.log("Updating all levels...");
+    const allUsers = await User.find({});
+    for (const user of allUsers) {
+      try {
+        await updateAllLevels(user._id);
+      } catch (error) {
+        console.error(`Error updating levels for user ${user.sponsorId}:`, error);
+      }
+    }
+    
+    res.status(200).json({
+      message: "Referral relationships fixed successfully",
+      fixedCount,
+      errorCount,
+      totalUsersProcessed: usersWithSponsors.length
+    });
+  } catch (error) {
+    console.error("Error in fixReferralRelationships:", error);
+    res.status(500).json({
+      message: "Error fixing referral relationships",
+      error: error.message
+    });
+  }
+});
 
 // Export all controller functions
 export {
@@ -584,4 +873,8 @@ export {
   submitKYC,
   logout,
   resendOtp,
+  getReferralTree,
+  getAllUsers,
+  fixReferralRelationships,
 };
+
