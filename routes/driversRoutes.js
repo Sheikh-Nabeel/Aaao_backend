@@ -54,5 +54,4 @@ router.post(
 router.get("/user-vehicle-info", authHandler, getUserVehicleInfo);
 router.get("/get-current-user", authHandler, getCurrentUser);
 
-
 export default router;

@@ -1,16 +1,18 @@
 import User from "../models/userModel.js";
+import Vehicle from "../models/vehicleModel.js";
 import asyncHandler from "express-async-handler";
 import nodemailer from "nodemailer";
-import cloudinary from "cloudinary";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import mongoose from "mongoose";
+import path from "path";
+import fs from "fs";
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
-  auth: { 
-    user: "chyousafawais667@gmail.com", 
-    pass: "mfhequkvepgtwusf" 
+  auth: {
+    user: "chyousafawais667@gmail.com",
+    pass: "mfhequkvepgtwusf",
   },
 });
 transporter.verify((error) => {
@@ -20,6 +22,12 @@ transporter.verify((error) => {
 
 const generateOTP = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
+
+// Ensure uploads folder exists
+const uploadsDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 const signupUser = asyncHandler(async (req, res) => {
   const {
@@ -98,6 +106,8 @@ const signupUser = asyncHandler(async (req, res) => {
       otp: generateOTP(),
       otpExpires: new Date(Date.now() + 10 * 60 * 1000),
       isVerified: false,
+      role: "customer",
+      pendingVehicleData: null,
     });
     otp = user.otp;
     console.log("Created new user:", user.email, user.otp);
@@ -196,7 +206,11 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
       sponsorBy: user.sponsorBy,
       country: user.country,
       kycLevel: user.kycLevel,
+      kycStatus: user.kycStatus,
+      hasVehicle: user.hasVehicle,
+      pendingVehicleData: user.pendingVehicleData,
       gender: user.gender,
+      role: user.role,
     },
   });
 });
@@ -261,7 +275,11 @@ const loginUser = asyncHandler(async (req, res) => {
         sponsorBy: user.sponsorBy,
         country: user.country,
         kycLevel: user.kycLevel,
+        kycStatus: user.kycStatus,
+        hasVehicle: user.hasVehicle,
+        pendingVehicleData: user.pendingVehicleData,
         gender: user.gender,
+        role: user.role,
       },
     });
 });
@@ -345,28 +363,20 @@ const resetPassword = asyncHandler(async (req, res) => {
   res.status(200).json({ message: "Password reset successful", token });
 });
 
-cloudinary.config({
-  cloud_name: process.env.Cloud_Name,
-  api_key: process.env.API_Key,
-  api_secret: process.env.API_Secret,
-});
-
 const submitKYC = asyncHandler(async (req, res) => {
-  console.log("Request Body:", req.body); // Log the body
-  console.log("Received Files:", req.files); // Log the files
-  console.log("Full Request Headers:", req.headers); // Log headers to check Content-Type
+  console.log("Request Body:", req.body);
+  console.log("Received Files:", req.files);
+  console.log("Full Request Headers:", req.headers);
 
-  const { userId, fullName } = req.body;
+  const { userId, fullName, country } = req.body;
 
-  // Validate required fields
-  if (!userId || !fullName) {
+  if (!userId || !fullName || !country) {
     return res.status(400).json({
-      message: "User ID and full name are required",
+      message: "User ID, full name, and country are required",
       userId: userId || null,
     });
   }
 
-  // Split fullName into firstName and lastName
   const [firstName, ...lastNameParts] = fullName.trim().split(" ");
   const lastName = lastNameParts.join(" ");
 
@@ -377,27 +387,25 @@ const submitKYC = asyncHandler(async (req, res) => {
     });
   }
 
-  // Find user by ID
   const user = await User.findById(userId);
   if (!user) {
     return res.status(404).json({ message: "User not found", userId });
   }
 
-  // Update user's firstName and lastName if they differ
-  if (user.firstName !== firstName || user.lastName !== lastName) {
-    user.firstName = firstName;
-    user.lastName = lastName;
-    await user.save();
+  if (!user.isVerified) {
+    return res.status(403).json({
+      message: "User must be verified to submit KYC",
+      userId,
+    });
   }
 
-  // Check if KYC Level 1 is already completed
-  if (user.kycLevel >= 1) {
-    return res
-      .status(403)
-      .json({ message: "KYC Level 1 already completed", userId });
+  if (user.kycLevel >= 1 || user.kycStatus === "pending") {
+    return res.status(403).json({
+      message: "KYC Level 1 already completed or pending approval",
+      userId,
+    });
   }
 
-  // Verify file uploads
   if (
     !req.files ||
     !req.files.frontImage ||
@@ -410,37 +418,24 @@ const submitKYC = asyncHandler(async (req, res) => {
     });
   }
 
-  // Upload images to Cloudinary
-  const uploadToCloudinary = async (file, folder) => {
-    const result = await cloudinary.uploader.upload(file.path, { folder });
-    return result.secure_url;
-  };
+  const frontImagePath = path.join("uploads", req.files.frontImage[0].filename).replace(/\\/g, "/");
+  const backImagePath = path.join("uploads", req.files.backImage[0].filename).replace(/\\/g, "/");
+  const selfieImagePath = path.join("uploads", req.files.selfieImage[0].filename).replace(/\\/g, "/");
 
-  const frontImageUrl = await uploadToCloudinary(
-    req.files.frontImage[0],
-    "kyc/cnic"
-  );
-  const backImageUrl = await uploadToCloudinary(
-    req.files.backImage[0],
-    "kyc/cnic"
-  );
-  const selfieImageUrl = await uploadToCloudinary(
-    req.files.selfieImage[0],
-    "kyc/selfie"
-  );
-
-  // Update user with KYC details
   user.cnicImages = {
-    front: frontImageUrl,
-    back: backImageUrl,
+    front: frontImagePath,
+    back: backImagePath,
   };
-  user.selfieImage = selfieImageUrl;
-  user.kycLevel = 1;
+  user.selfieImage = selfieImagePath;
+  user.country = country;
+  user.kycStatus = "pending";
+  user.kycLevel = 0;
+  user.firstName = firstName;
+  user.lastName = lastName;
   await user.save();
 
-  // Respond with success
   res.status(200).json({
-    message: "KYC Level 1 submitted successfully",
+    message: "KYC Level 1 submitted and pending admin approval",
     userId,
   });
 });
@@ -574,7 +569,7 @@ async function updateLevel3Referrals(user) {
 
   for (const level2ReferralId of user.level2Referrals) {
     const level2Referral = await User.findById(level2ReferralId);
-    if (level2Referral && directReferral.directReferrals.length > 0) {
+    if (level2Referral && level2Referral.directReferrals.length > 0) {
       user.level3Referrals.push(...level2Referral.directReferrals);
     }
   }
@@ -620,17 +615,12 @@ async function checkAndUpdateUserLevel(user) {
 }
 
 const getReferralTree = asyncHandler(async (req, res) => {
-  // Get user ID from query parameter or use authenticated user
   const targetUserId = req.query.userId || req.user._id;
-  
+
   console.log("Query parameters:", req.query);
   console.log("Target User ID:", targetUserId);
   console.log("Authenticated User ID:", req.user._id);
-  
-  // If userId is provided in query, validate that the authenticated user has permission
-  // For now, allowing any authenticated user to view any referral tree
-  // You can add role-based restrictions here if needed
-  
+
   const user = await User.findById(targetUserId);
   if (!user) {
     res.status(404);
@@ -669,6 +659,8 @@ const getReferralTree = asyncHandler(async (req, res) => {
       sponsorId: user.sponsorId,
       level: user.level,
       sponsorBy: user.sponsorBy,
+      kycStatus: user.kycStatus,
+      country: user.country,
     },
     counts: {
       totalReferrals: stats.totalReferrals,
@@ -710,6 +702,7 @@ const getReferralTree = asyncHandler(async (req, res) => {
           sponsorId: 1,
           level: 1,
           kycLevel: 1,
+          kycStatus: 1,
           role: 1,
           joinedDate: "$createdAt",
         },
@@ -779,7 +772,9 @@ const getAllUsers = asyncHandler(async (req, res) => {
       sponsorBy: 1,
       level: 1,
       kycLevel: 1,
+      kycStatus: 1,
       role: 1,
+      country: 1,
       createdAt: 1,
     }
   ).sort({ createdAt: -1 });
@@ -865,6 +860,180 @@ const fixReferralRelationships = asyncHandler(async (req, res) => {
   }
 });
 
+const approveKYC = asyncHandler(async (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) {
+    res.status(400);
+    throw new Error("User ID is required");
+  }
+
+  const user = await User.findById(userId).populate("pendingVehicleData");
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  if (user.kycStatus !== "pending") {
+    res.status(400);
+    throw new Error("No pending KYC submission for this user");
+  }
+
+  let kycLevelToApprove;
+  if (user.kycLevel === 0) {
+    kycLevelToApprove = 1; // Approve Level 1
+  } else if (user.kycLevel === 1) {
+    kycLevelToApprove = 2; // Approve Level 2
+  } else {
+    res.status(400);
+    throw new Error("No valid KYC level to approve");
+  }
+
+  if (kycLevelToApprove === 2) {
+    if (!user.hasVehicle) {
+      res.status(400);
+      throw new Error("Vehicle decision (yes/no) must be specified");
+    }
+    if (user.hasVehicle === "yes" && !user.pendingVehicleData) {
+      res.status(400);
+      throw new Error("Vehicle data must be provided for KYC Level 2");
+    }
+    if (user.hasVehicle === "yes") {
+      const vehicle = await Vehicle.findById(user.pendingVehicleData);
+      if (vehicle) {
+        vehicle.status = "approved";
+        await vehicle.save();
+      }
+    }
+  }
+
+  const updatedUser = await User.findOneAndUpdate(
+    { _id: userId, kycStatus: "pending" },
+    {
+      kycLevel: kycLevelToApprove,
+      kycStatus: "approved",
+      role: kycLevelToApprove === 2 ? "driver" : "customer",
+    },
+    { new: true, runValidators: true }
+  );
+
+  if (!updatedUser) {
+    res.status(400);
+    throw new Error("Failed to update KYC status. User may no longer be pending.");
+  }
+
+  await transporter.sendMail({
+    from: `"Your App" <chyousafawais667@gmail.com>`,
+    to: updatedUser.email,
+    subject: `KYC Level ${kycLevelToApprove} Approved`,
+    text: `Hello ${updatedUser.firstName} ${updatedUser.lastName},\nYour KYC Level ${kycLevelToApprove} submission has been approved.\nYou can now proceed with the next steps in the application.`,
+    html: `<h2>Hello ${updatedUser.firstName} ${updatedUser.lastName},</h2><p>Your KYC Level ${kycLevelToApprove} submission has been approved.</p><p>You can now proceed with the next steps in the application.</p>`,
+  });
+
+  const token = jwt.sign({ id: updatedUser._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+
+  res.status(200).json({
+    message: `KYC Level ${kycLevelToApprove} approved successfully`,
+    userId,
+    kycLevel: kycLevelToApprove,
+    token,
+  });
+});
+
+const rejectKYC = asyncHandler(async (req, res) => {
+  const { userId, reason } = req.body;
+
+  if (!userId) {
+    res.status(400);
+    throw new Error("User ID is required");
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  if (user.kycStatus !== "pending") {
+    res.status(400);
+    throw new Error("No pending KYC submission for this user");
+  }
+
+  user.kycStatus = "rejected";
+  if (reason) {
+    console.log(`KYC rejected for user ${userId}: ${reason}`);
+  }
+  await user.save();
+
+  await transporter.sendMail({
+    from: `"Your App" <chyousafawais667@gmail.com>`,
+    to: user.email,
+    subject: "KYC Submission Rejected",
+    text: `Hello ${user.firstName} ${user.lastName},\nYour KYC submission has been rejected.\nReason: ${reason || "No reason provided"}.\nPlease resubmit with corrected information.`,
+    html: `<h2>Hello ${user.firstName} ${user.lastName},</h2><p>Your KYC submission has been rejected.</p><p><strong>Reason:</strong> ${reason || "No reason provided"}</p><p>Please resubmit with corrected information.</p>`,
+  });
+
+  res.status(200).json({
+    message: "KYC submission rejected",
+    userId,
+    reason: reason || "No reason provided",
+  });
+});
+
+const getPendingKYCs = asyncHandler(async (req, res) => {
+  const pendingUsers = await User.find({ kycStatus: "pending" })
+    .select(
+      "firstName lastName email country kycLevel kycStatus cnicImages selfieImage licenseImage hasVehicle pendingVehicleData"
+    )
+    .populate("pendingVehicleData");
+
+  const kycDetails = await Promise.all(
+    pendingUsers.map(async (user) => {
+      return {
+        userId: user._id,
+        name: `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        country: user.country,
+        kycLevel: user.kycLevel,
+        kycStatus: user.kycStatus,
+        cnicImages: user.cnicImages,
+        selfieImage: user.selfieImage,
+        licenseImage: user.licenseImage,
+        hasVehicle: user.hasVehicle,
+        vehicleData: user.pendingVehicleData
+          ? {
+              vehicleRegistrationCard:
+                user.pendingVehicleData.vehicleRegistrationCard,
+              roadAuthorityCertificate:
+                user.pendingVehicleData.roadAuthorityCertificate,
+              insuranceCertificate:
+                user.pendingVehicleData.insuranceCertificate,
+              vehicleImages: user.pendingVehicleData.vehicleImages,
+              vehicleOwnerName: user.pendingVehicleData.vehicleOwnerName,
+              companyName: user.pendingVehicleData.companyName,
+              vehiclePlateNumber: user.pendingVehicleData.vehiclePlateNumber,
+              vehicleMakeModel: user.pendingVehicleData.vehicleMakeModel,
+              chassisNumber: user.pendingVehicleData.chassisNumber,
+              vehicleColor: user.pendingVehicleData.vehicleColor,
+              registrationExpiryDate:
+                user.pendingVehicleData.registrationExpiryDate,
+              vehicleType: user.pendingVehicleData.vehicleType,
+              wheelchair: user.pendingVehicleData.wheelchair,
+            }
+          : null,
+      };
+    })
+  );
+
+  res.status(200).json({
+    message: "Pending KYC submissions retrieved successfully",
+    kycDetails,
+    totalPending: kycDetails.length,
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -877,4 +1046,7 @@ export {
   getReferralTree,
   getAllUsers,
   fixReferralRelationships,
+  approveKYC,
+  rejectKYC,
+  getPendingKYCs,
 };

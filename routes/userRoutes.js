@@ -8,10 +8,17 @@ import {
   submitKYC,
   logout,
   resendOtp,
+  getPendingKYCs,
+  approveKYC,
+  rejectKYC,
+  getAllUsers,
+  fixReferralRelationships,
+  getReferralTree,
 } from "../controllers/userController.js";
 import multer from "multer";
 import path from "path";
-import authHandler from "../middlewares/authMIddleware.js"; // Correct casing
+import authHandler from "../middlewares/authMIddleware.js" // Corrected typo in import
+import adminMiddleware from "../middlewares/adminMiddleware.js";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -24,6 +31,18 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 const router = express.Router();
+
+// Serve images from uploads folder
+router.get("/uploads/:filename", (req, res) => {
+  const filePath = path.join(process.cwd(), "uploads", req.params.filename);
+  if (fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+  } else {
+    res.status(404).json({ message: "File not found" });
+  }
+});
+
+// User routes
 router.post("/signup", signupUser);
 router.post("/verify-otp", verifyOTPUser);
 router.post("/login", loginUser);
@@ -33,16 +52,26 @@ router.post(
   "/submit-kyc",
   authHandler,
   upload.fields([
-    { name: "frontImage" },
-    { name: "backImage" },
-    { name: "selfieImage" },
+    { name: "frontImage", maxCount: 1 },
+    { name: "backImage", maxCount: 1 },
+    { name: "selfieImage", maxCount: 1 },
   ]),
   submitKYC
 );
 router.post("/logout", authHandler, logout);
+router.post("/resend-otp", resendOtp);
 
-// Route to resend OTP to user's email, requiring no authentication
-router.post("/resend-otp", resendOtp); // Keep as is
+// Admin routes
+router.get("/pending-kycs", authHandler, adminMiddleware, getPendingKYCs);
+router.post("/approve-kyc", authHandler, adminMiddleware, approveKYC);
+router.post("/reject-kyc", authHandler, adminMiddleware, rejectKYC);
+router.get("/all", authHandler, adminMiddleware, getAllUsers);
+router.post(
+  "/fix-referrals",
+  authHandler,
+  adminMiddleware,
+  fixReferralRelationships
+);
+router.get("/referral-tree", authHandler, getReferralTree);
 
-// Export router for use in main application
 export default router;
