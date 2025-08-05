@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 
+// Define the vehicle schema
 const vehicleSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -7,21 +8,21 @@ const vehicleSchema = new mongoose.Schema({
     required: true,
   },
   licenseImage: {
-    type: String, // URL from Cloudinary, now set only via uploadLicense
+    type: String,
     required: false,
   },
   vehicleRegistrationCard: {
-    front: { type: String, required: false }, // URL from Cloudinary
-    back: { type: String, required: false }, // URL from Cloudinary
+    front: { type: String, required: false },
+    back: { type: String, required: false },
   },
-  roadAuthorityCertificate: { type: String, required: false }, // URL from Cloudinary
-  insuranceCertificate: { type: String, required: false }, // URL from Cloudinary
-  vehicleImages: [{ type: String, required: false }], // Array of URLs from Cloudinary
+  roadAuthorityCertificate: { type: String, required: false },
+  insuranceCertificate: { type: String, required: false },
+  vehicleImages: [{ type: String, required: false }],
   vehicleOwnerName: { type: String, required: false },
   companyName: { type: String, required: false },
   vehiclePlateNumber: { type: String, required: false },
   vehicleMakeModel: {
-    type: String, // e.g., "Toyota Camry 2005"
+    type: String,
     required: false,
     match: [
       /^[A-Za-z\s]+[A-Za-z\s]+\d{4}$/,
@@ -41,10 +42,20 @@ const vehicleSchema = new mongoose.Schema({
     default: false,
     required: false,
   },
+  status: {
+    type: String,
+    enum: ["pending", "approved", null],
+    default: "pending",
+  },
   createdAt: {
     type: Date,
     default: Date.now,
   },
 });
 
-export default mongoose.model("Vehicle", vehicleSchema);
+vehicleSchema.index({ userId: 1 });
+vehicleSchema.index({ status: 1 });
+
+// Export the Vehicle model, reusing existing model if already compiled
+export default mongoose.models.Vehicle ||
+  mongoose.model("Vehicle", vehicleSchema);

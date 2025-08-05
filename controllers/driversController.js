@@ -1,140 +1,146 @@
-// Import required modules for vehicle and user management, cloud storage, and JWT
 import Vehicle from "../models/vehicleModel.js";
 import User from "../models/userModel.js";
-import cloudinary from "cloudinary";
 import jwt from "jsonwebtoken";
+import path from "path";
+import fs from "fs";
 
-// Configure Cloudinary with environment variables
-cloudinary.config({
-  cloud_name: process.env.Cloud_Name,
-  api_key: process.env.API_Key,
-  api_secret: process.env.API_Secret,
-});
+// Ensure uploads folder exists
+const uploadsDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
-// Middleware to check if user has completed KYC Level 1
 const kycLevel1Check = async (req, res, next) => {
-  // Extract email from request body
-  const { email } = req.body;
-
-  // Find user by email
-  const user = await User.findOne({ email });
-  // Check if user exists and has KYC Level 1
-  if (!user || user.kycLevel < 1) {
+  const user = await User.findById(req.user._id);
+  if (!user || user.kycLevel < 1 || user.kycStatus !== "approved") {
     return res.status(403).json({
-      message: "KYC Level 1 must be completed before proceeding to Level 2",
-      email,
+      message: "KYC Level 1 must be approved before proceeding to Level 2",
+      token: req.cookies.token,
     });
   }
-  req.user = user; // Attach user to request for downstream use
-  next(); // Proceed to next middleware
+  next();
 };
 
-// Handle license image upload for KYC Level 2
 const uploadLicense = async (req, res) => {
-  // Extract userId from request body
   const { userId } = req.body;
-  console.log("req.file:", req.file); // Log file for debugging
+  console.log("req.file:", req.file);
 
-  // Find user by ID
   const user = await User.findById(userId);
   if (!user) {
     return res
       .status(404)
       .json({ message: "User not found", token: req.cookies.token });
   }
-  if (user.kycLevel < 1) {
+  if (user.kycLevel < 1 || user.kycStatus !== "approved") {
     return res.status(403).json({
-      message: "Complete KYC Level 1 first",
+      message: "Complete and get approved for KYC Level 1 first",
+      token: req.cookies.token,
+    });
+  }
+  if (user.kycLevel >= 2 || user.kycStatus === "pending") {
+    return res.status(403).json({
+      message: "KYC Level 2 already completed or pending approval",
       token: req.cookies.token,
     });
   }
 
   try {
-    // Upload license image to Cloudinary
-    const uploadResult = req.file
-      ? await cloudinary.uploader.upload(req.file.path, {
-          folder: "kyc/license",
-        })
-      : null;
-    if (!uploadResult) {
+    if (!req.file) {
       return res.status(400).json({
         message: "License image is required for KYC Level 2",
         token: req.cookies.token,
       });
     }
 
-    // Update user with new KYC level and license image
-    user.kycLevel = 2;
-    user.licenseImage = uploadResult.secure_url;
-    const savedUser = await user.save();
-    console.log("Saved user with licenseImage:", savedUser.licenseImage); // Log success
+    const licenseImagePath = path.join("uploads", req.file.filename).replace(/\\/g, "/");
 
-    // Generate new token and set cookie
+    user.kycStatus = "pending";
+    user.licenseImage = licenseImagePath;
+    const savedUser = await user.save();
+    console.log("Saved user with licenseImage:", savedUser.licenseImage);
+
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRY,
     });
     res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
     res.status(200).json({
-      message: "KYC Level 2 (License) uploaded successfully",
+      message: "KYC Level 2 (License) submitted and pending admin approval",
       hasVehicle: "Please select: Do you have a vehicle? (Yes/No)",
       token,
     });
   } catch (error) {
-    console.error("Error saving license:", error); // Log any errors
+    console.error("Error saving license:", error);
     res.status(500).json({ message: error.message, token: req.cookies.token });
   }
 };
 
-// Handle vehicle ownership decision
 const handleVehicleDecision = async (req, res) => {
-  // Extract userId and vehicle decision from request body
   const { userId, hasVehicle } = req.body;
 
-  // Find user by ID
+  console.log("Request body:", req.body);
+  console.log("Authenticated user ID:", req.user._id);
+
   const user = await User.findById(userId);
-  if (!user || user.kycLevel < 2) {
+  if (!user) {
+    console.log("User not found for userId:", userId);
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token || "no-token",
+    });
+  }
+  console.log("User data:", {
+    kycLevel: user.kycLevel,
+    kycStatus: user.kycStatus,
+  });
+
+  if (user.kycLevel < 1) {
+    console.log("KYC Level check failed: kycLevel =", user.kycLevel);
     return res.status(403).json({
-      message: "Complete KYC Level 2 first",
+      message: "KYC Level 1 must be approved before proceeding to Level 2",
       token: req.cookies.token || "no-token",
     });
   }
 
-  if (hasVehicle === "no") {
-    // Update role to driver if no vehicle
-    user.role = "driver";
-    await user.save();
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRY,
+  if (user.kycLevel >= 2) {
+    console.log("KYC Level 2 already completed: kycLevel =", user.kycLevel);
+    return res.status(403).json({
+      message: "KYC Level 2 already completed or pending approval",
+      token: req.cookies.token || "no-token",
     });
-    res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-    res.status(200).json({
-      message:
-        "Role updated to driver. You can switch back to customer and book rides.",
-      role: user.role,
-      token,
+  }
+
+  if (!["yes", "no"].includes(hasVehicle)) {
+    return res.status(400).json({
+      message: "Please select Yes or No for vehicle ownership",
+      token: req.cookies.token || "no-token",
     });
-  } else if (hasVehicle === "yes") {
-    // Prompt for vehicle registration if yes
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRY,
-    });
-    res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  }
+
+  user.hasVehicle = hasVehicle;
+  user.kycStatus = "pending";
+  await user.save();
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  if (hasVehicle === "yes") {
     res.status(200).json({
       message: "Please register your vehicle (all fields are optional)",
       nextStep: "vehicleRegistration",
       token,
     });
   } else {
-    res.status(400).json({
-      message: "Please select Yes or No for vehicle ownership",
-      token: req.cookies.token || "no-token",
+    res.status(200).json({
+      message: "Vehicle decision submitted and pending admin approval",
+      token,
     });
   }
 };
 
-// Register a new vehicle for the user
 const registerVehicle = async (req, res) => {
-  console.log("req.files:", req.files); // Log uploaded files for debugging
+  console.log("req.files:", req.files);
   const {
     userId,
     vehicleRegistrationCard,
@@ -151,49 +157,55 @@ const registerVehicle = async (req, res) => {
     vehicleImages,
   } = req.body;
 
-  // Verify user KYC level
   const user = await User.findById(userId);
-  if (!user || user.kycLevel < 2) {
+  if (!user || user.kycLevel < 1 || user.kycStatus !== "approved") {
     return res.status(403).json({
-      message: "Complete KYC Level 2 first",
+      message: "Complete and get approved for KYC Level 1 first",
+      token: req.cookies.token,
+    });
+  }
+  if (user.kycLevel >= 2 || user.kycStatus === "pending") {
+    return res.status(403).json({
+      message: "KYC Level 2 already completed or pending approval",
+      token: req.cookies.token,
+    });
+  }
+  if (user.hasVehicle !== "yes") {
+    return res.status(400).json({
+      message: "Vehicle ownership must be set to 'yes' to register a vehicle",
       token: req.cookies.token,
     });
   }
 
   try {
-    // Upload files to Cloudinary
-    const uploadToCloudinary = async (file) => {
+    const uploadToLocal = (file) => {
       if (file) {
-        const result = await cloudinary.uploader.upload(file.path, {
-          folder: "vehicles",
-        });
-        return result.secure_url;
+        return path.join("uploads", file.filename).replace(/\\/g, "/");
       }
       return null;
     };
 
     const vehicleRegistrationCardFront =
       req.files && req.files.vehicleRegistrationCardFront
-        ? await uploadToCloudinary(req.files.vehicleRegistrationCardFront[0])
+        ? uploadToLocal(req.files.vehicleRegistrationCardFront[0])
         : vehicleRegistrationCard && vehicleRegistrationCard.front;
     const vehicleRegistrationCardBack =
       req.files && req.files.vehicleRegistrationCardBack
-        ? await uploadToCloudinary(req.files.vehicleRegistrationCardBack[0])
+        ? uploadToLocal(req.files.vehicleRegistrationCardBack[0])
         : vehicleRegistrationCard && vehicleRegistrationCard.back;
     const roadAuthorityCertificateUrl =
       req.files && req.files.roadAuthorityCertificate
-        ? await uploadToCloudinary(req.files.roadAuthorityCertificate[0])
+        ? uploadToLocal(req.files.roadAuthorityCertificate[0])
         : roadAuthorityCertificate;
     const insuranceCertificateUrl =
       req.files && req.files.insuranceCertificate
-        ? await uploadToCloudinary(req.files.insuranceCertificate[0])
+        ? uploadToLocal(req.files.insuranceCertificate[0])
         : insuranceCertificate;
     const vehicleImagesUrls =
       req.files && req.files.vehicleImages
-        ? await Promise.all(req.files.vehicleImages.map(uploadToCloudinary))
+        ? req.files.vehicleImages.map((file) => uploadToLocal(file))
         : vehicleImages;
 
-    // Prepare vehicle data
     const vehicleData = {
       userId,
       vehicleRegistrationCard: {
@@ -213,36 +225,32 @@ const registerVehicle = async (req, res) => {
       insuranceCertificate: insuranceCertificateUrl,
       vehicleType,
       vehicleImages: vehicleImagesUrls,
-      wheelchair: false, // Default wheelchair status
+      wheelchair: false,
     };
 
-    // Save new vehicle
     const vehicle = new Vehicle(vehicleData);
     await vehicle.save();
 
-    // Update user role to driver
-    user.role = "driver";
+    user.pendingVehicleData = vehicle._id;
+    user.kycStatus = "pending";
     await user.save();
 
-    // Generate new token and respond
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRY,
     });
     res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
     res.status(201).json({
-      message: "Vehicle registered successfully",
+      message: "Vehicle registration submitted and pending admin approval",
       vehicleId: vehicle._id,
-      role: user.role,
       token,
     });
   } catch (error) {
+    console.error("Error registering vehicle:", error);
     res.status(500).json({ message: error.message, token: req.cookies.token });
   }
 };
 
-// Update an existing vehicle
 const updateVehicle = async (req, res) => {
-  // Extract update data from request body
   const {
     vehicleId,
     vehicleOwnerName,
@@ -258,7 +266,6 @@ const updateVehicle = async (req, res) => {
   const userId = req.user._id;
 
   try {
-    // Find vehicle by ID and user
     const vehicle = await Vehicle.findOne({ _id: vehicleId, userId });
     if (!vehicle) {
       return res.status(404).json({
@@ -267,39 +274,34 @@ const updateVehicle = async (req, res) => {
       });
     }
 
-    // Upload new files to Cloudinary if provided
-    const uploadToCloudinary = async (file) => {
+    const uploadToLocal = (file) => {
       if (file) {
-        const result = await cloudinary.uploader.upload(file.path, {
-          folder: "vehicles",
-        });
-        return result.secure_url;
+        return path.join("uploads", file.filename).replace(/\\/g, "/");
       }
       return null;
     };
 
     const vehicleRegistrationCardFront =
       req.files && req.files.vehicleRegistrationCardFront
-        ? await uploadToCloudinary(req.files.vehicleRegistrationCardFront[0])
+        ? uploadToLocal(req.files.vehicleRegistrationCardFront[0])
         : vehicle.vehicleRegistrationCard.front;
     const vehicleRegistrationCardBack =
       req.files && req.files.vehicleRegistrationCardBack
-        ? await uploadToCloudinary(req.files.vehicleRegistrationCardBack[0])
+        ? uploadToLocal(req.files.vehicleRegistrationCardBack[0])
         : vehicle.vehicleRegistrationCard.back;
     const roadAuthorityCertificateUrl =
       req.files && req.files.roadAuthorityCertificate
-        ? await uploadToCloudinary(req.files.roadAuthorityCertificate[0])
+        ? uploadToLocal(req.files.roadAuthorityCertificate[0])
         : vehicle.roadAuthorityCertificate;
     const insuranceCertificateUrl =
       req.files && req.files.insuranceCertificate
-        ? await uploadToCloudinary(req.files.insuranceCertificate[0])
+        ? uploadToLocal(req.files.insuranceCertificate[0])
         : vehicle.insuranceCertificate;
     const vehicleImagesUrls =
       req.files && req.files.vehicleImages
-        ? await Promise.all(req.files.vehicleImages.map(uploadToCloudinary))
+        ? req.files.vehicleImages.map((file) => uploadToLocal(file))
         : vehicle.vehicleImages;
 
-    // Update vehicle fields, retaining existing values if not provided
     vehicle.vehicleOwnerName = vehicleOwnerName || vehicle.vehicleOwnerName;
     vehicle.companyName = companyName || vehicle.companyName;
     vehicle.vehiclePlateNumber =
@@ -319,10 +321,8 @@ const updateVehicle = async (req, res) => {
     vehicle.insuranceCertificate = insuranceCertificateUrl;
     vehicle.vehicleImages = vehicleImagesUrls || vehicle.vehicleImages;
 
-    // Save updated vehicle
     await vehicle.save();
 
-    // Generate new token and respond
     const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRY,
     });
@@ -333,25 +333,24 @@ const updateVehicle = async (req, res) => {
       token,
     });
   } catch (error) {
+    console.error("Error updating vehicle:", error);
     res.status(500).json({ message: error.message, token: req.cookies.token });
   }
 };
 
-// Get user and vehicle information for authenticated user
 const getUserVehicleInfo = async (req, res) => {
-  // Use authenticated userId
   const userId = req.user._id;
 
   try {
-    // Find user by ID, excluding password and version fields
-    const user = await User.findById(userId).select("-password -__v");
+    const user = await User.findById(userId)
+      .select("-password -__v")
+      .populate("pendingVehicleData");
     if (!user) {
       return res
         .status(404)
         .json({ message: "User not found", token: req.cookies.token });
     }
 
-    // Find associated vehicle
     const vehicle = await Vehicle.findOne({ userId }).select("-__v");
     const response = {
       user: {
@@ -361,38 +360,42 @@ const getUserVehicleInfo = async (req, res) => {
         phoneNumber: user.phoneNumber,
         role: user.role,
         kycLevel: user.kycLevel,
+        kycStatus: user.kycStatus,
         licenseImage: user.licenseImage,
+        hasVehicle: user.hasVehicle,
+        pendingVehicleData: user.pendingVehicleData,
+        country: user.country,
         gender: user.gender,
+        cnicImages: user.cnicImages,
+        selfieImage: user.selfieImage,
       },
       vehicle: vehicle ? vehicle.toObject() : null,
     };
 
-    // Generate new token and respond
     const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRY,
     });
     res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
     res.status(200).json({ ...response, token });
   } catch (error) {
+    console.error("Error fetching user vehicle info:", error);
     res.status(500).json({ message: error.message, token: req.cookies.token });
   }
 };
 
-// Get current authenticated user's details
 const getCurrentUser = async (req, res) => {
-  // Use authenticated userId
   const userId = req.user._id;
 
   try {
-    // Find user by ID, excluding password and version fields
-    const user = await User.findById(userId).select("-password -__v");
+    const user = await User.findById(userId)
+      .select("-password -__v")
+      .populate("pendingVehicleData");
     if (!user) {
       return res
         .status(404)
         .json({ message: "User not found", token: req.cookies.token });
     }
 
-    // Prepare response with user details
     const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRY,
     });
@@ -405,17 +408,23 @@ const getCurrentUser = async (req, res) => {
         phoneNumber: user.phoneNumber,
         role: user.role,
         kycLevel: user.kycLevel,
+        kycStatus: user.kycStatus,
         licenseImage: user.licenseImage,
+        hasVehicle: user.hasVehicle,
+        pendingVehicleData: user.pendingVehicleData,
+        country: user.country,
         gender: user.gender,
+        cnicImages: user.cnicImages,
+        selfieImage: user.selfieImage,
       },
       token,
     });
   } catch (error) {
+    console.error("Error fetching current user:", error);
     res.status(500).json({ message: error.message, token: req.cookies.token });
   }
 };
 
-// Export all controller functions
 export {
   uploadLicense,
   handleVehicleDecision,
