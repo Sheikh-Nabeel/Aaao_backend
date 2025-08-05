@@ -1,35 +1,42 @@
-// Importing required modules and configurations
 import dotenv from "dotenv";
-dotenv.config({path:'./.env'});
+dotenv.config({ path: "./.env" });
 import express from "express";
 import cookieParser from "cookie-parser";
-import errorHandler from "./middlewares/errorMiddleware.js"; // Import error handling middleware
+import errorHandler from "./middlewares/errorMiddleware.js";
 import connectDB from "./config/connectDB.js";
 import cors from "cors";
 import userRoutes from "./routes/userRoutes.js";
-import driversRoutes from "./routes/driversRoutes.js"; // Updated from vehicleRoutes
+import driversRoutes from "./routes/driversRoutes.js";
+import cloudinary from "cloudinary"; // Import Cloudinary
 import "colors";
 
-// Initialize Express app
+console.log("Cloudinary Config:", {
+  Cloud_Name: process.env.Cloud_Name,
+  API_Key: process.env.API_Key,
+  API_Secret: process.env.API_Secret,
+});
+
+// Configure Cloudinary here
+cloudinary.config({
+  cloud_name: process.env.Cloud_Name,
+  api_key: process.env.API_Key,
+  api_secret: process.env.API_Secret,
+});
+
 const app = express();
 
-// Middleware setup for CORS, JSON parsing, URL-encoded data, and cookies
-app.use(cors({ origin: true, credentials: true })); // Allow all origins with credentials
-app.use(express.json()); // Parses JSON request bodies
-app.use(express.urlencoded({ extended: true })); // Enables extended parsing for form data
-app.use(cookieParser()); // Parse cookies
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-// Apply user and drivers routes
 app.use("/api/user", userRoutes);
-app.use("/api/drivers", driversRoutes); // Updated from /api/vehicle
+app.use("/api/drivers", driversRoutes);
 
-// Connect to MongoDB database
 connectDB();
 
-// Apply global error handling middleware
 app.use(errorHandler);
 
-// Start the server on the specified port
 app.listen(process.env.PORT, () =>
   console.log(`Server started on port:${process.env.PORT}`)
 );
