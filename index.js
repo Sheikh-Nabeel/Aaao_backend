@@ -1,11 +1,10 @@
 // index.js
 import dotenv from "dotenv";
 dotenv.config({ path: "./.env" });
-dotenv.config({ path: "./.env" });
+ 
 
 import express from "express";
 import cookieParser from "cookie-parser";
-import errorHandler from "./middlewares/errorMiddleware.js";
 import errorHandler from "./middlewares/errorMiddleware.js";
 import connectDB from "./config/connectDB.js";
 import cors from "cors";

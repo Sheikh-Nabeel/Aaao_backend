@@ -440,7 +440,7 @@ const submitKYC = asyncHandler(async (req, res) => {
   });
 });
 
->>>>>>> feature/car-recovery
+
 const logout = async (req, res) => {
   try {
     res.clearCookie("token", {
@@ -679,7 +679,7 @@ async function checkAndUpdateUserLevel(user) {
 
 const getReferralTree = asyncHandler(async (req, res) => {
   const targetUserId = req.query.userId || req.user._id;
-  
+
   const user = await User.findById(targetUserId);
   if (!user) {
     res.status(404);
@@ -693,6 +693,15 @@ const getReferralTree = asyncHandler(async (req, res) => {
     ...user.level3Referrals,
     ...user.level4Referrals,
   ];
+
+  // Calculate stats for each level
+  const stats = {
+    level1: user.directReferrals ? user.directReferrals.length : 0,
+    level2: user.level2Referrals ? user.level2Referrals.length : 0,
+    level3: user.level3Referrals ? user.level3Referrals.length : 0,
+    level4: user.level4Referrals ? user.level4Referrals.length : 0,
+  };
+  stats.totalReferrals = stats.level1 + stats.level2 + stats.level3 + stats.level4;
 
   // Initialize response structure
   const referralTree = {
