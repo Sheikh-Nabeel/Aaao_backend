@@ -596,40 +596,93 @@ async function updateLevel4Referrals(user) {
 }
 
 async function checkAndUpdateUserLevel(user) {
-  const stats = user.getReferralStats();
+  // Get all referral IDs from all levels
+  const allReferralIds = [
+    ...user.directReferrals,
+    ...user.level2Referrals,
+    ...user.level3Referrals,
+    ...user.level4Referrals,
+  ];
+
+  // If no referrals, level remains 0
+  if (allReferralIds.length === 0) {
+    if (user.level !== 0) {
+      user.level = 0;
+      await user.save();
+      console.log(`User ${user.email} leveled down to level 0 (no existing referrals)`);
+    }
+    return;
+  }
+
+  // Get actual existing members count for each level
+  const existingMembers = await User.aggregate([
+    {
+      $match: {
+        _id: {
+          $in: allReferralIds.map((id) => new mongoose.Types.ObjectId(id)),
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+      },
+    },
+  ]);
+
+  // Create a set of existing member IDs for O(1) lookup
+  const existingMemberIds = new Set(existingMembers.map(member => member._id.toString()));
+
+  // Count existing members in each level
+  const level1Count = user.directReferrals.filter(id => existingMemberIds.has(id.toString())).length;
+  const level2Count = user.level2Referrals.filter(id => existingMemberIds.has(id.toString())).length;
+  const level3Count = user.level3Referrals.filter(id => existingMemberIds.has(id.toString())).length;
+  const level4Count = user.level4Referrals.filter(id => existingMemberIds.has(id.toString())).length;
+
   let newLevel = user.level;
 
-  if (stats.level1 >= 3 && user.level < 1) {
+  // Level progression based on existing members only
+  if (level1Count >= 3 && user.level < 1) {
     newLevel = 1;
   }
-  if (stats.level2 >= 3 && user.level < 2) {
+  if (level2Count >= 3 && user.level < 2) {
     newLevel = 2;
   }
-  if (stats.level3 >= 3 && user.level < 3) {
+  if (level3Count >= 3 && user.level < 3) {
     newLevel = 3;
   }
-  if (stats.level4 >= 3 && user.level < 4) {
+  if (level4Count >= 3 && user.level < 4) {
     newLevel = 4;
   }
 
+  // Check for level down if user loses members
+  if (level1Count < 3 && user.level >= 1) {
+    newLevel = 0;
+  }
+  if (level2Count < 3 && user.level >= 2) {
+    newLevel = 1;
+  }
+  if (level3Count < 3 && user.level >= 3) {
+    newLevel = 2;
+  }
+  if (level4Count < 3 && user.level >= 4) {
+    newLevel = 3;
+  }
+
   if (newLevel !== user.level) {
+    const oldLevel = user.level;
     user.level = newLevel;
     await user.save();
-    console.log(`User ${user.email} leveled up to level ${newLevel}`);
+    if (newLevel > oldLevel) {
+      console.log(`User ${user.email} leveled up to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`);
+    } else {
+      console.log(`User ${user.email} leveled down to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`);
+    }
   }
 }
 
 const getReferralTree = asyncHandler(async (req, res) => {
-  // Get user ID from query parameter or use authenticated user
   const targetUserId = req.query.userId || req.user._id;
-  
-  console.log("Query parameters:", req.query);
-  console.log("Target User ID:", targetUserId);
-  console.log("Authenticated User ID:", req.user._id);
-  
-  // If userId is provided in query, validate that the authenticated user has permission
-  // For now, allowing any authenticated user to view any referral tree
-  // You can add role-based restrictions here if needed
   
   const user = await User.findById(targetUserId);
   if (!user) {
@@ -637,30 +690,15 @@ const getReferralTree = asyncHandler(async (req, res) => {
     throw new Error("User not found");
   }
 
-  const stats = user.getReferralStats();
+  // Get all referral IDs from all levels
+  const allReferralIds = [
+    ...user.directReferrals,
+    ...user.level2Referrals,
+    ...user.level3Referrals,
+    ...user.level4Referrals,
+  ];
 
-  console.log(`User ${user.sponsorId} referral arrays:`);
-  console.log(
-    `directReferrals: ${
-      user.directReferrals.length
-    } - [${user.directReferrals.join(", ")}]`
-  );
-  console.log(
-    `level2Referrals: ${
-      user.level2Referrals.length
-    } - [${user.level2Referrals.join(", ")}]`
-  );
-  console.log(
-    `level3Referrals: ${
-      user.level3Referrals.length
-    } - [${user.level3Referrals.join(", ")}]`
-  );
-  console.log(
-    `level4Referrals: ${
-      user.level4Referrals.length
-    } - [${user.level4Referrals.join(", ")}]`
-  );
-
+  // Initialize response structure
   const referralTree = {
     user: {
       id: user._id,
@@ -671,11 +709,11 @@ const getReferralTree = asyncHandler(async (req, res) => {
       sponsorBy: user.sponsorBy,
     },
     counts: {
-      totalReferrals: stats.totalReferrals,
-      level1: stats.level1,
-      level2: stats.level2,
-      level3: stats.level3,
-      level4: stats.level4,
+      totalReferrals: 0,
+      level1: 0,
+      level2: 0,
+      level3: 0,
+      level4: 0,
     },
     members: {
       level1: [],
@@ -685,82 +723,73 @@ const getReferralTree = asyncHandler(async (req, res) => {
     },
   };
 
-  const allReferralIds = [
-    ...user.directReferrals,
-    ...user.level2Referrals,
-    ...user.level3Referrals,
-    ...user.level4Referrals,
-  ];
-
-  if (allReferralIds.length > 0) {
-    const allMembers = await User.aggregate([
-      {
-        $match: {
-          _id: {
-            $in: allReferralIds.map((id) => new mongoose.Types.ObjectId(id)),
-          },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          id: "$_id",
-          name: { $concat: ["$firstName", " ", "$lastName"] },
-          email: 1,
-          sponsorId: 1,
-          level: 1,
-          kycLevel: 1,
-          role: 1,
-          joinedDate: "$createdAt",
-        },
-      },
-      {
-        $sort: { joinedDate: -1 },
-      },
-    ]);
-
-    const membersMap = new Map();
-    allMembers.forEach((member) => {
-      membersMap.set(member.id.toString(), member);
+  // If no referrals, return early
+  if (allReferralIds.length === 0) {
+    res.status(200).json({
+      message: "Referral tree retrieved successfully",
+      referralTree,
     });
-
-    console.log(
-      `Processing ${user.directReferrals.length} direct referrals...`
-    );
-    user.directReferrals.forEach((id) => {
-      const member = membersMap.get(id.toString());
-      if (member) {
-        referralTree.members.level1.push(member);
-        console.log(`Added member: ${member.name} (${member.id})`);
-      } else {
-        console.log(`Member not found for ID: ${id}`);
-      }
-    });
-    console.log(
-      `Final level1 members count: ${referralTree.members.level1.length}`
-    );
-
-    user.level2Referrals.forEach((id) => {
-      const member = membersMap.get(id.toString());
-      if (member) {
-        referralTree.members.level2.push(member);
-      }
-    });
-
-    user.level3Referrals.forEach((id) => {
-      const member = membersMap.get(id.toString());
-      if (member) {
-        referralTree.members.level3.push(member);
-      }
-    });
-
-    user.level4Referrals.forEach((id) => {
-      const member = membersMap.get(id.toString());
-      if (member) {
-        referralTree.members.level4.push(member);
-      }
-    });
+    return;
   }
+
+  // Single optimized aggregation to get all existing members
+  const existingMembers = await User.aggregate([
+    {
+      $match: {
+        _id: {
+          $in: allReferralIds.map((id) => new mongoose.Types.ObjectId(id)),
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        id: "$_id",
+        name: { $concat: ["$firstName", " ", "$lastName"] },
+        email: 1,
+        sponsorId: 1,
+        level: 1,
+        kycLevel: 1,
+        role: 1,
+        joinedDate: "$createdAt",
+      },
+    },
+    {
+      $sort: { joinedDate: -1 },
+    },
+  ]);
+
+  // Create a map for O(1) lookup
+  const membersMap = new Map();
+  existingMembers.forEach((member) => {
+    membersMap.set(member.id.toString(), member);
+  });
+
+  // Process each level and only count existing members
+  const processLevel = (referralIds, levelKey) => {
+    const existingMembersInLevel = [];
+    referralIds.forEach((id) => {
+      const member = membersMap.get(id.toString());
+      if (member) {
+        existingMembersInLevel.push(member);
+      }
+    });
+    referralTree.members[levelKey] = existingMembersInLevel;
+    referralTree.counts[levelKey] = existingMembersInLevel.length;
+  };
+
+  // Process all levels
+  processLevel(user.directReferrals, 'level1');
+  processLevel(user.level2Referrals, 'level2');
+  processLevel(user.level3Referrals, 'level3');
+  processLevel(user.level4Referrals, 'level4');
+
+  // Calculate total from actual existing members
+  referralTree.counts.totalReferrals = 
+    referralTree.counts.level1 + 
+    referralTree.counts.level2 + 
+    referralTree.counts.level3 + 
+    referralTree.counts.level4;
 
   res.status(200).json({
     message: "Referral tree retrieved successfully",
