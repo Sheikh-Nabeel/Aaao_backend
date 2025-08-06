@@ -24,7 +24,7 @@ const generateOTP = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
 
 // Ensure uploads folder exists
-const uploadsDir = path.join(process.cwd(), "uploads");
+const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -377,6 +377,13 @@ const submitKYC = asyncHandler(async (req, res) => {
     });
   }
 
+  if (!mongoose.isValidObjectId(userId)) {
+    return res.status(400).json({
+      message: "Invalid user ID format. Must be a valid 24-character ObjectId",
+      userId,
+    });
+  }
+
   const [firstName, ...lastNameParts] = fullName.trim().split(" ");
   const lastName = lastNameParts.join(" ");
 
@@ -412,15 +419,27 @@ const submitKYC = asyncHandler(async (req, res) => {
     !req.files.backImage ||
     !req.files.selfieImage
   ) {
+    console.log("Missing required files:", {
+      frontImage: !!req.files?.frontImage,
+      backImage: !!req.files?.backImage,
+      selfieImage: !!req.files?.selfieImage,
+    });
     return res.status(400).json({
       message: "Front, back, and selfie images are required",
       userId,
+      receivedFiles: req.files ? Object.keys(req.files) : [],
     });
   }
 
-  const frontImagePath = path.join("uploads", req.files.frontImage[0].filename).replace(/\\/g, "/");
-  const backImagePath = path.join("uploads", req.files.backImage[0].filename).replace(/\\/g, "/");
-  const selfieImagePath = path.join("uploads", req.files.selfieImage[0].filename).replace(/\\/g, "/");
+  const frontImagePath = path
+    .join("uploads", req.files.frontImage[0].filename)
+    .replace(/\\/g, "/");
+  const backImagePath = path
+    .join("uploads", req.files.backImage[0].filename)
+    .replace(/\\/g, "/");
+  const selfieImagePath = path
+    .join("uploads", req.files.selfieImage[0].filename)
+    .replace(/\\/g, "/");
 
   user.cnicImages = {
     front: frontImagePath,
@@ -433,6 +452,14 @@ const submitKYC = asyncHandler(async (req, res) => {
   user.firstName = firstName;
   user.lastName = lastName;
   await user.save();
+
+  console.log("KYC submitted for user:", {
+    userId,
+    frontImagePath,
+    backImagePath,
+    selfieImagePath,
+    country,
+  });
 
   res.status(200).json({
     message: "KYC Level 1 submitted and pending admin approval",
@@ -874,11 +901,6 @@ const approveKYC = asyncHandler(async (req, res) => {
     throw new Error("User not found");
   }
 
-  if (user.kycStatus !== "pending") {
-    res.status(400);
-    throw new Error("No pending KYC submission for this user");
-  }
-
   let kycLevelToApprove;
   if (user.kycLevel === 0) {
     kycLevelToApprove = 1; // Approve Level 1
@@ -907,8 +929,12 @@ const approveKYC = asyncHandler(async (req, res) => {
     }
   }
 
-  const updatedUser = await User.findOneAndUpdate(
-    { _id: userId, kycStatus: "pending" },
+  console.log(
+    `Approving KYC for userId: ${userId}, kycLevel: ${kycLevelToApprove}, current kycStatus: ${user.kycStatus}`
+  );
+
+  const updatedUser = await User.findByIdAndUpdate(
+    userId,
     {
       kycLevel: kycLevelToApprove,
       kycStatus: "approved",
@@ -918,9 +944,27 @@ const approveKYC = asyncHandler(async (req, res) => {
   );
 
   if (!updatedUser) {
+    console.error(`Failed to update KYC for userId: ${userId}`);
     res.status(400);
-    throw new Error("Failed to update KYC status. User may no longer be pending.");
+    throw new Error("Failed to update KYC status.");
   }
+
+  // Verify the update
+  const verifiedUser = await User.findById(userId);
+  if (
+    verifiedUser.kycStatus !== "approved" ||
+    verifiedUser.kycLevel !== kycLevelToApprove
+  ) {
+    console.error(
+      `KYC update verification failed for userId: ${userId}, kycStatus: ${verifiedUser.kycStatus}, kycLevel: ${verifiedUser.kycLevel}`
+    );
+    res.status(500);
+    throw new Error("KYC status update failed in database.");
+  }
+
+  console.log(
+    `KYC updated successfully for userId: ${userId}, new kycStatus: ${updatedUser.kycStatus}, new kycLevel: ${updatedUser.kycLevel}`
+  );
 
   await transporter.sendMail({
     from: `"Your App" <chyousafawais667@gmail.com>`,
@@ -938,6 +982,7 @@ const approveKYC = asyncHandler(async (req, res) => {
     message: `KYC Level ${kycLevelToApprove} approved successfully`,
     userId,
     kycLevel: kycLevelToApprove,
+    kycStatus: updatedUser.kycStatus,
     token,
   });
 });
@@ -971,8 +1016,16 @@ const rejectKYC = asyncHandler(async (req, res) => {
     from: `"Your App" <chyousafawais667@gmail.com>`,
     to: user.email,
     subject: "KYC Submission Rejected",
-    text: `Hello ${user.firstName} ${user.lastName},\nYour KYC submission has been rejected.\nReason: ${reason || "No reason provided"}.\nPlease resubmit with corrected information.`,
-    html: `<h2>Hello ${user.firstName} ${user.lastName},</h2><p>Your KYC submission has been rejected.</p><p><strong>Reason:</strong> ${reason || "No reason provided"}</p><p>Please resubmit with corrected information.</p>`,
+    text: `Hello ${user.firstName} ${
+      user.lastName
+    },\nYour KYC submission has been rejected.\nReason: ${
+      reason || "No reason provided"
+    }.\nPlease resubmit with corrected information.`,
+    html: `<h2>Hello ${user.firstName} ${
+      user.lastName
+    },</h2><p>Your KYC submission has been rejected.</p><p><strong>Reason:</strong> ${
+      reason || "No reason provided"
+    }</p><p>Please resubmit with corrected information.</p>`,
   });
 
   res.status(200).json({

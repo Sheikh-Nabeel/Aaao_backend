@@ -5,7 +5,7 @@ import path from "path";
 import fs from "fs";
 
 // Ensure uploads folder exists
-const uploadsDir = path.join(process.cwd(), "uploads");
+const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -52,7 +52,9 @@ const uploadLicense = async (req, res) => {
       });
     }
 
-    const licenseImagePath = path.join("uploads", req.file.filename).replace(/\\/g, "/");
+    const licenseImagePath = path
+      .join("uploads", req.file.filename)
+      .replace(/\\/g, "/");
 
     user.kycStatus = "pending";
     user.licenseImage = licenseImagePath;
@@ -117,8 +119,10 @@ const handleVehicleDecision = async (req, res) => {
   }
 
   user.hasVehicle = hasVehicle;
-  user.kycStatus = "pending";
   await user.save();
+  console.log(
+    `Updated user ${userId}, hasVehicle: ${hasVehicle}, kycStatus: ${user.kycStatus}`
+  );
 
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRY,
@@ -143,8 +147,6 @@ const registerVehicle = async (req, res) => {
   console.log("req.files:", req.files);
   const {
     userId,
-    vehicleRegistrationCard,
-    roadAuthorityCertificate,
     vehicleOwnerName,
     companyName,
     vehiclePlateNumber,
@@ -152,25 +154,45 @@ const registerVehicle = async (req, res) => {
     chassisNumber,
     vehicleColor,
     registrationExpiryDate,
-    insuranceCertificate,
     vehicleType,
-    vehicleImages,
+    serviceType,
+    wheelchair,
   } = req.body;
 
   const user = await User.findById(userId);
-  if (!user || user.kycLevel < 1 || user.kycStatus !== "approved") {
+  console.log("User data for registerVehicle:", {
+    userId,
+    exists: !!user,
+    kycLevel: user?.kycLevel,
+    kycStatus: user?.kycStatus,
+    hasVehicle: user?.hasVehicle,
+    authUserId: req.user._id.toString(),
+  });
+
+  if (!user || user.kycLevel < 1) {
+    console.log("KYC Level 1 check failed for userId:", userId);
     return res.status(403).json({
       message: "Complete and get approved for KYC Level 1 first",
       token: req.cookies.token,
     });
   }
-  if (user.kycLevel >= 2 || user.kycStatus === "pending") {
+  if (user.kycLevel >= 2) {
+    console.log(
+      "KYC Level 2 check failed: kycLevel =",
+      user.kycLevel,
+      "kycStatus =",
+      user.kycStatus
+    );
     return res.status(403).json({
       message: "KYC Level 2 already completed or pending approval",
       token: req.cookies.token,
     });
   }
   if (user.hasVehicle !== "yes") {
+    console.log(
+      "Vehicle ownership check failed: hasVehicle =",
+      user.hasVehicle
+    );
     return res.status(400).json({
       message: "Vehicle ownership must be set to 'yes' to register a vehicle",
       token: req.cookies.token,
@@ -185,26 +207,27 @@ const registerVehicle = async (req, res) => {
       return null;
     };
 
+    // Handle file uploads, default to null if not provided
     const vehicleRegistrationCardFront =
       req.files && req.files.vehicleRegistrationCardFront
         ? uploadToLocal(req.files.vehicleRegistrationCardFront[0])
-        : vehicleRegistrationCard && vehicleRegistrationCard.front;
+        : null;
     const vehicleRegistrationCardBack =
       req.files && req.files.vehicleRegistrationCardBack
         ? uploadToLocal(req.files.vehicleRegistrationCardBack[0])
-        : vehicleRegistrationCard && vehicleRegistrationCard.back;
+        : null;
     const roadAuthorityCertificateUrl =
       req.files && req.files.roadAuthorityCertificate
         ? uploadToLocal(req.files.roadAuthorityCertificate[0])
-        : roadAuthorityCertificate;
+        : null;
     const insuranceCertificateUrl =
       req.files && req.files.insuranceCertificate
         ? uploadToLocal(req.files.insuranceCertificate[0])
-        : insuranceCertificate;
+        : null;
     const vehicleImagesUrls =
       req.files && req.files.vehicleImages
         ? req.files.vehicleImages.map((file) => uploadToLocal(file))
-        : vehicleImages;
+        : [];
 
     const vehicleData = {
       userId,
@@ -213,19 +236,20 @@ const registerVehicle = async (req, res) => {
         back: vehicleRegistrationCardBack,
       },
       roadAuthorityCertificate: roadAuthorityCertificateUrl,
-      vehicleOwnerName,
-      companyName,
-      vehiclePlateNumber,
-      vehicleMakeModel,
-      chassisNumber,
-      vehicleColor,
+      insuranceCertificate: insuranceCertificateUrl,
+      vehicleImages: vehicleImagesUrls,
+      vehicleOwnerName: vehicleOwnerName || null,
+      companyName: companyName || null,
+      vehiclePlateNumber: vehiclePlateNumber || null,
+      vehicleMakeModel: vehicleMakeModel || null,
+      chassisNumber: chassisNumber || null,
+      vehicleColor: vehicleColor || null,
       registrationExpiryDate: registrationExpiryDate
         ? new Date(registrationExpiryDate)
         : null,
-      insuranceCertificate: insuranceCertificateUrl,
-      vehicleType,
-      vehicleImages: vehicleImagesUrls,
-      wheelchair: false,
+      vehicleType: vehicleType || null,
+      serviceType: serviceType || null,
+      wheelchair: wheelchair !== undefined ? Boolean(wheelchair) : false,
     };
 
     const vehicle = new Vehicle(vehicleData);
@@ -261,6 +285,7 @@ const updateVehicle = async (req, res) => {
     vehicleColor,
     registrationExpiryDate,
     vehicleType,
+    serviceType,
     wheelchair,
   } = req.body;
   const userId = req.user._id;
@@ -281,6 +306,7 @@ const updateVehicle = async (req, res) => {
       return null;
     };
 
+    // Preserve existing values if new files are not provided
     const vehicleRegistrationCardFront =
       req.files && req.files.vehicleRegistrationCardFront
         ? uploadToLocal(req.files.vehicleRegistrationCardFront[0])
@@ -313,8 +339,9 @@ const updateVehicle = async (req, res) => {
       ? new Date(registrationExpiryDate)
       : vehicle.registrationExpiryDate;
     vehicle.vehicleType = vehicleType || vehicle.vehicleType;
+    vehicle.serviceType = serviceType || vehicle.serviceType;
     vehicle.wheelchair =
-      wheelchair !== undefined ? wheelchair : vehicle.wheelchair;
+      wheelchair !== undefined ? Boolean(wheelchair) : vehicle.wheelchair;
     vehicle.vehicleRegistrationCard.front = vehicleRegistrationCardFront;
     vehicle.vehicleRegistrationCard.back = vehicleRegistrationCardBack;
     vehicle.roadAuthorityCertificate = roadAuthorityCertificateUrl;
