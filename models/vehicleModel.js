@@ -12,12 +12,31 @@ const vehicleSchema = new mongoose.Schema({
     required: false,
   },
   vehicleRegistrationCard: {
-    front: { type: String, required: false },
-    back: { type: String, required: false },
+    front: {
+      type: String,
+      required: [true, "Vehicle registration card front is required"],
+    },
+    back: {
+      type: String,
+      required: [true, "Vehicle registration card back is required"],
+    },
   },
-  roadAuthorityCertificate: { type: String, required: false },
-  insuranceCertificate: { type: String, required: false },
-  vehicleImages: [{ type: String, required: false }],
+  roadAuthorityCertificate: {
+    type: String,
+    required: [true, "Road authority certificate is required"],
+  },
+  insuranceCertificate: {
+    type: String,
+    required: [true, "Insurance certificate is required"],
+  },
+  vehicleImages: {
+    type: [String],
+    required: [true, "At least one vehicle image is required"],
+    validate: {
+      validator: (arr) => arr.length > 0,
+      message: "At least one vehicle image is required",
+    },
+  },
   vehicleOwnerName: { type: String, required: false },
   companyName: { type: String, required: false },
   vehiclePlateNumber: { type: String, required: false },
@@ -32,10 +51,32 @@ const vehicleSchema = new mongoose.Schema({
   chassisNumber: { type: String, required: false },
   vehicleColor: { type: String, required: false },
   registrationExpiryDate: { type: Date, required: false },
+  serviceType: {
+    type: String,
+    enum: ["vehicle cab", "car recovery"],
+    required: false,
+  },
   vehicleType: {
     type: String,
-    enum: ["bike", "minicar", "accar", "luxurycar", "premium"],
     required: false,
+    validate: {
+      validator: function (value) {
+        if (!this.serviceType) return true; // Allow null if serviceType is not set
+        const validTypes = {
+          "vehicle cab": ["bike", "minicar", "accar", "luxurycar", "premium"],
+          "car recovery": ["recovery truck", "hook-and-chain tow truck"],
+        };
+        return validTypes[this.serviceType]?.includes(value);
+      },
+      message: (props) =>
+        `Invalid vehicleType '${props.value}' for serviceType '${
+          props.instance.serviceType
+        }'. Valid options are: ${
+          props.instance.serviceType === "vehicle cab"
+            ? "bike, minicar, accar, luxurycar, premium"
+            : "recovery truck, hook-and-chain tow truck"
+        }`,
+    },
   },
   wheelchair: {
     type: Boolean,
