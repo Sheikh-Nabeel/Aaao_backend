@@ -8,7 +8,6 @@ const userSchema = new mongoose.Schema({
     required: [true, "First name is required"],
     trim: true,
   },
-  
   lastName: {
     type: String,
     required: [true, "Last name is required"],
@@ -61,31 +60,11 @@ const userSchema = new mongoose.Schema({
     ref: "User",
     default: [],
   },
-  // Level 2 referrals - users referred by direct referrals
-  level2Referrals: {
-    type: [mongoose.Schema.Types.ObjectId],
-    ref: "User",
-    default: [],
-  },
-  // Level 3 referrals - users referred by level 2 referrals
-  level3Referrals: {
-    type: [mongoose.Schema.Types.ObjectId],
-    ref: "User",
-    default: [],
-  },
-  // Level 4 referrals - users referred by level 3 referrals
-  level4Referrals: {
-    type: [mongoose.Schema.Types.ObjectId],
-    ref: "User",
-    default: [],
-  },
-  // Current level of the user (0-4)
   level: {
     type: Number,
     default: 0,
     max: 4,
   },
-  // Who referred this user (sponsor's sponsorId)
   sponsorBy: {
     type: String,
     trim: true,
@@ -95,32 +74,22 @@ const userSchema = new mongoose.Schema({
     ref: "User",
     default: [],
   },
-  // Legacy field for backward compatibility
-  sponsorTree: {
-    type: [mongoose.Schema.Types.ObjectId], // Array of user IDs for sponsorship tree
-    ref: "User",
-    default: [], // Empty by default
-  },
   country: {
     type: String,
-    required: false,
     trim: true,
   },
   cnicImages: {
-    front: { type: String, required: false },
-    back: { type: String, required: false },
+    front: { type: String },
+    back: { type: String },
   },
   selfieImage: {
     type: String,
-    required: false,
   },
   licenseImage: {
     type: String,
-    required: false,
   },
   gender: {
     type: String,
-    required: false,
     enum: ["Male", "Female", "Other"],
     trim: true,
   },
@@ -136,7 +105,6 @@ const userSchema = new mongoose.Schema({
   pendingVehicleData: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Vehicle",
-    required: false,
   },
   hasVehicle: {
     type: String,
@@ -173,6 +141,7 @@ const userSchema = new mongoose.Schema({
   },
 });
 
+// 🔍 Indexes
 userSchema.index({ email: 1 });
 userSchema.index({ phoneNumber: 1 });
 userSchema.index({ sponsorId: 1 });
@@ -189,11 +158,11 @@ userSchema.index({ level2Referrals: 1 });
 userSchema.index({ level3Referrals: 1 });
 userSchema.index({ level4Referrals: 1 });
 userSchema.index({ pendingVehicleData: 1 });
-
 userSchema.index({ sponsorBy: 1, level: 1 });
 userSchema.index({ level: 1, createdAt: -1 });
 userSchema.index({ kycLevel: 1, role: 1 });
 
+// 🔐 Password hashing before save
 userSchema.pre("save", async function (next) {
   if (this.isModified("password")) {
     this.password = await bcrypt.hash(this.password, 10);
@@ -201,10 +170,12 @@ userSchema.pre("save", async function (next) {
   next();
 });
 
+// 🔐 Compare password method
 userSchema.methods.comparePassword = async function (password) {
   return await bcrypt.compare(password, this.password);
 };
 
+// 📊 Referral stats method
 userSchema.methods.getReferralStats = function () {
   return {
     level1: this.directReferrals.length,
@@ -220,6 +191,7 @@ userSchema.methods.getReferralStats = function () {
   };
 };
 
+// 🚀 Level up check method
 userSchema.methods.canLevelUp = function () {
   const stats = this.getReferralStats();
 
@@ -229,38 +201,6 @@ userSchema.methods.canLevelUp = function () {
   if (stats.level4 >= 3 && this.level < 4) return 4;
 
   return null;
-};
-
-// Method to get referral statistics
-userSchema.methods.getReferralStats = function() {
-  return {
-    level1: this.directReferrals.length,
-    level2: this.level2Referrals.length,
-    level3: this.level3Referrals.length,
-    level4: this.level4Referrals.length,
-    totalReferrals: this.directReferrals.length + this.level2Referrals.length + 
-                   this.level3Referrals.length + this.level4Referrals.length,
-    currentLevel: this.level
-  };
-};
-
-// Method to check if user can level up
-userSchema.methods.canLevelUp = function() {
-  const stats = this.getReferralStats();
-  
-  // Level 1: Need at least 3 direct referrals
-  if (stats.level1 >= 3 && this.level < 1) return 1;
-  
-  // Level 2: Need at least 3 level 2 referrals
-  if (stats.level2 >= 3 && this.level < 2) return 2;
-  
-  // Level 3: Need at least 3 level 3 referrals
-  if (stats.level3 >= 3 && this.level < 3) return 3;
-  
-  // Level 4: Need at least 3 level 4 referrals
-  if (stats.level4 >= 3 && this.level < 4) return 4;
-  
-  return null; // Cannot level up
 };
 
 export default mongoose.model("User", userSchema);
