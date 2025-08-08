@@ -8,6 +8,7 @@ import {
   getCurrentUser,
 } from "../controllers/driversController.js";
 import authHandler from "../middlewares/authMIddleware.js";
+
 import multer from "multer";
 import path from "path";
 
