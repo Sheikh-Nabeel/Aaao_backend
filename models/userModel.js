@@ -3,6 +3,18 @@ import bcrypt from "bcrypt";
 import { v4 as uuidv4 } from "uuid";
 
 const userSchema = new mongoose.Schema({
+  username: {
+    type: String,
+    required: [true, "Username is required"],
+    unique: true,
+    trim: true,
+    minlength: [3, "Username must be at least 3 characters"],
+    maxlength: [30, "Username cannot exceed 30 characters"],
+    match: [
+      /^[a-zA-Z0-9_]+$/,
+      "Username can only contain letters, numbers, and underscores",
+    ],
+  },
   firstName: {
     type: String,
     required: [true, "First name is required"],
@@ -142,6 +154,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // 🔍 Indexes
+userSchema.index({ username: 1 });
 userSchema.index({ email: 1 });
 userSchema.index({ phoneNumber: 1 });
 userSchema.index({ sponsorId: 1 });

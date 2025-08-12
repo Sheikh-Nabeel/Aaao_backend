@@ -26,11 +26,12 @@ const generateOTP = () =>
 // Ensure uploads folder exists
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.mkdirSync(UploadsDir, { recursive: true });
 }
 
 const signupUser = asyncHandler(async (req, res) => {
   const {
+    username,
     firstName,
     lastName,
     email,
@@ -40,6 +41,10 @@ const signupUser = asyncHandler(async (req, res) => {
     gender,
   } = req.body;
 
+  if (!username) {
+    res.status(400);
+    throw new Error("Username is required");
+  }
   if (!firstName) {
     res.status(400);
     throw new Error("First name is required");
@@ -66,26 +71,31 @@ const signupUser = asyncHandler(async (req, res) => {
   }
 
   if (sponsorBy) {
-    const sponsor = await User.findOne({ sponsorId: sponsorBy });
+    const sponsor = await User.findOne({
+      $or: [{ sponsorId: sponsorBy }, { username: sponsorBy }],
+    });
     if (!sponsor) {
       res.status(400);
-      throw new Error("Invalid sponsor ID");
+      throw new Error("Invalid sponsor ID or username");
     }
   }
 
   const existingUser = await User.findOne({
-    $or: [{ email }, { phoneNumber }],
+    $or: [{ email }, { phoneNumber }, { username }],
   });
   let otp;
   if (existingUser) {
     if (existingUser.isVerified) {
       res.status(400);
-      throw new Error("A user with this email or phone number already exists");
+      throw new Error(
+        "A user with this email, phone number, or username already exists"
+      );
     }
     otp = generateOTP();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
     existingUser.otp = otp;
     existingUser.otpExpires = otpExpires;
+    existingUser.username = username;
     existingUser.firstName = firstName;
     existingUser.lastName = lastName;
     existingUser.phoneNumber = phoneNumber;
@@ -96,6 +106,7 @@ const signupUser = asyncHandler(async (req, res) => {
     console.log("Updated existing user:", existingUser.email, existingUser.otp);
   } else {
     const user = await User.create({
+      username,
       firstName,
       lastName,
       email,
@@ -155,7 +166,9 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
   let sponsorName = null;
   if (user.sponsorBy) {
     console.log(`User has sponsorBy: ${user.sponsorBy}`);
-    const sponsor = await User.findOne({ sponsorId: user.sponsorBy });
+    const sponsor = await User.findOne({
+      $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
+    });
     if (sponsor) {
       console.log(
         `Found sponsor: ${sponsor.sponsorId} (${sponsor.firstName} ${sponsor.lastName})`
@@ -163,7 +176,9 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
       await updateReferralTree(user._id, user.sponsorBy);
       sponsorName = `${sponsor.firstName} ${sponsor.lastName}`;
     } else {
-      console.error(`Sponsor not found with sponsorId: ${user.sponsorBy}`);
+      console.error(
+        `Sponsor not found with sponsorId or username: ${user.sponsorBy}`
+      );
     }
   } else {
     console.log(`User has no sponsorBy`);
@@ -190,6 +205,7 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     message: "Registration completed successfully",
     token,
     userId: user._id,
+    username: user.username,
     sponsorId: user.sponsorId,
     level: user.level,
     sponsorTree: user.sponsorTree.map((s) => ({
@@ -199,6 +215,7 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     sponsoredUsers: sponsoredUsers || "No sponsored users",
     sponsorName: sponsorName,
     user: {
+      username: user.username,
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
@@ -216,17 +233,19 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  const { email, phoneNumber, password } = req.body;
-  if ((!email && !phoneNumber) || !password) {
+  const { email, phoneNumber, username, password } = req.body;
+  if ((!email && !phoneNumber && !username) || !password) {
     res.status(400);
-    throw new Error("Email or phone number and password are required");
+    throw new Error(
+      "Email, phone number, or username and password are required"
+    );
   }
   const user = await User.findOne({
-    $or: [{ email }, { phoneNumber }],
+    $or: [{ email }, { phoneNumber }, { username }],
   }).populate("sponsorTree", "firstName lastName");
   if (!user) {
     res.status(401);
-    throw new Error("Invalid email or phone number");
+    throw new Error("Invalid email, phone number, or username");
   }
   if (!user.isVerified) {
     res.status(403);
@@ -244,7 +263,9 @@ const loginUser = asyncHandler(async (req, res) => {
     .join(", ");
   let sponsorName = null;
   if (user.sponsorBy) {
-    const sponsor = await User.findOne({ sponsorId: user.sponsorBy });
+    const sponsor = await User.findOne({
+      $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
+    });
     sponsorName = sponsor ? `${sponsor.firstName} ${sponsor.lastName}` : null;
   }
   res
@@ -259,6 +280,7 @@ const loginUser = asyncHandler(async (req, res) => {
       message: "Login successful",
       token,
       userId: user._id,
+      username: user.username,
       sponsorId: user.sponsorId,
       level: user.level,
       sponsorTree: user.sponsorTree.map((s) => ({
@@ -268,6 +290,7 @@ const loginUser = asyncHandler(async (req, res) => {
       sponsoredUsers: sponsoredUsers || "No sponsored users",
       sponsorName: sponsorName,
       user: {
+        username: user.username,
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
@@ -467,7 +490,6 @@ const submitKYC = asyncHandler(async (req, res) => {
   });
 });
 
-
 const logout = async (req, res) => {
   try {
     res.clearCookie("token", {
@@ -516,14 +538,18 @@ const resendOtp = asyncHandler(async (req, res) => {
   res.status(200).json({ message: "New OTP sent successfully" });
 });
 
-async function updateReferralTree(newUserId, sponsorId) {
+async function updateReferralTree(newUserId, sponsorIdentifier) {
   try {
     const newUser = await User.findById(newUserId);
     if (!newUser) return;
 
-    const sponsor = await User.findOne({ sponsorId: sponsorId });
+    const sponsor = await User.findOne({
+      $or: [{ sponsorId: sponsorIdentifier }, { username: sponsorIdentifier }],
+    });
     if (!sponsor) {
-      console.error(`Sponsor not found with sponsorId: ${sponsorId}`);
+      console.error(
+        `Sponsor not found with sponsorId or username: ${sponsorIdentifier}`
+      );
       return;
     }
 
@@ -569,7 +595,9 @@ async function updateAllLevels(userId) {
     await checkAndUpdateUserLevel(user);
 
     if (user.sponsorBy) {
-      const parentSponsor = await User.findOne({ sponsorId: user.sponsorBy });
+      const parentSponsor = await User.findOne({
+        $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
+      });
       if (parentSponsor) {
         await updateAllLevels(parentSponsor._id);
       }
@@ -597,7 +625,7 @@ async function updateLevel3Referrals(user) {
 
   for (const level2ReferralId of user.level2Referrals) {
     const level2Referral = await User.findById(level2ReferralId);
-    if (level2Referral && directReferral.directReferrals.length > 0) {
+    if (level2Referral && level2Referral.directReferrals.length > 0) {
       user.level3Referrals.push(...level2Referral.directReferrals);
     }
   }
@@ -632,7 +660,9 @@ async function checkAndUpdateUserLevel(user) {
     if (user.level !== 0) {
       user.level = 0;
       await user.save();
-      console.log(`User ${user.email} leveled down to level 0 (no existing referrals)`);
+      console.log(
+        `User ${user.email} leveled down to level 0 (no existing referrals)`
+      );
     }
     return;
   }
@@ -654,13 +684,23 @@ async function checkAndUpdateUserLevel(user) {
   ]);
 
   // Create a set of existing member IDs for O(1) lookup
-  const existingMemberIds = new Set(existingMembers.map(member => member._id.toString()));
+  const existingMemberIds = new Set(
+    existingMembers.map((member) => member._id.toString())
+  );
 
   // Count existing members in each level
-  const level1Count = user.directReferrals.filter(id => existingMemberIds.has(id.toString())).length;
-  const level2Count = user.level2Referrals.filter(id => existingMemberIds.has(id.toString())).length;
-  const level3Count = user.level3Referrals.filter(id => existingMemberIds.has(id.toString())).length;
-  const level4Count = user.level4Referrals.filter(id => existingMemberIds.has(id.toString())).length;
+  const level1Count = user.directReferrals.filter((id) =>
+    existingMemberIds.has(id.toString())
+  ).length;
+  const level2Count = user.level2Referrals.filter((id) =>
+    existingMemberIds.has(id.toString())
+  ).length;
+  const level3Count = user.level3Referrals.filter((id) =>
+    existingMemberIds.has(id.toString())
+  ).length;
+  const level4Count = user.level4Referrals.filter((id) =>
+    existingMemberIds.has(id.toString())
+  ).length;
 
   let newLevel = user.level;
 
@@ -697,9 +737,13 @@ async function checkAndUpdateUserLevel(user) {
     user.level = newLevel;
     await user.save();
     if (newLevel > oldLevel) {
-      console.log(`User ${user.email} leveled up to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`);
+      console.log(
+        `User ${user.email} leveled up to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`
+      );
     } else {
-      console.log(`User ${user.email} leveled down to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`);
+      console.log(
+        `User ${user.email} leveled down to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`
+      );
     }
   }
 }
@@ -728,12 +772,14 @@ const getReferralTree = asyncHandler(async (req, res) => {
     level3: user.level3Referrals ? user.level3Referrals.length : 0,
     level4: user.level4Referrals ? user.level4Referrals.length : 0,
   };
-  stats.totalReferrals = stats.level1 + stats.level2 + stats.level3 + stats.level4;
+  stats.totalReferrals =
+    stats.level1 + stats.level2 + stats.level3 + stats.level4;
 
   // Initialize response structure
   const referralTree = {
     user: {
       id: user._id,
+      username: user.username,
       name: `${user.firstName} ${user.lastName}`,
       email: user.email,
       sponsorId: user.sponsorId,
@@ -779,6 +825,7 @@ const getReferralTree = asyncHandler(async (req, res) => {
       $project: {
         _id: 0,
         id: "$_id",
+        username: "$username",
         name: { $concat: ["$firstName", " ", "$lastName"] },
         email: 1,
         sponsorId: 1,
@@ -813,16 +860,16 @@ const getReferralTree = asyncHandler(async (req, res) => {
   };
 
   // Process all levels
-  processLevel(user.directReferrals, 'level1');
-  processLevel(user.level2Referrals, 'level2');
-  processLevel(user.level3Referrals, 'level3');
-  processLevel(user.level4Referrals, 'level4');
+  processLevel(user.directReferrals, "level1");
+  processLevel(user.level2Referrals, "level2");
+  processLevel(user.level3Referrals, "level3");
+  processLevel(user.level4Referrals, "level4");
 
   // Calculate total from actual existing members
-  referralTree.counts.totalReferrals = 
-    referralTree.counts.level1 + 
-    referralTree.counts.level2 + 
-    referralTree.counts.level3 + 
+  referralTree.counts.totalReferrals =
+    referralTree.counts.level1 +
+    referralTree.counts.level2 +
+    referralTree.counts.level3 +
     referralTree.counts.level4;
 
   res.status(200).json({
@@ -835,6 +882,7 @@ const getAllUsers = asyncHandler(async (req, res) => {
   const users = await User.find(
     {},
     {
+      username: 1,
       firstName: 1,
       lastName: 1,
       email: 1,
@@ -871,7 +919,9 @@ const fixReferralRelationships = asyncHandler(async (req, res) => {
     for (const user of usersWithSponsors) {
       try {
         if (user.sponsorBy) {
-          const sponsor = await User.findOne({ sponsorId: user.sponsorBy });
+          const sponsor = await User.findOne({
+            $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
+          });
           if (sponsor) {
             if (!sponsor.directReferrals.includes(user._id)) {
               sponsor.directReferrals.push(user._id);
@@ -1081,7 +1131,7 @@ const rejectKYC = asyncHandler(async (req, res) => {
 const getPendingKYCs = asyncHandler(async (req, res) => {
   const pendingUsers = await User.find({ kycStatus: "pending" })
     .select(
-      "firstName lastName email country kycLevel kycStatus cnicImages selfieImage licenseImage hasVehicle pendingVehicleData"
+      "username firstName lastName email country kycLevel kycStatus cnicImages selfieImage licenseImage hasVehicle pendingVehicleData"
     )
     .populate("pendingVehicleData");
 
@@ -1089,6 +1139,7 @@ const getPendingKYCs = asyncHandler(async (req, res) => {
     pendingUsers.map(async (user) => {
       return {
         userId: user._id,
+        username: user.username,
         name: `${user.firstName} ${user.lastName}`,
         email: user.email,
         country: user.country,

@@ -7,7 +7,7 @@ import asyncHandler from "express-async-handler";
 
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.mkdirSync(UploadsDir, { recursive: true });
 }
 
 const kycLevel1Check = async (req, res, next) => {
@@ -356,6 +356,7 @@ const getUserVehicleInfo = asyncHandler(async (req, res) => {
   const vehicle = await Vehicle.findOne({ userId }).select("-__v");
   const response = {
     user: {
+      username: user.username,
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
@@ -399,6 +400,7 @@ const getCurrentUser = asyncHandler(async (req, res) => {
   res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
   res.status(200).json({
     user: {
+      username: user.username,
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,

@@ -147,10 +147,25 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
         const driverLon = parseFloat(lon) + (Math.random() - 0.5) * 0.1;
         const distance = getDistance(lat, lon, driverLat, driverLon);
         if (distance <= 10) {
+          let sponsorName = null;
+          if (driver.sponsorBy) {
+            const sponsor = await User.findOne({
+              $or: [
+                { sponsorId: driver.sponsorBy },
+                { username: driver.sponsorBy },
+              ],
+            });
+            sponsorName = sponsor
+              ? `${sponsor.firstName} ${sponsor.lastName}`
+              : null;
+          }
           return {
             driverId: driver._id,
+            username: driver.username,
             name: `${driver.firstName} ${driver.lastName}`,
             email: driver.email,
+            sponsorId: driver.sponsorId,
+            sponsorName,
             vehicle: driver.pendingVehicleData,
             distance,
             location: { lat: driverLat, lon: driverLon },
@@ -252,7 +267,7 @@ const updateBookingStatus = asyncHandler(async (req, res) => {
   }
 
   if (
-    booking.driverId.toString() !== userId.toString() &&
+    booking.driverId?.toString() !== userId.toString() &&
     booking.userId.toString() !== userId.toString()
   ) {
     return res.status(403).json({
@@ -296,12 +311,12 @@ const getUserBookings = asyncHandler(async (req, res) => {
   let bookings;
   if (role === "driver") {
     bookings = await Booking.find({ driverId: userId })
-      .populate("userId", "firstName lastName email")
+      .populate("userId", "username firstName lastName email")
       .populate("vehicleId")
       .sort({ createdAt: -1 });
   } else {
     bookings = await Booking.find({ userId })
-      .populate("driverId", "firstName lastName email")
+      .populate("driverId", "username firstName lastName email")
       .populate("vehicleId")
       .sort({ createdAt: -1 });
   }
@@ -312,7 +327,27 @@ const getUserBookings = asyncHandler(async (req, res) => {
   res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
   res.status(200).json({
     message: "Bookings retrieved successfully",
-    bookings,
+    bookings: bookings.map((booking) => ({
+      ...booking.toObject(),
+      userId: booking.userId
+        ? {
+            id: booking.userId._id,
+            username: booking.userId.username,
+            firstName: booking.userId.firstName,
+            lastName: booking.userId.lastName,
+            email: booking.userId.email,
+          }
+        : null,
+      driverId: booking.driverId
+        ? {
+            id: booking.driverId._id,
+            username: booking.driverId.username,
+            firstName: booking.driverId.firstName,
+            lastName: booking.driverId.lastName,
+            email: booking.driverId.email,
+          }
+        : null,
+    })),
     totalBookings: bookings.length,
     token,
   });
