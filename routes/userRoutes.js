@@ -15,10 +15,16 @@ import {
   fixReferralRelationships,
   getReferralTree,
 } from "../controllers/userController.js";
+import {
+  manageAllowedSections,
+  getAllowedSections,
+} from "../controllers/allowedSectionsController.js";
 import multer from "multer";
 import path from "path";
-import authHandler from "../middlewares/authMIddleware.js" // Corrected typo in import
+import fs from "fs";
+import authHandler from "../middlewares/authMiddleware.js"; // Corrected typo: authMIddleware.js -> authMiddleware.js
 import adminMiddleware from "../middlewares/adminMiddleware.js";
+import superadminAuth from "../middlewares/superadminAuth.js"; // Added import for superadminAuth
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -34,7 +40,7 @@ const router = express.Router();
 
 // Serve images from uploads folder
 router.get("/uploads/:filename", (req, res) => {
-  const filePath = path.join(process.cwd(), "uploads", req.params.filename);
+  const filePath = path.join(process.cwd(), "Uploads", req.params.filename);
   if (fs.existsSync(filePath)) {
     res.sendFile(filePath);
   } else {
@@ -73,5 +79,9 @@ router.post(
   fixReferralRelationships
 );
 router.get("/referral-tree", authHandler, getReferralTree);
+
+// Superadmin routes for allowed sections
+router.post("/allowed-sections", superadminAuth, manageAllowedSections);
+router.get("/allowed-sections", superadminAuth, getAllowedSections);
 
 export default router;
