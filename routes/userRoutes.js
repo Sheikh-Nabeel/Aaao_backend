@@ -23,7 +23,7 @@ import {
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import authHandler from "../middlewares/authMiddleware.js"; // Corrected typo: authMIddleware.js -> authMiddleware.js
+import authHandler from "../middlewares/authMIddleware.js";
 import adminMiddleware from "../middlewares/adminMiddleware.js";
 import superadminAuth from "../middlewares/superadminAuth.js"; // Added import for superadminAuth
 
