@@ -14,6 +14,7 @@ import {
   getAllUsers,
   fixReferralRelationships,
   getReferralTree,
+  getReferralLink,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -71,6 +72,7 @@ router.post("/resend-otp", resendOtp);
 router.get("/pending-kycs", authHandler, adminMiddleware, getPendingKYCs);
 router.post("/approve-kyc", authHandler, adminMiddleware, approveKYC);
 router.post("/reject-kyc", authHandler, adminMiddleware, rejectKYC);
+router.get("/referral-link", authHandler, getReferralLink); 
 router.get("/all", authHandler, adminMiddleware, getAllUsers);
 router.post(
   "/fix-referrals",

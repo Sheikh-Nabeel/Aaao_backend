@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import path from "path";
 import fs from "fs";
 
+// Nodemailer configuration with hardcoded credentials
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -15,19 +16,80 @@ const transporter = nodemailer.createTransport({
     pass: "mfhequkvepgtwusf",
   },
 });
+
 transporter.verify((error) => {
-  if (error) console.error("Nodemailer configuration error:", error.message);
-  else console.log("Nodemailer is ready to send emails");
+  if (error) {
+    console.error("Nodemailer verification failed:", error.message);
+  } else {
+    console.log("Nodemailer is ready to send emails");
+  }
 });
 
-const generateOTP = () =>
-  Math.floor(100000 + Math.random() * 900000).toString();
+// Embedded email template function for AAAO GO
+const generateEmailTemplate = ({
+  subject,
+  greeting,
+  message,
+  ctaText,
+  ctaUrl,
+}) => {
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${subject}</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
+        .container { max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; }
+        .header { background: linear-gradient(135deg, #013220 0%, #0a4a2a 100%); padding: 20px; text-align: center; }
+        .header img { max-width: 150px; }
+        .content { padding: 20px; color: #333333; }
+        .content h2 { color: #013220; }
+        .content p { font-size: 16px; line-height: 1.5; }
+        .cta-button { display: inline-block; padding: 12px 24px; background-color: #FFD700; color: #013220; text-decoration: none; border-radius: 5px; font-weight: bold; margin: 20px 0; }
+        .footer { background-color: #013220; color: #FFD700; text-align: center; padding: 10px; font-size: 14px; }
+        @media (max-width: 600px) {
+          .container { margin: 10px; }
+          .header img { max-width: 120px; }
+          .content { padding: 15px; }
+          .cta-button { padding: 10px 20px; font-size: 14px; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <img src="https://via.placeholder.com/150x50?text=AAAO+GO+Logo" alt="AAAO GO Logo" />
+        </div>
+        <div class="content">
+          <h2>${greeting}</h2>
+          <p>${message}</p>
+          ${
+            ctaUrl
+              ? `<a href="${ctaUrl}" class="cta-button">${ctaText}</a>`
+              : ""
+          }
+        </div>
+        <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} AAAO GO. All rights reserved.</p>
+          <p>Questions? Contact us at <a href="mailto:support@aaaogo.com" style="color: #FFD700;">support@aaaogo.com</a></p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+};
 
 // Ensure uploads folder exists
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(UploadsDir, { recursive: true });
 }
+
+const generateOTP = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
 
 const signupUser = asyncHandler(async (req, res) => {
   const {
@@ -40,37 +102,31 @@ const signupUser = asyncHandler(async (req, res) => {
     sponsorBy,
     gender,
   } = req.body;
+  const referralUsername = req.query.ref;
 
-  if (!username) {
+  if (
+    !username ||
+    !firstName ||
+    !lastName ||
+    !email ||
+    !phoneNumber ||
+    !password ||
+    !gender
+  ) {
     res.status(400);
-    throw new Error("Username is required");
-  }
-  if (!firstName) {
-    res.status(400);
-    throw new Error("First name is required");
-  }
-  if (!lastName) {
-    res.status(400);
-    throw new Error("Last name is required");
-  }
-  if (!email) {
-    res.status(400);
-    throw new Error("Email is required");
-  }
-  if (!phoneNumber) {
-    res.status(400);
-    throw new Error("Phone number is required");
-  }
-  if (!password) {
-    res.status(400);
-    throw new Error("Password is required");
-  }
-  if (!gender) {
-    res.status(400);
-    throw new Error("Gender is required");
+    throw new Error("All required fields must be provided");
   }
 
-  if (sponsorBy) {
+  let finalSponsorBy = sponsorBy;
+  if (referralUsername) {
+    const sponsor = await User.findOne({ username: referralUsername });
+    if (sponsor) {
+      finalSponsorBy = referralUsername;
+    } else {
+      res.status(400);
+      throw new Error("Invalid referral username");
+    }
+  } else if (sponsorBy) {
     const sponsor = await User.findOne({
       $or: [{ sponsorId: sponsorBy }, { username: sponsorBy }],
     });
@@ -78,6 +134,7 @@ const signupUser = asyncHandler(async (req, res) => {
       res.status(400);
       throw new Error("Invalid sponsor ID or username");
     }
+    finalSponsorBy = sponsorBy;
   }
 
   const existingUser = await User.findOne({
@@ -100,7 +157,7 @@ const signupUser = asyncHandler(async (req, res) => {
     existingUser.lastName = lastName;
     existingUser.phoneNumber = phoneNumber;
     existingUser.password = password;
-    existingUser.sponsorBy = sponsorBy || null;
+    existingUser.sponsorBy = finalSponsorBy || null;
     existingUser.gender = gender;
     await existingUser.save();
     console.log("Updated existing user:", existingUser.email, existingUser.otp);
@@ -112,44 +169,54 @@ const signupUser = asyncHandler(async (req, res) => {
       email,
       phoneNumber,
       password,
-      sponsorBy: sponsorBy || null,
+      sponsorBy: finalSponsorBy || null,
       gender,
       otp: generateOTP(),
       otpExpires: new Date(Date.now() + 10 * 60 * 1000),
       isVerified: false,
       role: "customer",
+      sponsorId: `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`,
       pendingVehicleData: null,
     });
     otp = user.otp;
     console.log("Created new user:", user.email, user.otp);
   }
 
-  await transporter.sendMail({
-    from: `"Your App" <chyousafawais667@gmail.com>`,
-    to: email,
-    subject: "Your OTP for Account Verification",
-    text: `Hello ${firstName} ${lastName},\nYour OTP for account verification is: ${otp}\nPlease enter this OTP to verify within 10 minutes.`,
-    html: `<h2>Hello ${firstName} ${lastName},</h2><p>Your OTP is: <strong>${otp}</strong></p><p>Verify within 10 minutes.</p>`,
-  });
+  try {
+    await transporter.sendMail({
+      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
+      to: email,
+      subject: "Your OTP for AAAO GO Account Verification",
+      html: generateEmailTemplate({
+        subject: "Your OTP for AAAO GO Account Verification",
+        greeting: `Hello ${firstName} ${lastName},`,
+        message: `Your OTP for account verification is: <strong>${otp}</strong>. Please enter this OTP to verify within 10 minutes.`,
+        ctaText: "Verify Now",
+        ctaUrl: `${process.env.APP_URL}/verify-otp`,
+      }),
+    });
+    console.log(`Email sent to ${email} with OTP: ${otp}`);
+  } catch (error) {
+    console.error(`Failed to send email to ${email}:`, error.message);
+    res.status(500);
+    throw new Error("Failed to send OTP email");
+  }
+
   res.status(200).json({
     message: "OTP sent. Please verify to complete registration.",
+    sponsorBy: finalSponsorBy,
   });
 });
 
 const verifyOTPUser = asyncHandler(async (req, res) => {
   const { email, otp } = req.body;
 
-  if (!email) {
+  if (!email || !otp) {
     res.status(400);
-    throw new Error("Email is required");
-  }
-  if (!otp) {
-    res.status(400);
-    throw new Error("OTP is required");
+    throw new Error("Email and OTP are required");
   }
 
   const user = await User.findOne({ email });
-  console.log("Searching for user with email:", email, "Found:", user);
   if (!user) {
     res.status(404);
     throw new Error("User not found. Please sign up first.");
@@ -165,23 +232,13 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
 
   let sponsorName = null;
   if (user.sponsorBy) {
-    console.log(`User has sponsorBy: ${user.sponsorBy}`);
     const sponsor = await User.findOne({
       $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
     });
     if (sponsor) {
-      console.log(
-        `Found sponsor: ${sponsor.sponsorId} (${sponsor.firstName} ${sponsor.lastName})`
-      );
       await updateReferralTree(user._id, user.sponsorBy);
       sponsorName = `${sponsor.firstName} ${sponsor.lastName}`;
-    } else {
-      console.error(
-        `Sponsor not found with sponsorId or username: ${user.sponsorBy}`
-      );
     }
-  } else {
-    console.log(`User has no sponsorBy`);
   }
 
   user.isVerified = true;
@@ -233,19 +290,17 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  const { email, phoneNumber, username, password } = req.body;
-  if ((!email && !phoneNumber && !username) || !password) {
+  const { email, phoneNumber, password } = req.body;
+  if ((!email && !phoneNumber) || !password) {
     res.status(400);
-    throw new Error(
-      "Email, phone number, or username and password are required"
-    );
+    throw new Error("Email or phone number and password are required");
   }
   const user = await User.findOne({
-    $or: [{ email }, { phoneNumber }, { username }],
+    $or: [{ email }, { phoneNumber }],
   }).populate("sponsorTree", "firstName lastName");
   if (!user) {
     res.status(401);
-    throw new Error("Invalid email, phone number, or username");
+    throw new Error("Invalid email or phone number");
   }
   if (!user.isVerified) {
     res.status(403);
@@ -324,13 +379,25 @@ const forgotPassword = asyncHandler(async (req, res) => {
     { resetOtp, resetOtpExpires: Date.now() + 10 * 60 * 1000 },
     { new: true, runValidators: true }
   );
-  await transporter.sendMail({
-    from: `"Your App" <chyousafawais667@gmail.com>`,
-    to: email,
-    subject: "Your OTP for Password Reset",
-    text: `Hello ${user.firstName} ${user.lastName},\nYour OTP for password reset is: ${resetOtp}\nPlease use this OTP within 10 minutes.`,
-    html: `<h2>Hello ${user.firstName} ${user.lastName},</h2><p>Your OTP is: <strong>${resetOtp}</strong></p><p>Use within 10 minutes.</p>`,
-  });
+  try {
+    await transporter.sendMail({
+      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
+      to: email,
+      subject: "Your OTP for AAAO GO Password Reset",
+      html: generateEmailTemplate({
+        subject: "Your OTP for AAAO GO Password Reset",
+        greeting: `Hello ${user.firstName} ${user.lastName},`,
+        message: `Your OTP for password reset is: <strong>${resetOtp}</strong>. Please use this OTP within 10 minutes.`,
+        ctaText: "Reset Password",
+        ctaUrl: `${process.env.APP_URL}/reset-password`,
+      }),
+    });
+    console.log(`Reset OTP email sent to ${email}`);
+  } catch (error) {
+    console.error(`Failed to send reset OTP email to ${email}:`, error.message);
+    res.status(500);
+    throw new Error("Failed to send reset OTP email");
+  }
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRY,
   });
@@ -345,17 +412,9 @@ const forgotPassword = asyncHandler(async (req, res) => {
 
 const resetPassword = asyncHandler(async (req, res) => {
   const { userId, resetOtp, password } = req.body;
-  if (!userId) {
+  if (!userId || !resetOtp || !password) {
     res.status(400);
-    throw new Error("User ID is required");
-  }
-  if (!resetOtp) {
-    res.status(400);
-    throw new Error("Reset OTP is required");
-  }
-  if (!password) {
-    res.status(400);
-    throw new Error("Password is required");
+    throw new Error("User ID, reset OTP, and password are required");
   }
   const user = await User.findById(userId);
   if (!user) {
@@ -387,73 +446,55 @@ const resetPassword = asyncHandler(async (req, res) => {
 });
 
 const submitKYC = asyncHandler(async (req, res) => {
-  console.log("Request Body:", req.body);
-  console.log("Received Files:", req.files);
-  console.log("Full Request Headers:", req.headers);
-
   const { userId, fullName, country } = req.body;
-
   if (!userId || !fullName || !country) {
     return res.status(400).json({
       message: "User ID, full name, and country are required",
       userId: userId || null,
     });
   }
-
   if (!mongoose.isValidObjectId(userId)) {
     return res.status(400).json({
       message: "Invalid user ID format. Must be a valid 24-character ObjectId",
       userId,
     });
   }
-
   const [firstName, ...lastNameParts] = fullName.trim().split(" ");
   const lastName = lastNameParts.join(" ");
-
   if (!firstName || !lastName) {
     return res.status(400).json({
       message: "Full name must contain both first and last names",
       userId,
     });
   }
-
   const user = await User.findById(userId);
   if (!user) {
-    return res.status(404).json({ message: "User not found", userId });
+    return res.status(400).json({ message: "User not found", userId });
   }
-
   if (!user.isVerified) {
     return res.status(403).json({
       message: "User must be verified to submit KYC",
       userId,
     });
   }
-
   if (user.kycLevel >= 1 || user.kycStatus === "pending") {
-    return res.status(403).json({
+    return res.status(400).json({
       message: "KYC Level 1 already completed or pending approval",
       userId,
     });
   }
-
   if (
     !req.files ||
     !req.files.frontImage ||
     !req.files.backImage ||
     !req.files.selfieImage
   ) {
-    console.log("Missing required files:", {
-      frontImage: !!req.files?.frontImage,
-      backImage: !!req.files?.backImage,
-      selfieImage: !!req.files?.selfieImage,
-    });
     return res.status(400).json({
       message: "Front, back, and selfie images are required",
       userId,
       receivedFiles: req.files ? Object.keys(req.files) : [],
     });
   }
-
   const frontImagePath = path
     .join("uploads", req.files.frontImage[0].filename)
     .replace(/\\/g, "/");
@@ -463,7 +504,6 @@ const submitKYC = asyncHandler(async (req, res) => {
   const selfieImagePath = path
     .join("uploads", req.files.selfieImage[0].filename)
     .replace(/\\/g, "/");
-
   user.cnicImages = {
     front: frontImagePath,
     back: backImagePath,
@@ -475,38 +515,21 @@ const submitKYC = asyncHandler(async (req, res) => {
   user.firstName = firstName;
   user.lastName = lastName;
   await user.save();
-
-  console.log("KYC submitted for user:", {
-    userId,
-    frontImagePath,
-    backImagePath,
-    selfieImagePath,
-    country,
-  });
-
   res.status(200).json({
     message: "KYC Level 1 submitted and pending admin approval",
     userId,
   });
 });
 
-const logout = async (req, res) => {
-  try {
-    res.clearCookie("token", {
-      httpOnly: true,
-      maxAge: 0,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-    });
-    if (!req.cookies || !req.cookies.token) {
-      console.log("No token found in request cookies during logout");
-    }
-    res.status(200).json({ message: "Logged out successfully" });
-  } catch (error) {
-    console.error("Logout error:", error.message);
-    res.status(500).json({ message: "Logout failed", error: error.message });
-  }
-};
+const logout = asyncHandler(async (req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    maxAge: 0,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+  res.status(200).json({ message: "Logged out successfully" });
+});
 
 const resendOtp = asyncHandler(async (req, res) => {
   const { email } = req.body;
@@ -528,146 +551,134 @@ const resendOtp = asyncHandler(async (req, res) => {
   user.otp = newOtp;
   user.otpExpires = otpExpires;
   await user.save();
-  await transporter.sendMail({
-    from: `"Your App" <chyousafawais667@gmail.com>`,
-    to: email,
-    subject: "Your New OTP for Account Verification",
-    text: `Hello ${user.firstName} ${user.lastName},\nYour new OTP for account verification is: ${newOtp}\nPlease enter this OTP to verify within 10 minutes.`,
-    html: `<h2>Hello ${user.firstName} ${user.lastName},</h2><p>Your new OTP is: <strong>${newOtp}</strong></p><p>Verify within 10 minutes.</p>`,
-  });
+  try {
+    await transporter.sendMail({
+      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
+      to: email,
+      subject: "Your New OTP for AAAO GO Account Verification",
+      html: generateEmailTemplate({
+        subject: "Your New OTP for AAAO GO Account Verification",
+        greeting: `Hello ${user.firstName} ${user.lastName},`,
+        message: `Your new OTP for account verification is: <strong>${newOtp}</strong>. Please enter this OTP to verify within 10 minutes.`,
+        ctaText: "Verify Now",
+        ctaUrl: `${process.env.APP_URL}/verify-otp`,
+      }),
+    });
+    console.log(`Resend OTP email sent to ${email}`);
+  } catch (error) {
+    console.error(
+      `Failed to send resend OTP email to ${email}:`,
+      error.message
+    );
+    res.status(500);
+    throw new Error("Failed to send resend OTP email");
+  }
   res.status(200).json({ message: "New OTP sent successfully" });
 });
 
-async function updateReferralTree(newUserId, sponsorIdentifier) {
-  try {
-    const newUser = await User.findById(newUserId);
-    if (!newUser) return;
-
-    const sponsor = await User.findOne({
-      $or: [{ sponsorId: sponsorIdentifier }, { username: sponsorIdentifier }],
-    });
-    if (!sponsor) {
-      console.error(
-        `Sponsor not found with sponsorId or username: ${sponsorIdentifier}`
-      );
-      return;
-    }
-
-    console.log(
-      `Adding user ${newUserId} to sponsor ${sponsor._id} (${sponsor.sponsorId})`
-    );
-
-    if (!sponsor.directReferrals.includes(newUserId)) {
-      sponsor.directReferrals.push(newUserId);
-      console.log(
-        `Added to directReferrals. Current count: ${sponsor.directReferrals.length}`
-      );
-    } else {
-      console.log(`User already in directReferrals`);
-    }
-
-    if (!sponsor.sponsorTree.includes(newUserId)) {
-      sponsor.sponsorTree.push(newUserId);
-      console.log(
-        `Added to sponsorTree. Current count: ${sponsor.sponsorTree.length}`
-      );
-    } else {
-      console.log(`User already in sponsorTree`);
-    }
-
-    await sponsor.save();
-    console.log(`Sponsor saved successfully`);
-
-    await updateAllLevels(sponsor._id);
-  } catch (error) {
-    console.error("Error updating referral tree:", error);
+const getReferralLink = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
   }
+  const referralLink = `${process.env.APP_URL}/signup?ref=${user.username}`;
+  res.status(200).json({
+    message: "Referral link generated successfully",
+    referralLink,
+  });
+});
+
+async function updateReferralTree(newUserId, sponsorIdentifier) {
+  const newUser = await User.findById(newUserId);
+  if (!newUser) return;
+
+  const sponsor = await User.findOne({
+    $or: [{ sponsorId: sponsorIdentifier }, { username: sponsorIdentifier }],
+  });
+  if (!sponsor) {
+    console.error(
+      `Sponsor not found with sponsorId or username: ${sponsorIdentifier}`
+    );
+    return;
+  }
+
+  if (!sponsor.directReferrals.includes(newUserId)) {
+    sponsor.directReferrals.push(newUserId);
+  }
+  if (!sponsor.sponsorTree.includes(newUserId)) {
+    sponsor.sponsorTree.push(newUserId);
+  }
+  await sponsor.save();
+  await updateAllLevels(sponsor._id);
 }
 
 async function updateAllLevels(userId) {
-  try {
-    const user = await User.findById(userId);
-    if (!user) return;
+  const user = await User.findById(userId);
+  if (!user) return;
 
-    await updateLevel2Referrals(user);
-    await updateLevel3Referrals(user);
-    await updateLevel4Referrals(user);
-    await checkAndUpdateUserLevel(user);
+  await updateLevel2Referrals(user);
+  await updateLevel3Referrals(user);
+  await updateLevel4Referrals(user);
+  await checkAndUpdateUserLevel(user);
 
-    if (user.sponsorBy) {
-      const parentSponsor = await User.findOne({
-        $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
-      });
-      if (parentSponsor) {
-        await updateAllLevels(parentSponsor._id);
-      }
+  if (user.sponsorBy) {
+    const parentSponsor = await User.findOne({
+      $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
+    });
+    if (parentSponsor) {
+      await updateAllLevels(parentSponsor._id);
     }
-  } catch (error) {
-    console.error("Error updating all levels:", error);
   }
 }
 
 async function updateLevel2Referrals(user) {
   user.level2Referrals = [];
-
   for (const directReferralId of user.directReferrals) {
     const directReferral = await User.findById(directReferralId);
     if (directReferral && directReferral.directReferrals.length > 0) {
       user.level2Referrals.push(...directReferral.directReferrals);
     }
   }
-
   await user.save();
 }
 
 async function updateLevel3Referrals(user) {
   user.level3Referrals = [];
-
   for (const level2ReferralId of user.level2Referrals) {
     const level2Referral = await User.findById(level2ReferralId);
     if (level2Referral && level2Referral.directReferrals.length > 0) {
       user.level3Referrals.push(...level2Referral.directReferrals);
     }
   }
-
   await user.save();
 }
 
 async function updateLevel4Referrals(user) {
   user.level4Referrals = [];
-
   for (const level3ReferralId of user.level3Referrals) {
     const level3Referral = await User.findById(level3ReferralId);
     if (level3Referral && level3Referral.directReferrals.length > 0) {
       user.level4Referrals.push(...level3Referral.directReferrals);
     }
   }
-
   await user.save();
 }
 
 async function checkAndUpdateUserLevel(user) {
-  // Get all referral IDs from all levels
   const allReferralIds = [
     ...user.directReferrals,
     ...user.level2Referrals,
     ...user.level3Referrals,
     ...user.level4Referrals,
   ];
-
-  // If no referrals, level remains 0
   if (allReferralIds.length === 0) {
     if (user.level !== 0) {
       user.level = 0;
       await user.save();
-      console.log(
-        `User ${user.email} leveled down to level 0 (no existing referrals)`
-      );
     }
     return;
   }
-
-  // Get actual existing members count for each level
   const existingMembers = await User.aggregate([
     {
       $match: {
@@ -682,13 +693,9 @@ async function checkAndUpdateUserLevel(user) {
       },
     },
   ]);
-
-  // Create a set of existing member IDs for O(1) lookup
   const existingMemberIds = new Set(
     existingMembers.map((member) => member._id.toString())
   );
-
-  // Count existing members in each level
   const level1Count = user.directReferrals.filter((id) =>
     existingMemberIds.has(id.toString())
   ).length;
@@ -703,69 +710,34 @@ async function checkAndUpdateUserLevel(user) {
   ).length;
 
   let newLevel = user.level;
-
-  // Level progression based on existing members only
-  if (level1Count >= 3 && user.level < 1) {
-    newLevel = 1;
-  }
-  if (level2Count >= 3 && user.level < 2) {
-    newLevel = 2;
-  }
-  if (level3Count >= 3 && user.level < 3) {
-    newLevel = 3;
-  }
-  if (level4Count >= 3 && user.level < 4) {
-    newLevel = 4;
-  }
-
-  // Check for level down if user loses members
-  if (level1Count < 3 && user.level >= 1) {
-    newLevel = 0;
-  }
-  if (level2Count < 3 && user.level >= 2) {
-    newLevel = 1;
-  }
-  if (level3Count < 3 && user.level >= 3) {
-    newLevel = 2;
-  }
-  if (level4Count < 3 && user.level >= 4) {
-    newLevel = 3;
-  }
+  if (level1Count >= 3 && user.level < 1) newLevel = 1;
+  if (level2Count >= 3 && user.level < 2) newLevel = 2;
+  if (level3Count >= 3 && user.level < 3) newLevel = 3;
+  if (level4Count >= 3 && user.level < 4) newLevel = 4;
+  if (level1Count < 3 && user.level >= 1) newLevel = 0;
+  if (level2Count < 3 && user.level >= 2) newLevel = 1;
+  if (level3Count < 3 && user.level >= 3) newLevel = 2;
+  if (level4Count < 3 && user.level >= 4) newLevel = 3;
 
   if (newLevel !== user.level) {
-    const oldLevel = user.level;
     user.level = newLevel;
     await user.save();
-    if (newLevel > oldLevel) {
-      console.log(
-        `User ${user.email} leveled up to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`
-      );
-    } else {
-      console.log(
-        `User ${user.email} leveled down to level ${newLevel} (existing members: L1=${level1Count}, L2=${level2Count}, L3=${level3Count}, L4=${level4Count})`
-      );
-    }
   }
 }
 
 const getReferralTree = asyncHandler(async (req, res) => {
   const targetUserId = req.query.userId || req.user._id;
-
   const user = await User.findById(targetUserId);
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
-
-  // Get all referral IDs from all levels
   const allReferralIds = [
     ...user.directReferrals,
     ...user.level2Referrals,
     ...user.level3Referrals,
     ...user.level4Referrals,
   ];
-
-  // Calculate stats for each level
   const stats = {
     level1: user.directReferrals ? user.directReferrals.length : 0,
     level2: user.level2Referrals ? user.level2Referrals.length : 0,
@@ -774,8 +746,6 @@ const getReferralTree = asyncHandler(async (req, res) => {
   };
   stats.totalReferrals =
     stats.level1 + stats.level2 + stats.level3 + stats.level4;
-
-  // Initialize response structure
   const referralTree = {
     user: {
       id: user._id,
@@ -802,8 +772,6 @@ const getReferralTree = asyncHandler(async (req, res) => {
       level4: [],
     },
   };
-
-  // If no referrals, return early
   if (allReferralIds.length === 0) {
     res.status(200).json({
       message: "Referral tree retrieved successfully",
@@ -811,8 +779,6 @@ const getReferralTree = asyncHandler(async (req, res) => {
     });
     return;
   }
-
-  // Single optimized aggregation to get all existing members
   const existingMembers = await User.aggregate([
     {
       $match: {
@@ -839,14 +805,10 @@ const getReferralTree = asyncHandler(async (req, res) => {
       $sort: { joinedDate: -1 },
     },
   ]);
-
-  // Create a map for O(1) lookup
   const membersMap = new Map();
   existingMembers.forEach((member) => {
     membersMap.set(member.id.toString(), member);
   });
-
-  // Process each level and only count existing members
   const processLevel = (referralIds, levelKey) => {
     const existingMembersInLevel = [];
     referralIds.forEach((id) => {
@@ -858,20 +820,15 @@ const getReferralTree = asyncHandler(async (req, res) => {
     referralTree.members[levelKey] = existingMembersInLevel;
     referralTree.counts[levelKey] = existingMembersInLevel.length;
   };
-
-  // Process all levels
   processLevel(user.directReferrals, "level1");
   processLevel(user.level2Referrals, "level2");
   processLevel(user.level3Referrals, "level3");
   processLevel(user.level4Referrals, "level4");
-
-  // Calculate total from actual existing members
   referralTree.counts.totalReferrals =
     referralTree.counts.level1 +
     referralTree.counts.level2 +
     referralTree.counts.level3 +
     referralTree.counts.level4;
-
   res.status(200).json({
     message: "Referral tree retrieved successfully",
     referralTree,
@@ -896,7 +853,6 @@ const getAllUsers = asyncHandler(async (req, res) => {
       createdAt: 1,
     }
   ).sort({ createdAt: -1 });
-
   res.status(200).json({
     message: "All users retrieved successfully",
     users,
@@ -905,105 +861,66 @@ const getAllUsers = asyncHandler(async (req, res) => {
 });
 
 const fixReferralRelationships = asyncHandler(async (req, res) => {
-  try {
-    console.log("Starting to fix referral relationships...");
-
-    const usersWithSponsors = await User.find({
-      sponsorBy: { $exists: true, $ne: null },
-    });
-    console.log(`Found ${usersWithSponsors.length} users with sponsors`);
-
-    let fixedCount = 0;
-    let errorCount = 0;
-
-    for (const user of usersWithSponsors) {
-      try {
-        if (user.sponsorBy) {
-          const sponsor = await User.findOne({
-            $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
-          });
-          if (sponsor) {
-            if (!sponsor.directReferrals.includes(user._id)) {
-              sponsor.directReferrals.push(user._id);
-              console.log(
-                `Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} directReferrals`
-              );
-            }
-
-            if (!sponsor.sponsorTree.includes(user._id)) {
-              sponsor.sponsorTree.push(user._id);
-              console.log(
-                `Added user ${user.sponsorId} to sponsor ${sponsor.sponsorId} sponsorTree`
-              );
-            }
-
-            await sponsor.save();
-            fixedCount++;
-          } else {
-            console.error(
-              `Sponsor not found for user ${user.sponsorId} with sponsorBy: ${user.sponsorBy}`
-            );
-            errorCount++;
+  const usersWithSponsors = await User.find({
+    sponsorBy: { $exists: true, $ne: null },
+  });
+  let fixedCount = 0;
+  let errorCount = 0;
+  for (const user of usersWithSponsors) {
+    try {
+      if (user.sponsorBy) {
+        const sponsor = await User.findOne({
+          $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
+        });
+        if (sponsor) {
+          if (!sponsor.directReferrals.includes(user._id)) {
+            sponsor.directReferrals.push(user._id);
           }
+          if (!sponsor.sponsorTree.includes(user._id)) {
+            sponsor.sponsorTree.push(user._id);
+          }
+          await sponsor.save();
+          fixedCount++;
+        } else {
+          errorCount++;
         }
-      } catch (error) {
-        console.error(`Error fixing user ${user.sponsorId}:`, error);
-        errorCount++;
       }
+    } catch (error) {
+      errorCount++;
     }
-
-    console.log("Updating all levels...");
-    const allUsers = await User.find({});
-    for (const user of allUsers) {
-      try {
-        await updateAllLevels(user._id);
-      } catch (error) {
-        console.error(
-          `Error updating levels for user ${user.sponsorId}:`,
-          error
-        );
-      }
-    }
-
-    res.status(200).json({
-      message: "Referral relationships fixed successfully",
-      fixedCount,
-      errorCount,
-      totalUsersProcessed: usersWithSponsors.length,
-    });
-  } catch (error) {
-    console.error("Error in fixReferralRelationships:", error);
-    res.status(500).json({
-      message: "Error fixing referral relationships",
-      error: error.message,
-    });
   }
+  const allUsers = await User.find({});
+  for (const user of allUsers) {
+    await updateAllLevels(user._id);
+  }
+  res.status(200).json({
+    message: "Referral relationships fixed successfully",
+    fixedCount,
+    errorCount,
+    totalUsersProcessed: usersWithSponsors.length,
+  });
 });
 
 const approveKYC = asyncHandler(async (req, res) => {
   const { userId } = req.body;
-
   if (!userId) {
     res.status(400);
     throw new Error("User ID is required");
   }
-
   const user = await User.findById(userId).populate("pendingVehicleData");
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
-
   let kycLevelToApprove;
   if (user.kycLevel === 0) {
-    kycLevelToApprove = 1; // Approve Level 1
+    kycLevelToApprove = 1;
   } else if (user.kycLevel === 1) {
-    kycLevelToApprove = 2; // Approve Level 2
+    kycLevelToApprove = 2;
   } else {
     res.status(400);
     throw new Error("No valid KYC level to approve");
   }
-
   if (kycLevelToApprove === 2) {
     if (!user.hasVehicle) {
       res.status(400);
@@ -1021,11 +938,6 @@ const approveKYC = asyncHandler(async (req, res) => {
       }
     }
   }
-
-  console.log(
-    `Approving KYC for userId: ${userId}, kycLevel: ${kycLevelToApprove}, current kycStatus: ${user.kycStatus}`
-  );
-
   const updatedUser = await User.findByIdAndUpdate(
     userId,
     {
@@ -1035,92 +947,81 @@ const approveKYC = asyncHandler(async (req, res) => {
     },
     { new: true, runValidators: true }
   );
-
   if (!updatedUser) {
-    console.error(`Failed to update KYC for userId: ${userId}`);
     res.status(400);
     throw new Error("Failed to update KYC status.");
   }
-
-  // Verify the update
-  const verifiedUser = await User.findById(userId);
-  if (
-    verifiedUser.kycStatus !== "approved" ||
-    verifiedUser.kycLevel !== kycLevelToApprove
-  ) {
+  try {
+    await transporter.sendMail({
+      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
+      to: updatedUser.email,
+      subject: `KYC Level ${kycLevelToApprove} Approved`,
+      html: generateEmailTemplate({
+        subject: `KYC Level ${kycLevelToApprove} Approved`,
+        greeting: `Hello ${updatedUser.firstName} ${updatedUser.lastName},`,
+        message: `Your KYC Level ${kycLevelToApprove} submission has been approved. You can now proceed with the next steps in the AAAO GO application.`,
+        ctaText: "Log In to Continue",
+        ctaUrl: `${process.env.APP_URL}/login`,
+      }),
+    });
+    console.log(`KYC approval email sent to ${updatedUser.email}`);
+  } catch (error) {
     console.error(
-      `KYC update verification failed for userId: ${userId}, kycStatus: ${verifiedUser.kycStatus}, kycLevel: ${verifiedUser.kycLevel}`
+      `Failed to send KYC approval email to ${updatedUser.email}:`,
+      error.message
     );
     res.status(500);
-    throw new Error("KYC status update failed in database.");
+    throw new Error("Failed to send KYC approval email");
   }
-
-  console.log(
-    `KYC updated successfully for userId: ${userId}, new kycStatus: ${updatedUser.kycStatus}, new kycLevel: ${updatedUser.kycLevel}`
-  );
-
-  await transporter.sendMail({
-    from: `"Your App" <chyousafawais667@gmail.com>`,
-    to: updatedUser.email,
-    subject: `KYC Level ${kycLevelToApprove} Approved`,
-    text: `Hello ${updatedUser.firstName} ${updatedUser.lastName},\nYour KYC Level ${kycLevelToApprove} submission has been approved.\nYou can now proceed with the next steps in the application.`,
-    html: `<h2>Hello ${updatedUser.firstName} ${updatedUser.lastName},</h2><p>Your KYC Level ${kycLevelToApprove} submission has been approved.</p><p>You can now proceed with the next steps in the application.</p>`,
-  });
-
-  const token = jwt.sign({ id: updatedUser._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-
   res.status(200).json({
     message: `KYC Level ${kycLevelToApprove} approved successfully`,
     userId,
     kycLevel: kycLevelToApprove,
     kycStatus: updatedUser.kycStatus,
-    token,
   });
 });
 
 const rejectKYC = asyncHandler(async (req, res) => {
   const { userId, reason } = req.body;
-
   if (!userId) {
     res.status(400);
     throw new Error("User ID is required");
   }
-
   const user = await User.findById(userId);
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
-
   if (user.kycStatus !== "pending") {
     res.status(400);
     throw new Error("No pending KYC submission for this user");
   }
-
   user.kycStatus = "rejected";
-  if (reason) {
-    console.log(`KYC rejected for user ${userId}: ${reason}`);
-  }
   await user.save();
-
-  await transporter.sendMail({
-    from: `"Your App" <chyousafawais667@gmail.com>`,
-    to: user.email,
-    subject: "KYC Submission Rejected",
-    text: `Hello ${user.firstName} ${
-      user.lastName
-    },\nYour KYC submission has been rejected.\nReason: ${
-      reason || "No reason provided"
-    }.\nPlease resubmit with corrected information.`,
-    html: `<h2>Hello ${user.firstName} ${
-      user.lastName
-    },</h2><p>Your KYC submission has been rejected.</p><p><strong>Reason:</strong> ${
-      reason || "No reason provided"
-    }</p><p>Please resubmit with corrected information.</p>`,
-  });
-
+  try {
+    await transporter.sendMail({
+      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
+      to: user.email,
+      subject: "KYC Submission Rejected",
+      html: generateEmailTemplate({
+        subject: "KYC Submission Rejected",
+        greeting: `Hello ${user.firstName} ${user.lastName},`,
+        message: `Your KYC submission has been rejected. <strong>Reason:</strong> ${
+          reason || "No reason provided"
+        }. Please resubmit with corrected information.`,
+        ctaText: "Resubmit KYC",
+        ctaUrl: `${process.env.APP_URL}/submit-kyc`,
+      }),
+    });
+    console.log(`KYC rejection email sent to ${user.email}`);
+  } catch (error) {
+    console.error(
+      `Failed to send KYC rejection email to ${user.email}:`,
+      error.message
+    );
+    res.status(500);
+    throw new Error("Failed to send KYC rejection email");
+  }
   res.status(200).json({
     message: "KYC submission rejected",
     userId,
@@ -1134,7 +1035,6 @@ const getPendingKYCs = asyncHandler(async (req, res) => {
       "username firstName lastName email country kycLevel kycStatus cnicImages selfieImage licenseImage hasVehicle pendingVehicleData"
     )
     .populate("pendingVehicleData");
-
   const kycDetails = await Promise.all(
     pendingUsers.map(async (user) => {
       return {
@@ -1173,7 +1073,6 @@ const getPendingKYCs = asyncHandler(async (req, res) => {
       };
     })
   );
-
   res.status(200).json({
     message: "Pending KYC submissions retrieved successfully",
     kycDetails,
@@ -1190,6 +1089,7 @@ export {
   submitKYC,
   logout,
   resendOtp,
+  getReferralLink,
   getReferralTree,
   getAllUsers,
   fixReferralRelationships,
