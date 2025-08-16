@@ -40,7 +40,7 @@ cloudinary.v2.config({
   api_secret: process.env.API_Secret,
 });
 
-const allowedOrigins = ["https://aaago-frontend.vercel.app","http://localhost:5173","http://localhost:5174"];
+const allowedOrigins = ["https://aaago-frontend.vercel.app","https://aaaogo.com","http://localhost:5173","http://localhost:5174"];
 
 app.use(
     cors({
