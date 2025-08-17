@@ -290,17 +290,17 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  const { email, phoneNumber, password } = req.body;
-  if ((!email && !phoneNumber) || !password) {
+  const { email, phoneNumber, username, password } = req.body;
+  if ((!email && !phoneNumber && !username) || !password) {
     res.status(400);
-    throw new Error("Email or phone number and password are required");
+    throw new Error("Email, phone number, or username and password are required");
   }
   const user = await User.findOne({
-    $or: [{ email }, { phoneNumber }],
+    $or: [{ email }, { phoneNumber }, { username }],
   }).populate("sponsorTree", "firstName lastName");
   if (!user) {
     res.status(401);
-    throw new Error("Invalid email or phone number");
+    throw new Error("Invalid email, phone number, or username");
   }
   if (!user.isVerified) {
     res.status(403);
