@@ -85,7 +85,7 @@ const generateEmailTemplate = ({
 // Ensure uploads folder exists
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(UploadsDir, { recursive: true });
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 const generateOTP = () =>
@@ -117,6 +117,9 @@ const signupUser = asyncHandler(async (req, res) => {
     throw new Error("All required fields must be provided");
   }
 
+  // Normalize email to lowercase
+  const normalizedEmail = email.trim().toLowerCase();
+
   let finalSponsorBy = sponsorBy;
   if (referralUsername) {
     const sponsor = await User.findOne({ username: referralUsername });
@@ -138,7 +141,7 @@ const signupUser = asyncHandler(async (req, res) => {
   }
 
   const existingUser = await User.findOne({
-    $or: [{ email }, { phoneNumber }, { username }],
+    $or: [{ email: normalizedEmail }, { phoneNumber }, { username }],
   });
   let otp;
   if (existingUser) {
@@ -159,6 +162,7 @@ const signupUser = asyncHandler(async (req, res) => {
     existingUser.password = password;
     existingUser.sponsorBy = finalSponsorBy || null;
     existingUser.gender = gender;
+    existingUser.email = normalizedEmail; // Ensure stored as lowercase
     await existingUser.save();
     console.log("Updated existing user:", existingUser.email, existingUser.otp);
   } else {
@@ -166,7 +170,7 @@ const signupUser = asyncHandler(async (req, res) => {
       username,
       firstName,
       lastName,
-      email,
+      email: normalizedEmail,
       phoneNumber,
       password,
       sponsorBy: finalSponsorBy || null,
@@ -185,7 +189,7 @@ const signupUser = asyncHandler(async (req, res) => {
   try {
     await transporter.sendMail({
       from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: email,
+      to: normalizedEmail, // Use normalized email
       subject: "Your OTP for AAAO GO Account Verification",
       html: generateEmailTemplate({
         subject: "Your OTP for AAAO GO Account Verification",
@@ -195,9 +199,9 @@ const signupUser = asyncHandler(async (req, res) => {
         ctaUrl: `${process.env.APP_URL}/verify-otp`,
       }),
     });
-    console.log(`Email sent to ${email} with OTP: ${otp}`);
+    console.log(`Email sent to ${normalizedEmail} with OTP: ${otp}`);
   } catch (error) {
-    console.error(`Failed to send email to ${email}:`, error.message);
+    console.error(`Failed to send email to ${normalizedEmail}:`, error.message);
     res.status(500);
     throw new Error("Failed to send OTP email");
   }
@@ -209,12 +213,15 @@ const signupUser = asyncHandler(async (req, res) => {
 });
 
 const verifyOTPUser = asyncHandler(async (req, res) => {
-  const { email, otp } = req.body;
+  let { email, otp } = req.body;
 
   if (!email || !otp) {
     res.status(400);
     throw new Error("Email and OTP are required");
   }
+
+  // Normalize email to lowercase
+  email = email.trim().toLowerCase();
 
   const user = await User.findOne({ email });
   if (!user) {
@@ -290,10 +297,14 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  const { email, phoneNumber, password } = req.body;
+  let { email, phoneNumber, password } = req.body;
   if ((!email && !phoneNumber) || !password) {
     res.status(400);
     throw new Error("Email or phone number and password are required");
+  }
+  // Normalize email if provided
+  if (email) {
+    email = email.trim().toLowerCase();
   }
   const user = await User.findOne({
     $or: [{ email }, { phoneNumber }],
@@ -363,11 +374,13 @@ const loginUser = asyncHandler(async (req, res) => {
 });
 
 const forgotPassword = asyncHandler(async (req, res) => {
-  const { email } = req.body;
+  let { email } = req.body;
   if (!email) {
     res.status(400);
     throw new Error("Email is required");
   }
+  // Normalize email
+  email = email.trim().toLowerCase();
   const user = await User.findOne({ email });
   if (!user) {
     res.status(404);
@@ -532,11 +545,13 @@ const logout = asyncHandler(async (req, res) => {
 });
 
 const resendOtp = asyncHandler(async (req, res) => {
-  const { email } = req.body;
+  let { email } = req.body;
   if (!email) {
     res.status(400);
     throw new Error("Email is required");
   }
+  // Normalize email
+  email = email.trim().toLowerCase();
   const user = await User.findOne({ email });
   if (!user) {
     res.status(404);
