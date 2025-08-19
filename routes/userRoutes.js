@@ -54,7 +54,7 @@ router.post("/signup", signupUser);
 router.post("/verify-otp", verifyOTPUser);
 router.post("/login", loginUser);
 router.post("/forgot-password", forgotPassword);
-router.post("/reset-password", authHandler, resetPassword);
+router.post("/reset-password",  resetPassword);
 router.post(
   "/submit-kyc",
   authHandler,

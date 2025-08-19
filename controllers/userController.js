@@ -297,21 +297,17 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  let { email, phoneNumber, password } = req.body;
-  if ((!email && !phoneNumber) || !password) {
+  const { email, phoneNumber, username, password } = req.body;
+  if ((!email && !phoneNumber && !username) || !password) {
     res.status(400);
     throw new Error("Email or phone number and password are required");
   }
-  // Normalize email if provided
-  if (email) {
-    email = email.trim().toLowerCase();
-  }
   const user = await User.findOne({
-    $or: [{ email }, { phoneNumber }],
+    $or: [{ email }, { phoneNumber }, { username }],
   }).populate("sponsorTree", "firstName lastName");
   if (!user) {
     res.status(401);
-    throw new Error("Invalid email or phone number");
+    throw new Error("Invalid email, phone number, or username");
   }
   if (!user.isVerified) {
     res.status(403);
@@ -387,11 +383,17 @@ const forgotPassword = asyncHandler(async (req, res) => {
     throw new Error("User not found");
   }
   const resetOtp = generateOTP();
-  await User.findByIdAndUpdate(
+  const resetOtpExpires = Date.now() + 10 * 60 * 1000;
+  const updatedUser = await User.findByIdAndUpdate(
     user._id,
-    { resetOtp, resetOtpExpires: Date.now() + 10 * 60 * 1000 },
+    { resetOtp, resetOtpExpires },
     { new: true, runValidators: true }
   );
+  if (!updatedUser) {
+    res.status(500);
+    throw new Error("Failed to update user with OTP");
+  }
+  console.log(`ForgotPassword - Updated user: ${updatedUser._id}, resetOtp: ${updatedUser.resetOtp} (type: ${typeof updatedUser.resetOtp}), resetOtpExpires: ${new Date(updatedUser.resetOtpExpires)}`);
   try {
     await transporter.sendMail({
       from: `"AAAO GO" <chyousafawais667@gmail.com>`,
@@ -405,7 +407,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
         ctaUrl: `${process.env.APP_URL}/reset-password`,
       }),
     });
-    console.log(`Reset OTP email sent to ${email}`);
+    console.log(`Reset OTP email sent to ${email} with OTP: ${resetOtp}`);
   } catch (error) {
     console.error(`Failed to send reset OTP email to ${email}:`, error.message);
     res.status(500);
@@ -420,7 +422,9 @@ const forgotPassword = asyncHandler(async (req, res) => {
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
   });
-  res.status(200).json({ message: "Reset OTP sent to email", token });
+  res
+    .status(200)
+    .json({ message: "Reset OTP sent to email", userId: user._id, token });
 });
 
 const resetPassword = asyncHandler(async (req, res) => {
@@ -434,8 +438,9 @@ const resetPassword = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error("User not found");
   }
+  console.log(`ResetPassword - userId: ${userId}, input resetOtp: ${resetOtp} (type: ${typeof resetOtp}), stored resetOtp: ${user.resetOtp} (type: ${typeof user.resetOtp}), resetOtpExpires: ${user.resetOtpExpires ? new Date(user.resetOtpExpires) : 'null'}, current time: ${new Date(Date.now())}`);
   if (
-    user.resetOtp !== resetOtp ||
+    user.resetOtp !== String(resetOtp).trim() || // Convert to string and trim
     !user.resetOtpExpires ||
     user.resetOtpExpires < Date.now()
   ) {
