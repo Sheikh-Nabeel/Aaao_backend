@@ -40,7 +40,9 @@ const userSchema = new mongoose.Schema({
   level2Referrals: { type: [mongoose.Schema.Types.ObjectId], ref: "User", default: [] },
   level3Referrals: { type: [mongoose.Schema.Types.ObjectId], ref: "User", default: [] },
   level4Referrals: { type: [mongoose.Schema.Types.ObjectId], ref: "User", default: [] },
-  level: { type: Number, default: 0, max: 4 },
+  // Dynamic next levels: index 0 = level1 (direct referrals), index 1 = level2, and so on
+  nextLevels: { type: [[mongoose.Schema.Types.ObjectId]], default: [] },
+  level: { type: Number, default: 0 },
   sponsorBy: { type: String, trim: true },
   sponsorTree: { type: [mongoose.Schema.Types.ObjectId], ref: "User", default: [] },
   country: { type: String, trim: true },

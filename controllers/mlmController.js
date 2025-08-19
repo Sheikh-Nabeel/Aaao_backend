@@ -499,12 +499,13 @@ export const getUserMLMInfo = asyncHandler(async (req, res) => {
       lastName: user.lastName,
       level: user.level,
       sponsorBy: user.sponsorBy,
-      directReferrals: user.directReferrals.length,
-      level2Referrals: user.level2Referrals.length,
-      level3Referrals: user.level3Referrals.length,
-      level4Referrals: user.level4Referrals.length,
-      totalReferrals: user.directReferrals.length + user.level2Referrals.length + 
-                     user.level3Referrals.length + user.level4Referrals.length,
+      directReferrals: Array.isArray(user.nextLevels) && user.nextLevels[0] ? user.nextLevels[0].length : user.directReferrals.length,
+      level2Referrals: Array.isArray(user.nextLevels) && user.nextLevels[1] ? user.nextLevels[1].length : user.level2Referrals.length,
+      level3Referrals: Array.isArray(user.nextLevels) && user.nextLevels[2] ? user.nextLevels[2].length : user.level3Referrals.length,
+      level4Referrals: Array.isArray(user.nextLevels) && user.nextLevels[3] ? user.nextLevels[3].length : user.level4Referrals.length,
+      totalReferrals: Array.isArray(user.nextLevels) ? user.nextLevels.reduce((sum, lvl) => sum + (lvl?.length || 0), 0) : (
+        user.directReferrals.length + user.level2Referrals.length + user.level3Referrals.length + user.level4Referrals.length
+      ),
       mlmEarnings: {
         totalEarnings,
         transactions: userTransactions,

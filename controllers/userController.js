@@ -633,13 +633,53 @@ async function updateReferralTree(newUserId, sponsorIdentifier) {
   await updateAllLevels(sponsor._id);
 }
 
+async function computeNextLevels(user) {
+  const visited = new Set([user._id.toString()]);
+  const toObjectId = (id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(id));
+
+  let current = Array.isArray(user.directReferrals)
+    ? Array.from(new Set(user.directReferrals.map((id) => id.toString())))
+    : [];
+  const levels = [];
+  if (current.length > 0) {
+    levels.push(current.map(toObjectId));
+  }
+  while (current.length > 0) {
+    current.forEach((id) => visited.add(id));
+    const docs = await User.find(
+      { _id: { $in: current.map((id) => new mongoose.Types.ObjectId(id)) } },
+      { _id: 1, directReferrals: 1 }
+    ).lean();
+    let nextIds = [];
+    for (const doc of docs) {
+      if (Array.isArray(doc.directReferrals) && doc.directReferrals.length > 0) {
+        nextIds.push(...doc.directReferrals.map((id) => id.toString()));
+      }
+    }
+    nextIds = Array.from(new Set(nextIds)).filter((id) => !visited.has(id));
+    if (nextIds.length === 0) break;
+    levels.push(nextIds.map(toObjectId));
+    current = nextIds;
+  }
+  return levels;
+}
+
+async function updateUserNextLevels(user) {
+  const levels = await computeNextLevels(user);
+  user.nextLevels = levels;
+  // Keep legacy fields in sync for backward compatibility (first 4 levels)
+  user.directReferrals = levels[0] || user.directReferrals || [];
+  user.level2Referrals = levels[1] || [];
+  user.level3Referrals = levels[2] || [];
+  user.level4Referrals = levels[3] || [];
+  await user.save();
+}
+
 async function updateAllLevels(userId) {
   const user = await User.findById(userId);
   if (!user) return;
 
-  await updateLevel2Referrals(user);
-  await updateLevel3Referrals(user);
-  await updateLevel4Referrals(user);
+  await updateUserNextLevels(user);
   await checkAndUpdateUserLevel(user);
 
   if (user.sponsorBy) {
@@ -686,59 +726,24 @@ async function updateLevel4Referrals(user) {
 }
 
 async function checkAndUpdateUserLevel(user) {
-  const allReferralIds = [
-    ...user.directReferrals,
-    ...user.level2Referrals,
-    ...user.level3Referrals,
-    ...user.level4Referrals,
-  ];
-  if (allReferralIds.length === 0) {
-    if (user.level !== 0) {
-      user.level = 0;
-      await user.save();
+  const levels = Array.isArray(user.nextLevels) ? user.nextLevels : [];
+  if (levels.length === 0) {
+    if (Array.isArray(user.directReferrals) && user.directReferrals.length > 0) {
+      // Ensure nextLevels calculated if missing
+      await updateUserNextLevels(user);
     }
-    return;
   }
-  const existingMembers = await User.aggregate([
-    {
-      $match: {
-        _id: {
-          $in: allReferralIds.map((id) => new mongoose.Types.ObjectId(id)),
-        },
-      },
-    },
-    {
-      $project: {
-        _id: 1,
-      },
-    },
-  ]);
-  const existingMemberIds = new Set(
-    existingMembers.map((member) => member._id.toString())
-  );
-  const level1Count = user.directReferrals.filter((id) =>
-    existingMemberIds.has(id.toString())
-  ).length;
-  const level2Count = user.level2Referrals.filter((id) =>
-    existingMemberIds.has(id.toString())
-  ).length;
-  const level3Count = user.level3Referrals.filter((id) =>
-    existingMemberIds.has(id.toString())
-  ).length;
-  const level4Count = user.level4Referrals.filter((id) =>
-    existingMemberIds.has(id.toString())
-  ).length;
-
-  let newLevel = user.level;
-  if (level1Count >= 3 && user.level < 1) newLevel = 1;
-  if (level2Count >= 3 && user.level < 2) newLevel = 2;
-  if (level3Count >= 3 && user.level < 3) newLevel = 3;
-  if (level4Count >= 3 && user.level < 4) newLevel = 4;
-  if (level1Count < 3 && user.level >= 1) newLevel = 0;
-  if (level2Count < 3 && user.level >= 2) newLevel = 1;
-  if (level3Count < 3 && user.level >= 3) newLevel = 2;
-  if (level4Count < 3 && user.level >= 4) newLevel = 3;
-
+  const effectiveLevels = Array.isArray(user.nextLevels) ? user.nextLevels : [];
+  const threshold = 3;
+  let newLevel = 0;
+  for (let i = 0; i < effectiveLevels.length; i++) {
+    const ids = effectiveLevels[i] || [];
+    if (ids.length >= threshold) {
+      newLevel = i + 1; // level index starts at 1
+    } else {
+      break;
+    }
+  }
   if (newLevel !== user.level) {
     user.level = newLevel;
     await user.save();
@@ -752,20 +757,24 @@ const getReferralTree = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error("User not found");
   }
-  const allReferralIds = [
-    ...user.directReferrals,
-    ...user.level2Referrals,
-    ...user.level3Referrals,
-    ...user.level4Referrals,
-  ];
+  // Ensure dynamic levels are computed
+  if (!Array.isArray(user.nextLevels) || user.nextLevels.length === 0) {
+    await updateUserNextLevels(user);
+  }
+  const levelsIds = Array.isArray(user.nextLevels) ? user.nextLevels : [];
+  const allReferralIds = levelsIds.flat();
+  const dynamicCounts = {};
+  for (let i = 0; i < levelsIds.length; i++) {
+    dynamicCounts[`level${i + 1}`] = levelsIds[i]?.length || 0;
+  }
+  const dynamicTotal = Object.values(dynamicCounts).reduce((a, b) => a + b, 0);
   const stats = {
-    level1: user.directReferrals ? user.directReferrals.length : 0,
-    level2: user.level2Referrals ? user.level2Referrals.length : 0,
-    level3: user.level3Referrals ? user.level3Referrals.length : 0,
-    level4: user.level4Referrals ? user.level4Referrals.length : 0,
+    level1: dynamicCounts.level1 || 0,
+    level2: dynamicCounts.level2 || 0,
+    level3: dynamicCounts.level3 || 0,
+    level4: dynamicCounts.level4 || 0,
+    totalReferrals: dynamicTotal,
   };
-  stats.totalReferrals =
-    stats.level1 + stats.level2 + stats.level3 + stats.level4;
   const referralTree = {
     user: {
       id: user._id,
@@ -790,6 +799,11 @@ const getReferralTree = asyncHandler(async (req, res) => {
       level2: [],
       level3: [],
       level4: [],
+    },
+    // Dynamic structure with arbitrary depth
+    levels: {
+      counts: dynamicCounts,
+      members: {},
     },
   };
   if (allReferralIds.length === 0) {
@@ -840,15 +854,24 @@ const getReferralTree = asyncHandler(async (req, res) => {
     referralTree.members[levelKey] = existingMembersInLevel;
     referralTree.counts[levelKey] = existingMembersInLevel.length;
   };
-  processLevel(user.directReferrals, "level1");
-  processLevel(user.level2Referrals, "level2");
-  processLevel(user.level3Referrals, "level3");
-  processLevel(user.level4Referrals, "level4");
-  referralTree.counts.totalReferrals =
-    referralTree.counts.level1 +
-    referralTree.counts.level2 +
-    referralTree.counts.level3 +
-    referralTree.counts.level4;
+  // Legacy levels for backward compatibility
+  processLevel(levelsIds[0] || [], "level1");
+  processLevel(levelsIds[1] || [], "level2");
+  processLevel(levelsIds[2] || [], "level3");
+  processLevel(levelsIds[3] || [], "level4");
+  referralTree.counts.totalReferrals = Object.values(dynamicCounts).reduce((a, b) => a + b, 0);
+
+  // Dynamic members for all depths
+  for (let i = 0; i < levelsIds.length; i++) {
+    const key = `level${i + 1}`;
+    const ids = levelsIds[i] || [];
+    const membersArr = [];
+    ids.forEach((id) => {
+      const m = membersMap.get(id.toString());
+      if (m) membersArr.push(m);
+    });
+    referralTree.levels.members[key] = membersArr;
+  }
   res.status(200).json({
     message: "Referral tree retrieved successfully",
     referralTree,
