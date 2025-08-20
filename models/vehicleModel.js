@@ -53,7 +53,7 @@ const vehicleSchema = new mongoose.Schema(
     registrationExpiryDate: { type: Date, required: false },
     serviceType: {
       type: String,
-      enum: ["vehicle cab", "car recovery"],
+      enum: ["car cab", "bike", "car recovery", "shifting & movers"],
       required: false,
     },
     vehicleType: {
@@ -63,8 +63,31 @@ const vehicleSchema = new mongoose.Schema(
         validator: function (value) {
           if (!this.serviceType) return true;
           const validTypes = {
-            "vehicle cab": ["bike", "minicar", "accar", "luxurycar", "premium"],
-            "car recovery": ["recovery truck", "hook-and-chain tow truck"],
+            "car cab": ["economy", "premium", "xl", "family", "luxury"],
+            bike: ["economy", "premium", "vip"],
+            "car recovery": [
+              "flatbed towing",
+              "wheel lift towing",
+              "on-road winching",
+              "off-road winching",
+              "battery jump start",
+              "fuel delivery",
+              "luxury & exotic car recovery",
+              "accident & collision recovery",
+              "heavy-duty vehicle recovery",
+              "basement pull-out",
+            ],
+            "shifting & movers": [
+              "mini pickup",
+              "suzuki carry",
+              "small van",
+              "medium truck",
+              "mazda",
+              "covered van",
+              "large truck",
+              "6-wheeler",
+              "container truck",
+            ],
           };
           return validTypes[this.serviceType]?.includes(value);
         },
@@ -72,13 +95,32 @@ const vehicleSchema = new mongoose.Schema(
           `Invalid vehicleType '${props.value}' for serviceType '${
             props.instance.serviceType
           }'. Valid options are: ${
-            props.instance.serviceType === "vehicle cab"
-              ? "bike, minicar, accar, luxurycar, premium"
-              : "recovery truck, hook-and-chain tow truck"
+            props.instance.serviceType === "car cab"
+              ? "economy, premium, xl, family, luxury"
+              : props.instance.serviceType === "bike"
+              ? "economy, premium, vip"
+              : props.instance.serviceType === "car recovery"
+              ? "flatbed towing, wheel lift towing, on-road winching, off-road winching, battery jump start, fuel delivery, luxury & exotic car recovery, accident & collision recovery, heavy-duty vehicle recovery, basement pull-out"
+              : "mini pickup, suzuki carry, small van, medium truck, mazda, covered van, large truck, 6-wheeler, container truck"
           }`,
       },
     },
     wheelchair: {
+      type: Boolean,
+      default: false,
+      required: false,
+    },
+    packingHelper: {
+      type: Boolean,
+      default: false,
+      required: false,
+    },
+    loadingUnloadingHelper: {
+      type: Boolean,
+      default: false,
+      required: false,
+    },
+    fixingHelper: {
       type: Boolean,
       default: false,
       required: false,
@@ -89,8 +131,13 @@ const vehicleSchema = new mongoose.Schema(
       default: "pending",
     },
   },
-  { timestamps: true } // Add timestamps option
+  { timestamps: true }
 );
+
+// Note: For UI implementation, ensure Round Trip bookings for all categories (car cab and bike) display:
+// 1. A discount of AED 10 (e.g., "You saved AED 10").
+// 2. Free stay minutes (e.g., "30 minutes free waiting time for round trip").
+// This is not stored in the schema but should be handled in the frontend logic based on booking type (round trip) and service category.
 
 vehicleSchema.index({ userId: 1 });
 vehicleSchema.index({ status: 1 });

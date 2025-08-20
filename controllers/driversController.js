@@ -10,6 +10,35 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Valid service types and their corresponding vehicle types
+const VALID_SERVICE_TYPES = {
+  "car cab": ["economy", "premium", "xl", "family", "luxury"],
+  bike: ["economy", "premium", "vip"],
+  "car recovery": [
+    "flatbed towing",
+    "wheel lift towing",
+    "on-road winching",
+    "off-road winching",
+    "battery jump start",
+    "fuel delivery",
+    "luxury & exotic car recovery",
+    "accident & collision recovery",
+    "heavy-duty vehicle recovery",
+    "basement pull-out",
+  ],
+  "shifting & movers": [
+    "mini pickup",
+    "suzuki carry",
+    "small van",
+    "medium truck",
+    "mazda",
+    "covered van",
+    "large truck",
+    "6-wheeler",
+    "container truck",
+  ],
+};
+
 const kycLevel1Check = async (req, res, next) => {
   const user = await User.findById(req.user._id);
   if (!user || user.kycLevel < 1 || user.kycStatus !== "approved") {
@@ -23,7 +52,6 @@ const kycLevel1Check = async (req, res, next) => {
 
 const uploadLicense = asyncHandler(async (req, res) => {
   const { userId } = req.body;
-  console.log("req.file:", req.file);
 
   const user = await User.findById(userId);
   if (!user) {
@@ -58,7 +86,6 @@ const uploadLicense = asyncHandler(async (req, res) => {
   user.kycStatus = "pending";
   user.licenseImage = licenseImagePath;
   const savedUser = await user.save();
-  console.log("Saved user with licenseImage:", savedUser.licenseImage);
 
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRY,
@@ -74,24 +101,15 @@ const uploadLicense = asyncHandler(async (req, res) => {
 const handleVehicleDecision = asyncHandler(async (req, res) => {
   const { userId, hasVehicle } = req.body;
 
-  console.log("Request body:", req.body);
-  console.log("Authenticated user ID:", req.user._id);
-
   const user = await User.findById(userId);
   if (!user) {
-    console.log("User not found for userId:", userId);
     return res.status(404).json({
       message: "User not found",
       token: req.cookies.token || "no-token",
     });
   }
-  console.log("User data:", {
-    kycLevel: user.kycLevel,
-    kycStatus: user.kycStatus,
-  });
 
   if (user.kycLevel < 1) {
-    console.log("KYC Level check failed: kycLevel =", user.kycLevel);
     return res.status(403).json({
       message: "KYC Level 1 must be approved before proceeding to Level 2",
       token: req.cookies.token || "no-token",
@@ -99,7 +117,6 @@ const handleVehicleDecision = asyncHandler(async (req, res) => {
   }
 
   if (user.kycLevel >= 2) {
-    console.log("KYC Level 2 already completed: kycLevel =", user.kycLevel);
     return res.status(403).json({
       message: "KYC Level 2 already completed or pending approval",
       token: req.cookies.token || "no-token",
@@ -115,9 +132,6 @@ const handleVehicleDecision = asyncHandler(async (req, res) => {
 
   user.hasVehicle = hasVehicle;
   await user.save();
-  console.log(
-    `Updated user ${userId}, hasVehicle: ${hasVehicle}, kycStatus: ${user.kycStatus}`
-  );
 
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRY,
@@ -128,6 +142,7 @@ const handleVehicleDecision = asyncHandler(async (req, res) => {
     res.status(200).json({
       message: "Please register your vehicle (all fields are optional)",
       nextStep: "vehicleRegistration",
+      serviceTypes: VALID_SERVICE_TYPES, // Provide valid service and vehicle types for frontend
       token,
     });
   } else {
@@ -139,7 +154,6 @@ const handleVehicleDecision = asyncHandler(async (req, res) => {
 });
 
 const registerVehicle = asyncHandler(async (req, res) => {
-  console.log("req.files:", req.files);
   const {
     userId,
     vehicleOwnerName,
@@ -152,44 +166,49 @@ const registerVehicle = asyncHandler(async (req, res) => {
     vehicleType,
     serviceType,
     wheelchair,
+    packingHelper,
+    loadingUnloadingHelper,
+    fixingHelper,
   } = req.body;
 
   const user = await User.findById(userId);
-  console.log("User data for registerVehicle:", {
-    userId,
-    exists: !!user,
-    kycLevel: user?.kycLevel,
-    kycStatus: user?.kycStatus,
-    hasVehicle: user?.hasVehicle,
-    authUserId: req.user._id.toString(),
-  });
-
   if (!user || user.kycLevel < 1) {
-    console.log("KYC Level 1 check failed for userId:", userId);
     return res.status(403).json({
       message: "Complete and get approved for KYC Level 1 first",
       token: req.cookies.token,
     });
   }
   if (user.kycLevel >= 2) {
-    console.log(
-      "KYC Level 2 check failed: kycLevel =",
-      user.kycLevel,
-      "kycStatus =",
-      user.kycStatus
-    );
     return res.status(403).json({
       message: "KYC Level 2 already completed or pending approval",
       token: req.cookies.token,
     });
   }
   if (user.hasVehicle !== "yes") {
-    console.log(
-      "Vehicle ownership check failed: hasVehicle =",
-      user.hasVehicle
-    );
     return res.status(400).json({
       message: "Vehicle ownership must be set to 'yes' to register a vehicle",
+      token: req.cookies.token,
+    });
+  }
+
+  // Validate serviceType and vehicleType
+  if (serviceType && !Object.keys(VALID_SERVICE_TYPES).includes(serviceType)) {
+    return res.status(400).json({
+      message: `Invalid serviceType. Valid options are: ${Object.keys(
+        VALID_SERVICE_TYPES
+      ).join(", ")}`,
+      token: req.cookies.token,
+    });
+  }
+  if (
+    serviceType &&
+    vehicleType &&
+    !VALID_SERVICE_TYPES[serviceType]?.includes(vehicleType)
+  ) {
+    return res.status(400).json({
+      message: `Invalid vehicleType '${vehicleType}' for serviceType '${serviceType}'. Valid options are: ${VALID_SERVICE_TYPES[
+        serviceType
+      ].join(", ")}`,
       token: req.cookies.token,
     });
   }
@@ -243,6 +262,12 @@ const registerVehicle = asyncHandler(async (req, res) => {
     vehicleType: vehicleType || null,
     serviceType: serviceType || null,
     wheelchair: wheelchair !== undefined ? Boolean(wheelchair) : false,
+    packingHelper: packingHelper !== undefined ? Boolean(packingHelper) : false,
+    loadingUnloadingHelper:
+      loadingUnloadingHelper !== undefined
+        ? Boolean(loadingUnloadingHelper)
+        : false,
+    fixingHelper: fixingHelper !== undefined ? Boolean(fixingHelper) : false,
   };
 
   const vehicle = new Vehicle(vehicleData);
@@ -259,6 +284,12 @@ const registerVehicle = asyncHandler(async (req, res) => {
   res.status(201).json({
     message: "Vehicle registration submitted and pending admin approval",
     vehicleId: vehicle._id,
+    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    roundTripInfo: {
+      discount: "AED 10",
+      freeStayMinutes: 30, // Configurable in frontend or env
+      note: "Apply discount and free stay minutes for round-trip bookings in frontend",
+    },
     token,
   });
 });
@@ -276,6 +307,9 @@ const updateVehicle = asyncHandler(async (req, res) => {
     vehicleType,
     serviceType,
     wheelchair,
+    packingHelper,
+    loadingUnloadingHelper,
+    fixingHelper,
   } = req.body;
   const userId = req.user._id;
 
@@ -283,6 +317,28 @@ const updateVehicle = asyncHandler(async (req, res) => {
   if (!vehicle) {
     return res.status(404).json({
       message: "Vehicle not found or you do not have permission to update it",
+      token: req.cookies.token,
+    });
+  }
+
+  // Validate serviceType and vehicleType
+  if (serviceType && !Object.keys(VALID_SERVICE_TYPES).includes(serviceType)) {
+    return res.status(400).json({
+      message: `Invalid serviceType. Valid options are: ${Object.keys(
+        VALID_SERVICE_TYPES
+      ).join(", ")}`,
+      token: req.cookies.token,
+    });
+  }
+  if (
+    serviceType &&
+    vehicleType &&
+    !VALID_SERVICE_TYPES[serviceType]?.includes(vehicleType)
+  ) {
+    return res.status(400).json({
+      message: `Invalid vehicleType '${vehicleType}' for serviceType '${serviceType}'. Valid options are: ${VALID_SERVICE_TYPES[
+        serviceType
+      ].join(", ")}`,
       token: req.cookies.token,
     });
   }
@@ -307,6 +363,16 @@ const updateVehicle = asyncHandler(async (req, res) => {
   vehicle.serviceType = serviceType || vehicle.serviceType;
   vehicle.wheelchair =
     wheelchair !== undefined ? Boolean(wheelchair) : vehicle.wheelchair;
+  vehicle.packingHelper =
+    packingHelper !== undefined
+      ? Boolean(packingHelper)
+      : vehicle.packingHelper;
+  vehicle.loadingUnloadingHelper =
+    loadingUnloadingHelper !== undefined
+      ? Boolean(loadingUnloadingHelper)
+      : vehicle.loadingUnloadingHelper;
+  vehicle.fixingHelper =
+    fixingHelper !== undefined ? Boolean(fixingHelper) : vehicle.fixingHelper;
   vehicle.vehicleRegistrationCard.front =
     req.files && req.files.vehicleRegistrationCardFront
       ? uploadToLocal(req.files.vehicleRegistrationCardFront[0])
@@ -337,6 +403,12 @@ const updateVehicle = asyncHandler(async (req, res) => {
   res.status(200).json({
     message: "Vehicle updated successfully",
     vehicleId: vehicle._id,
+    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    roundTripInfo: {
+      discount: "AED 10",
+      freeStayMinutes: 30, // Configurable in frontend or env
+      note: "Apply discount and free stay minutes for round-trip bookings in frontend",
+    },
     token,
   });
 });
@@ -373,6 +445,12 @@ const getUserVehicleInfo = asyncHandler(async (req, res) => {
       selfieImage: user.selfieImage,
     },
     vehicle: vehicle ? vehicle.toObject() : null,
+    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    roundTripInfo: {
+      discount: "AED 10",
+      freeStayMinutes: 30, // Configurable in frontend or env
+      note: "Apply discount and free stay minutes for round-trip bookings in frontend",
+    },
   };
 
   const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
@@ -418,9 +496,16 @@ const getCurrentUser = asyncHandler(async (req, res) => {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     },
+    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    roundTripInfo: {
+      discount: "AED 10",
+      freeStayMinutes: 30, // Configurable in frontend or env
+      note: "Apply discount and free stay minutes for round-trip bookings in frontend",
+    },
     token,
   });
 });
+
 export {
   uploadLicense,
   handleVehicleDecision,
