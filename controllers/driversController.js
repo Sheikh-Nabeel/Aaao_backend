@@ -7,7 +7,7 @@ import asyncHandler from "express-async-handler";
 
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(UploadsDir, { recursive: true });
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 const kycLevel1Check = async (req, res, next) => {
@@ -415,11 +415,12 @@ const getCurrentUser = asyncHandler(async (req, res) => {
       gender: user.gender,
       cnicImages: user.cnicImages,
       selfieImage: user.selfieImage,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
     },
     token,
   });
 });
-
 export {
   uploadLicense,
   handleVehicleDecision,
