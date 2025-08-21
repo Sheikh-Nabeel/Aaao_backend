@@ -8,6 +8,7 @@ import connectDB from "./config/connectDB.js";
 import cors from "cors";
 import userRoutes from "./routes/userRoutes.js";
 import driversRoutes from "./routes/driversRoutes.js";
+import vehiclesRoutes from "./routes/vehiclesRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js"; // Added booking routes
 import mlmRoutes from "./routes/mlmRoutes.js"; // Added MLM routes
 import cloudinary from "cloudinary";
@@ -67,6 +68,7 @@ app.use(cookieParser());
 
 app.use("/api/user", userRoutes);
 app.use("/api/drivers", driversRoutes);
+app.use("/api/vehicles", vehiclesRoutes);
 app.use("/api/bookings", bookingRoutes); // Added booking routes
 app.use("/api/mlm", mlmRoutes); // Added MLM routes
 

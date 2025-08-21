@@ -56,9 +56,57 @@ const vehicleSchema = new mongoose.Schema(
       enum: ["car cab", "bike", "car recovery", "shifting & movers"],
       required: false,
     },
+    serviceCategory: {
+      type: String,
+      required: false,
+      enum: [
+        // Car Recovery categories
+        "towing services",
+        "winching services",
+        "roadside assistance",
+        "specialized/heavy recovery",
+        // Shifting & Movers categories
+        "small mover",
+        "medium mover",
+        "heavy mover",
+        // Allow null/undefined by keeping required false
+      ],
+      trim: true,
+    },
     vehicleType: {
       type: String,
       required: false,
+      enum: [
+        // Car Cab
+        "economy",
+        "premium",
+        "xl",
+        "family",
+        "luxury",
+        // Bike
+        "vip",
+        // Car Recovery
+        "flatbed towing",
+        "wheel lift towing",
+        "on-road winching",
+        "off-road winching",
+        "battery jump start",
+        "fuel delivery",
+        "luxury & exotic car recovery",
+        "accident & collision recovery",
+        "heavy-duty vehicle recovery",
+        "basement pull-out",
+        // Shifting & Movers
+        "mini pickup",
+        "suzuki carry",
+        "small van",
+        "medium truck",
+        "mazda",
+        "covered van",
+        "large truck",
+        "6-wheeler",
+        "container truck",
+      ],
       validate: {
         validator: function (value) {
           if (!this.serviceType) return true;
@@ -127,9 +175,13 @@ const vehicleSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "approved", null],
+      enum: ["pending", "approved", "rejected", null],
       default: "pending",
     },
+    rejectionReason: { type: String, required: false },
+    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    reviewedAt: { type: Date },
+    approvedAt: { type: Date },
   },
   { timestamps: true }
 );
@@ -141,6 +193,9 @@ const vehicleSchema = new mongoose.Schema(
 
 vehicleSchema.index({ userId: 1 });
 vehicleSchema.index({ status: 1 });
+vehicleSchema.index({ serviceType: 1 });
+vehicleSchema.index({ serviceCategory: 1 });
+vehicleSchema.index({ vehicleType: 1 });
 
 export default mongoose.models.Vehicle ||
   mongoose.model("Vehicle", vehicleSchema);

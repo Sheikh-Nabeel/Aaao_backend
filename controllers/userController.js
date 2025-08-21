@@ -965,15 +965,13 @@ const approveKYC = asyncHandler(async (req, res) => {
     throw new Error("No valid KYC level to approve");
   }
   if (kycLevelToApprove === 2) {
-    if (!user.hasVehicle) {
+    // Require license image uploaded for Level 2
+    if (!user.licenseImage) {
       res.status(400);
-      throw new Error("Vehicle decision (yes/no) must be specified");
+      throw new Error("License must be uploaded before approving KYC Level 2");
     }
-    if (user.hasVehicle === "yes" && !user.pendingVehicleData) {
-      res.status(400);
-      throw new Error("Vehicle data must be provided for KYC Level 2");
-    }
-    if (user.hasVehicle === "yes") {
+    // If a vehicle is already registered, auto-approve it; otherwise OK to approve user without vehicle
+    if (user.pendingVehicleData) {
       const vehicle = await Vehicle.findById(user.pendingVehicleData);
       if (vehicle) {
         vehicle.status = "approved";

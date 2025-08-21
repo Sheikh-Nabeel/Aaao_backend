@@ -1,11 +1,11 @@
 import express from "express";
 import {
   uploadLicense,
-  handleVehicleDecision,
   registerVehicle,
   updateVehicle,
   getUserVehicleInfo,
   getCurrentUser,
+  getVehicleSelectFlow,
 } from "../controllers/driversController.js";
 import authHandler from "../middlewares/authMIddleware.js";
 
@@ -27,7 +27,6 @@ router.post(
   upload.single("licenseImage"),
   uploadLicense
 );
-router.post("/vehicle-decision", authHandler, handleVehicleDecision);
 router.post(
   "/register-vehicle",
   authHandler,
@@ -54,5 +53,6 @@ router.post(
 );
 router.get("/user-vehicle-info", authHandler, getUserVehicleInfo);
 router.get("/get-current-user", authHandler, getCurrentUser);
+router.get("/vehicle-select-flow", getVehicleSelectFlow);
 
 export default router;
