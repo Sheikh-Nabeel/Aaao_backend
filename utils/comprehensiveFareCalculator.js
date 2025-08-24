@@ -70,11 +70,42 @@ const calculateFreeStayMinutes = (distance, roundTripConfig) => {
 };
 
 // Check if refreshment alert should be shown
-const shouldShowRefreshmentAlert = (distance, estimatedDuration, roundTripConfig) => {
+const shouldShowRefreshmentAlert = (distance, estimatedDuration, roundTripConfig, serviceType = null, recoveryConfig = null) => {
+  // For car recovery services, use specific refreshment alert config
+  if (serviceType === 'car recovery' && recoveryConfig && recoveryConfig.refreshmentAlert) {
+    if (!recoveryConfig.refreshmentAlert.enabled) return false;
+    return distance >= recoveryConfig.refreshmentAlert.minimumDistance || 
+           estimatedDuration >= recoveryConfig.refreshmentAlert.minimumDuration;
+  }
+  
+  // Default logic for other services
   if (!roundTripConfig.refreshmentAlert.enabled) return false;
   
   return distance >= roundTripConfig.refreshmentAlert.minimumDistance || 
          estimatedDuration >= roundTripConfig.refreshmentAlert.minimumDuration;
+};
+
+// Calculate refreshment/overtime charges for car recovery
+const calculateRefreshmentCharges = (overtimeMinutes, refreshmentConfig) => {
+  if (!refreshmentConfig.enabled || overtimeMinutes <= 0) return 0;
+  
+  // Calculate charges based on per minute or per 5-minute blocks
+  const perMinuteCharge = overtimeMinutes * refreshmentConfig.perMinuteCharges;
+  const per5MinCharge = Math.ceil(overtimeMinutes / 5) * refreshmentConfig.per5MinCharges;
+  
+  // Use the configured charging method (assuming per minute for now)
+  const calculatedCharge = perMinuteCharge;
+  
+  // Apply maximum charge cap
+  return Math.min(calculatedCharge, refreshmentConfig.maximumCharges);
+};
+
+// Calculate free stay minutes for car recovery round trips
+const calculateCarRecoveryFreeStay = (distance, freeStayConfig) => {
+  if (!freeStayConfig.enabled) return 0;
+  
+  const calculatedMinutes = distance * freeStayConfig.ratePerKm;
+  return Math.min(calculatedMinutes, freeStayConfig.maximumCap);
 };
 
 // Main comprehensive fare calculation function
@@ -135,14 +166,62 @@ const calculateComprehensiveFare = async (bookingData) => {
     } else if (normalizedServiceType === 'car_recovery' || serviceType === 'car recovery') {
       const recoveryConfig = pricingConfig.serviceTypes.carRecovery;
       
-      if (vehicleType === 'jumpstart' && recoveryConfig.jumpstart.fixedRate) {
-        // Fixed rate for jumpstart
-        baseFare = recoveryConfig.jumpstart.minAmount;
+      // Check if it's winching, roadside assistance, or key unlocker services
+      const isWinchingOrRoadside = vehicleType && (
+        recoveryConfig.serviceTypes.winching.subCategories[vehicleType] ||
+        recoveryConfig.serviceTypes.roadsideAssistance.subCategories[vehicleType] ||
+        vehicleType === 'keyUnlocker'
+      );
+      
+      if (isWinchingOrRoadside) {
+        // For winching, roadside assistance, and key unlocker services
+        // Apply minimum charges for driver arriving + convenience fee
+        let convenienceFee = 50; // default
+        
+        if (recoveryConfig.serviceTypes.winching.subCategories[vehicleType]) {
+          convenienceFee = recoveryConfig.serviceTypes.winching.subCategories[vehicleType].convenienceFee;
+        } else if (recoveryConfig.serviceTypes.roadsideAssistance.subCategories[vehicleType]) {
+          convenienceFee = recoveryConfig.serviceTypes.roadsideAssistance.subCategories[vehicleType].convenienceFee;
+        } else if (vehicleType === 'keyUnlocker') {
+          convenienceFee = recoveryConfig.serviceTypes.keyUnlockerServices.convenienceFee;
+        }
+        
+        baseFare = recoveryConfig.serviceTypes.winching.minimumChargesForDriverArriving + convenienceFee;
         fareBreakdown.baseFare = baseFare;
         fareBreakdown.distanceFare = 0;
-      } else if (recoveryConfig[vehicleType]) {
-        perKmRate = recoveryConfig[vehicleType].perKmRate;
-        baseFare = pricingConfig.baseFare.amount; // Use default base fare
+        fareBreakdown.breakdown.convenienceFee = convenienceFee;
+        fareBreakdown.breakdown.minimumDriverCharges = recoveryConfig.serviceTypes.winching.minimumChargesForDriverArriving;
+      } else {
+        // For all other car recovery types (except roadside assistance and winching)
+        // Apply standard car recovery pricing structure
+        baseFare = recoveryConfig.baseFare.amount;
+        perKmRate = recoveryConfig.perKmRate.afterBaseCoverage;
+        
+        // Override base fare coverage for car recovery
+        pricingConfig.baseFare.coverageKm = recoveryConfig.baseFare.coverageKm;
+        
+        // Override minimum fare for car recovery
+        pricingConfig.minimumFare = recoveryConfig.minimumFare;
+        
+        // Override platform fee for car recovery
+        pricingConfig.platformFee = recoveryConfig.platformFee;
+        
+        // Override cancellation charges for car recovery
+        pricingConfig.cancellationCharges = recoveryConfig.cancellationCharges;
+        
+        // Override waiting charges for car recovery
+        pricingConfig.waitingCharges = recoveryConfig.waitingCharges;
+        
+        // Override night charges for car recovery
+        pricingConfig.nightCharges = recoveryConfig.nightCharges;
+        
+        // Override surge pricing for car recovery
+        pricingConfig.surgePricing = recoveryConfig.surgePricing;
+        
+        // Override VAT for car recovery
+        if (recoveryConfig.vat.enabled) {
+          pricingConfig.vat = recoveryConfig.vat;
+        }
       }
     }
     
@@ -185,8 +264,32 @@ const calculateComprehensiveFare = async (bookingData) => {
       }
       
       // Check for refreshment alert
-      if (shouldShowRefreshmentAlert(distance, estimatedDuration, pricingConfig.roundTrip)) {
-        fareBreakdown.alerts.push('Refreshment recommended for long trip');
+      if (shouldShowRefreshmentAlert(distance, estimatedDuration, pricingConfig.roundTrip, serviceType, pricingConfig.serviceTypes.carRecovery)) {
+        if (serviceType === 'car recovery') {
+          fareBreakdown.alerts.push({
+            type: 'refreshment_alert',
+            title: pricingConfig.serviceTypes.carRecovery.refreshmentAlert.popupTitle,
+            options: pricingConfig.serviceTypes.carRecovery.refreshmentAlert.driverOptions
+          });
+        } else {
+          fareBreakdown.alerts.push('Refreshment recommended for long trip');
+        }
+      }
+      
+      // Calculate car recovery specific free stay minutes for round trips
+      if (serviceType === 'car recovery' && pricingConfig.serviceTypes.carRecovery.freeStayMinutes.enabled) {
+        const carRecoveryFreeStay = calculateCarRecoveryFreeStay(distance, pricingConfig.serviceTypes.carRecovery.freeStayMinutes);
+        if (carRecoveryFreeStay > 0) {
+          fareBreakdown.breakdown.carRecoveryFreeStayMinutes = carRecoveryFreeStay;
+          
+          // Add notification alerts
+          if (pricingConfig.serviceTypes.carRecovery.freeStayMinutes.notifications.fiveMinRemaining) {
+            fareBreakdown.alerts.push({
+              type: 'free_stay_warning',
+              message: '5 minutes remaining for free stay'
+            });
+          }
+        }
       }
     }
     
@@ -273,5 +376,7 @@ export {
   calculateCancellationCharges,
   calculateWaitingCharges,
   calculateFreeStayMinutes,
-  shouldShowRefreshmentAlert
+  shouldShowRefreshmentAlert,
+  calculateRefreshmentCharges,
+  calculateCarRecoveryFreeStay
 };

@@ -2172,6 +2172,11 @@ The system provides a comprehensive admin dashboard for configuring pricing acro
 - **VAT**: Government tax configuration
 - **City-wise adjustments**: Per km rate adjustments for different cities
 - **Minimum fare**: Configurable minimum fare limits
+- **Refreshment Alert**: Smart alert system for long rides (>20km or >30 minutes) that allows drivers to choose whether to start overtime charges when free stay time ends
+  - **Trigger conditions**: Distance ≥20km OR duration ≥30 minutes
+  - **Driver options**: Continue without charges or start overtime billing
+  - **Configurable rates**: Per-minute charges, 5-minute block charges, maximum charge limits
+  - **Failsafe behavior**: Admin-controlled automatic start or wait for driver choice
 
 ### Admin API Endpoints
 
@@ -2210,6 +2215,28 @@ PUT /api/admin/comprehensive-pricing/night-charges
   "multiplier": 1.3,
   "startTime": "22:00",
   "endTime": "06:00"
+}
+
+# Update refreshment alert configuration
+PUT /api/admin/comprehensive-pricing/round-trip-features
+{
+  "refreshmentAlert": {
+    "enabled": true,
+    "minimumDistance": 20,
+    "minimumDuration": 30,
+    "perMinuteCharges": 1.0,
+    "per5MinCharges": 5.0,
+    "maximumCharges": 30,
+    "popupTitle": "Free Stay Time Ended – Select Action",
+    "driverOptions": {
+      "continueNoCharges": "Continue – No Overtime Charges",
+      "startOvertimeCharges": "Start Overtime Charges"
+    },
+    "failsafeCondition": {
+      "autoStart": false,
+      "waitForDriverChoice": true
+    }
+  }
 }
 ```
 

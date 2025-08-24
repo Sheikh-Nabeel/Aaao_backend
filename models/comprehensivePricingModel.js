@@ -99,26 +99,166 @@ const comprehensivePricingSchema = new mongoose.Schema({
     },
     carRecovery: {
       enabled: { type: Boolean, default: true },
-      flatbed: { 
-        perKmRate: { type: Number, default: 3.5 }, // AED 3.50/km
-        serviceCharges: { type: Number, default: 100 } // Fixed service charges
+      
+      // Base fare structure (applies to all types except roadside assistance and winching)
+      baseFare: {
+        amount: { type: Number, default: 50 }, // AED 50 for first 6km
+        coverageKm: { type: Number, default: 6 }
       },
-      wheelLift: { 
-        perKmRate: { type: Number, default: 3.0 }, // AED 3.00/km
-        serviceCharges: { type: Number, default: 80 } // Fixed service charges
+      
+      // Per KM rate after base coverage
+      perKmRate: {
+        afterBaseCoverage: { type: Number, default: 7.5 }, // AED 7.5/km after 6km
+        cityWiseAdjustment: {
+          enabled: { type: Boolean, default: true },
+          aboveKm: { type: Number, default: 10 },
+          adjustedRate: { type: Number, default: 5 } // AED 5/km if trip >10km in specific country
+        }
       },
-      jumpstart: { 
-        fixedRate: { type: Boolean, default: true },
-        minAmount: { type: Number, default: 50 }, // AED 50-70 fixed
-        maxAmount: { type: Number, default: 70 },
-        serviceCharges: { type: Number, default: 60 } // Fixed service charges
+      
+      // Minimum fare
+      minimumFare: { type: Number, default: 50 }, // If total trip < 6km → still charge AED 50
+      
+      // Platform fee (split logic)
+      platformFee: {
+        percentage: { type: Number, default: 15 }, // Deduct 15% of total fare
+        driverShare: { type: Number, default: 7.5 }, // 7.5% → driver side
+        customerShare: { type: Number, default: 7.5 } // 7.5% → customer side
       },
-      keyUnlocker: {
-        serviceCharges: { type: Number, default: 75 } // Fixed service charges
+      
+      // Cancellation logic
+      cancellationCharges: {
+        beforeArrival: { type: Number, default: 2 }, // AED 2 (only apply once rider has crossed 25% of driver's distance)
+        after50PercentDistance: { type: Number, default: 5 }, // If driver covered ≥ 50% of way → AED 5
+        afterArrival: { type: Number, default: 10 } // After driver arrived at pickup → AED 10
       },
-      platformCharges: {
-        percentage: { type: Number, default: 15 }, // 15% platform charges
-        split: { type: String, default: '50/50' } // 50/50 customer/service provider
+      
+      // Waiting charges
+      waitingCharges: {
+        freeMinutes: { type: Number, default: 5 }, // Free wait: 5 minutes
+        perMinuteRate: { type: Number, default: 2 }, // After 5 mins → AED 2/minute
+        maximumCharge: { type: Number, default: 20 } // Stop charging after AED 20 cap
+      },
+      
+      // Night charges (22:00–06:00)
+      nightCharges: {
+        enabled: { type: Boolean, default: true },
+        startHour: { type: Number, default: 22 }, // 22:00
+        endHour: { type: Number, default: 6 }, // 06:00
+        fixedAmount: { type: Number, default: 10 }, // add AED 10
+        multiplier: { type: Number, default: 1.25 }, // OR apply multiplier 1.25x
+        adminConfigurable: { type: Boolean, default: true }
+      },
+      
+      // Surge pricing (Admin Control)
+      surgePricing: {
+        enabled: { type: Boolean, default: true },
+        adminControlled: { type: Boolean, default: true },
+        noSurge: { type: Boolean, default: true }, // Admin checkbox: No Surge
+        surge1_5x: { type: Boolean, default: false }, // Admin checkbox: 1.5x
+        surge2_0x: { type: Boolean, default: false }, // Admin checkbox: 2.0x
+        levels: [{
+          demandRatio: { type: Number, default: 2 }, // 1.5x if demand = 2x cars
+          multiplier: { type: Number, default: 1.5 }
+        }, {
+          demandRatio: { type: Number, default: 3 }, // 2.0x if demand = 3x cars
+          multiplier: { type: Number, default: 2.0 }
+        }]
+      },
+      
+      // Service types (Winching & Roadside assistance)
+      serviceTypes: {
+        winching: {
+          enabled: { type: Boolean, default: true },
+          minimumChargesForDriverArriving: { type: Number, default: 5 }, // AED 5
+          convenienceFee: {
+            options: { type: [Number], default: [50, 100] }, // 50, 100... as per service based
+            default: { type: Number, default: 50 }
+          },
+          subCategories: {
+            flatbed: { 
+              enabled: { type: Boolean, default: true },
+              convenienceFee: { type: Number, default: 100 }
+            },
+            wheelLift: { 
+              enabled: { type: Boolean, default: true },
+              convenienceFee: { type: Number, default: 80 }
+            },
+            heavyDutyTowing: {
+              enabled: { type: Boolean, default: true },
+              convenienceFee: { type: Number, default: 150 }
+            }
+          }
+        },
+        roadsideAssistance: {
+          enabled: { type: Boolean, default: true },
+          minimumChargesForDriverArriving: { type: Number, default: 5 }, // AED 5
+          convenienceFee: {
+            options: { type: [Number], default: [50, 100] }, // 50, 100... as per service based
+            default: { type: Number, default: 50 }
+          },
+          subCategories: {
+            jumpstart: { 
+              enabled: { type: Boolean, default: true },
+              convenienceFee: { type: Number, default: 60 }
+            },
+            tirePunctureRepair: {
+              enabled: { type: Boolean, default: true },
+              convenienceFee: { type: Number, default: 70 }
+            },
+            fuelDelivery: {
+              enabled: { type: Boolean, default: true },
+              convenienceFee: { type: Number, default: 80 }
+            },
+            batteryReplacement: {
+              enabled: { type: Boolean, default: true },
+              convenienceFee: { type: Number, default: 90 }
+            }
+          }
+        },
+        keyUnlockerServices: {
+          enabled: { type: Boolean, default: true },
+          minimumChargesForDriverArriving: { type: Number, default: 5 }, // AED 5
+          convenienceFee: { type: Number, default: 75 }
+        }
+      },
+      
+      // Refreshment Alert (for rides >20km OR >30 minutes)
+      refreshmentAlert: {
+        enabled: { type: Boolean, default: true },
+        minimumDistance: { type: Number, default: 20 }, // >20 km
+        minimumDuration: { type: Number, default: 30 }, // >30 minutes
+        perMinuteCharges: { type: Number, default: 1 }, // AED 1/minute
+        per5MinCharges: { type: Number, default: 5 }, // AED 5/5min charges
+        maximumCharges: { type: Number, default: 30 }, // Maximum 30 minutes stopped over time charges
+        popupTitle: { type: String, default: "Free Stay Time Ended – Select Action" },
+        driverOptions: {
+          continueNoCharges: { type: String, default: "Continue – No Overtime Charges" },
+          startOvertimeCharges: { type: String, default: "Start Overtime Charges" }
+        },
+        failsafeCondition: {
+          autoStart: { type: Boolean, default: false }, // If driver does not press any button, overtime does NOT start automatically
+          waitForDriverChoice: { type: Boolean, default: true }
+        }
+      },
+      
+      // Free Stay Minutes (Round Trips only)
+      freeStayMinutes: {
+        enabled: { type: Boolean, default: true },
+        ratePerKm: { type: Number, default: 0.5 }, // 0.5 min per km of trip
+        maximumCap: { type: Number, default: 60 }, // Maximum cap (configurable by admin)
+        notifications: {
+          fiveMinRemaining: { type: Boolean, default: true }, // Auto push notification on 5 min remaining
+          freeStayOver: { type: Boolean, default: true } // Push notification for free stay minutes over
+        }
+      },
+      
+      // VAT (country based)
+      vat: {
+        enabled: { type: Boolean, default: true },
+        countryBased: { type: Boolean, default: true },
+        percentage: { type: Number, default: 5 }, // Apply country based VAT on total fare
+        showTotalIncludingTax: { type: Boolean, default: true } // Show Fair Total Amount including tax
       }
     },
     shiftingMovers: {
