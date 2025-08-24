@@ -140,7 +140,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     
     // Calculate fare based on service type
     if (serviceType === "shifting & movers") {
-      estimatedFare = calculateShiftingMoversFare({
+      const fareData = await calculateShiftingMoversFare({
         vehicleType,
         distance: distanceInMeters / 1000,
         routeType,
@@ -148,14 +148,16 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         itemDetails,
         serviceOptions
       });
-      fareResult = { totalFare: estimatedFare };
+      estimatedFare = fareData?.totalFare || fareData;
+      fareResult = fareData;
     } else if (serviceType === "car recovery") {
-      estimatedFare = calculateCarRecoveryFare({
+      const fareData = await calculateCarRecoveryFare({
         serviceCategory: serviceCategory || vehicleType,
         distance: distanceInMeters / 1000,
         serviceDetails
       });
-      fareResult = { totalFare: estimatedFare };
+      estimatedFare = fareData?.totalFare || fareData;
+      fareResult = fareData;
     } else {
       // Use comprehensive fare calculation for car cab, bike, and car recovery
       fareResult = await calculateFareByServiceType(

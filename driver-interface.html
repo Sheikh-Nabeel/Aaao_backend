@@ -155,6 +155,24 @@
                             </label>
                             <small style="display: block; color: #666; margin-left: 20px;">Accept rides in designated safe areas</small>
                         </div>
+                        <div class="input-group">
+                            <label>
+                                <input type="checkbox" id="acceptFamilyWithGuardianMale"> 👨‍👩‍👧‍👦 Family With Guardian Male
+                            </label>
+                            <small style="display: block; color: #666; margin-left: 20px;">Accept family rides with male guardian present</small>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                <input type="checkbox" id="acceptMaleWithoutFemale"> 👨 Male Without Female
+                            </label>
+                            <small style="display: block; color: #666; margin-left: 20px;">Accept rides with male passengers only (no female companions)</small>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                <input type="checkbox" id="acceptNoMaleCompanion"> 🚫👨 No Male Companion
+                            </label>
+                            <small style="display: block; color: #666; margin-left: 20px;">Accept rides without any male companions</small>
+                        </div>
                     </div>
                     
                     <button onclick="updateRidePreferences()">🎯 Update Preferences</button>
@@ -539,7 +557,10 @@
                 pinkCaptainMode: document.getElementById('pinkCaptainMode').checked,
                 acceptFemaleOnly: document.getElementById('acceptFemaleOnly').checked,
                 acceptFamilyRides: document.getElementById('acceptFamilyRides').checked,
-                acceptSafeRides: document.getElementById('acceptSafeRides').checked
+                acceptSafeRides: document.getElementById('acceptSafeRides').checked,
+                acceptFamilyWithGuardianMale: document.getElementById('acceptFamilyWithGuardianMale').checked,
+                acceptMaleWithoutFemale: document.getElementById('acceptMaleWithoutFemale').checked,
+                acceptNoMaleCompanion: document.getElementById('acceptNoMaleCompanion').checked
             };
             
             if (socket) {

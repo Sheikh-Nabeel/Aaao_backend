@@ -230,7 +230,7 @@ const createBooking = asyncHandler(async (req, res) => {
 
   if (!["car cab", "bike", "car recovery", "shifting & movers"].includes(serviceType)) {
     return res.status(400).json({
-      message: "Invalid service type",
+      message: "Invalid service type. Supported services: car cab, bike, car recovery, shifting & movers",
       token: req.cookies.token,
     });
   }
@@ -245,12 +245,12 @@ const createBooking = asyncHandler(async (req, res) => {
 
   // Validate pink captain options if specified
   if (driverPreference === "pink_captain") {
-    const validPinkOptions = ['femalePassengersOnly', 'familyRides', 'safeZoneRides'];
+    const validPinkOptions = ['femalePassengersOnly', 'familyRides', 'safeZoneRides', 'familyWithGuardianMale', 'maleWithoutFemale', 'noMaleCompanion'];
     const hasValidOption = validPinkOptions.some(option => pinkCaptainOptions[option] === true);
     
     if (!hasValidOption) {
       return res.status(400).json({
-        message: "At least one pink captain option must be selected (femalePassengersOnly, familyRides, or safeZoneRides)",
+        message: "At least one pink captain option must be selected (femalePassengersOnly, familyRides, safeZoneRides, familyWithGuardianMale, maleWithoutFemale, or noMaleCompanion)",
         token: req.cookies.token,
       });
     }

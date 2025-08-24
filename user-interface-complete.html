@@ -142,6 +142,24 @@
                             </label>
                             <small style="display: block; color: #666; margin-left: 20px;">Travel within designated safe areas</small>
                         </div>
+                        <div class="input-group">
+                            <label>
+                                <input type="checkbox" id="familyWithGuardianMale"> 👨‍👩‍👧‍👦 Family With Guardian Male
+                            </label>
+                            <small style="display: block; color: #666; margin-left: 20px;">Family ride with male guardian present</small>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                <input type="checkbox" id="maleWithoutFemale"> 👨 Male Without Female
+                            </label>
+                            <small style="display: block; color: #666; margin-left: 20px;">Male passengers only (no female companions)</small>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                <input type="checkbox" id="noMaleCompanion"> 🚫👨 No Male Companion
+                            </label>
+                            <small style="display: block; color: #666; margin-left: 20px;">No male companions in the ride</small>
+                        </div>
                     </div>
                     <div class="input-group">
                         <label>
@@ -358,6 +376,9 @@
                 document.getElementById('femalePassengersOnly').checked = false;
                 document.getElementById('familyRides').checked = false;
                 document.getElementById('safeZoneRides').checked = false;
+                document.getElementById('familyWithGuardianMale').checked = false;
+                document.getElementById('maleWithoutFemale').checked = false;
+                document.getElementById('noMaleCompanion').checked = false;
             }
         }
 
@@ -385,7 +406,10 @@
                 pinkCaptainOptions: {
                     femalePassengersOnly: document.getElementById('femalePassengersOnly').checked,
                     familyRides: document.getElementById('familyRides').checked,
-                    safeZoneRides: document.getElementById('safeZoneRides').checked
+                    safeZoneRides: document.getElementById('safeZoneRides').checked,
+                    familyWithGuardianMale: document.getElementById('familyWithGuardianMale').checked,
+                    maleWithoutFemale: document.getElementById('maleWithoutFemale').checked,
+                    noMaleCompanion: document.getElementById('noMaleCompanion').checked
                 },
                 preferences: {
                     requestPinkCaptain: document.getElementById('requestPinkCaptain').checked,

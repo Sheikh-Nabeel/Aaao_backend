@@ -102,6 +102,53 @@ const bookingSchema = new mongoose.Schema({
     type: Number, // in AED
     required: [true, "Fare is required"],
   },
+  fareModificationRequest: {
+    requestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: false,
+    },
+    originalFare: {
+      type: Number,
+      required: false,
+    },
+    requestedFare: {
+      type: Number,
+      required: false,
+    },
+    reason: {
+      type: String,
+      required: false,
+    },
+    requestedAt: {
+      type: Date,
+      required: false,
+    },
+    status: {
+      type: String,
+      enum: ["pending", "accepted", "rejected"],
+      required: false,
+    },
+    respondedAt: {
+      type: Date,
+      required: false,
+    },
+    userResponse: {
+      response: {
+        type: String,
+        enum: ["accept", "reject"],
+        required: false,
+      },
+      reason: {
+        type: String,
+        required: false,
+      },
+    },
+  },
+  fareModifiedAt: {
+    type: Date,
+    required: false,
+  },
   status: {
     type: String,
     enum: ["pending", "accepted", "started", "in_progress", "completed", "cancelled"],
@@ -190,6 +237,18 @@ const bookingSchema = new mongoose.Schema({
       type: Boolean,
       default: false,
     },
+    familyWithGuardianMale: {
+      type: Boolean,
+      default: false,
+    },
+    maleWithoutFemale: {
+      type: Boolean,
+      default: false,
+    },
+    noMaleCompanion: {
+      type: Boolean,
+      default: false,
+    },
   },
   furnitureDetails: {
     sofas: {
@@ -275,6 +334,40 @@ const bookingSchema = new mongoose.Schema({
   },
   raisedFare: {
     type: Number,
+    required: false,
+  },
+  userFareIncreases: [{
+    originalFare: {
+      type: Number,
+      required: true,
+    },
+    increasedFare: {
+      type: Number,
+      required: true,
+    },
+    reason: {
+      type: String,
+      default: "No drivers responding",
+    },
+    increasedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    resendAttempt: {
+      type: Number,
+      required: true,
+    },
+  }],
+  resendAttempts: {
+    type: Number,
+    default: 0,
+  },
+  maxResendAttempts: {
+    type: Number,
+    default: 3,
+  },
+  lastResendAt: {
+    type: Date,
     required: false,
   },
   driverOffers: [{
@@ -738,6 +831,9 @@ bookingSchema.index({ "rating.driverRating.stars": 1 });
 bookingSchema.index({ "receipt.receiptNumber": 1 });
 bookingSchema.index({ cancelledBy: 1 });
 bookingSchema.index({ cancelledAt: 1 });
+bookingSchema.index({ resendAttempts: 1 });
+bookingSchema.index({ lastResendAt: 1 });
+bookingSchema.index({ "userFareIncreases.increasedAt": 1 });
 
 bookingSchema.pre("save", function (next) {
   this.updatedAt = Date.now();

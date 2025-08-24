@@ -261,6 +261,18 @@ const userSchema = new mongoose.Schema(
           type: Boolean,
           default: false,
         },
+        acceptFamilyWithGuardianMale: {
+          type: Boolean,
+          default: false,
+        },
+        acceptMaleWithoutFemale: {
+          type: Boolean,
+          default: false,
+        },
+        acceptNoMaleCompanion: {
+          type: Boolean,
+          default: false,
+        },
       },
     },
   },
