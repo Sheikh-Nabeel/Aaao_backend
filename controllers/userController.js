@@ -1121,6 +1121,41 @@ const getPendingKYCs = asyncHandler(async (req, res) => {
   });
 });
 
+// Set vehicle ownership status
+const setVehicleOwnership = asyncHandler(async (req, res) => {
+  const { hasVehicle } = req.body;
+  const userId = req.user._id;
+
+  if (!hasVehicle || !["yes", "no"].includes(hasVehicle)) {
+    return res.status(400).json({
+      message: "hasVehicle must be either 'yes' or 'no'",
+      token: req.cookies.token,
+    });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  user.hasVehicle = hasVehicle;
+  await user.save();
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  
+  res.status(200).json({
+    message: `Vehicle ownership status updated to '${hasVehicle}'`,
+    hasVehicle: user.hasVehicle,
+    token,
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -1137,4 +1172,5 @@ export {
   approveKYC,
   rejectKYC,
   getPendingKYCs,
+  setVehicleOwnership,
 };

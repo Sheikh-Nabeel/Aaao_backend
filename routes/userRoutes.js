@@ -15,6 +15,7 @@ import {
   fixReferralRelationships,
   getReferralTree,
   getReferralLink,
+  setVehicleOwnership,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -67,6 +68,7 @@ router.post(
 );
 router.post("/logout", authHandler, logout);
 router.post("/resend-otp", resendOtp);
+router.post("/set-vehicle-ownership", authHandler, setVehicleOwnership);
 
 // Admin routes
 router.get("/pending-kycs", authHandler, adminMiddleware, getPendingKYCs);
