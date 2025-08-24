@@ -107,6 +107,162 @@ const userSchema = new mongoose.Schema(
       default: "customer",
       enum: ["customer", "driver", "admin", "superadmin"],
     },
+    // Driver payment tracking for cash rides
+    driverPaymentTracking: {
+      totalPendingAmount: {
+        type: Number,
+        default: 0,
+      },
+      unpaidRidesCount: {
+        type: Number,
+        default: 0,
+      },
+      lastPaymentDate: {
+        type: Date,
+        required: false,
+      },
+      isRestricted: {
+        type: Boolean,
+        default: false, // true if driver has 3+ unpaid rides
+      },
+      restrictedAt: {
+        type: Date,
+        required: false,
+      },
+      paymentHistory: [{
+        amount: {
+          type: Number,
+          required: true,
+        },
+        paidAt: {
+          type: Date,
+          default: Date.now,
+        },
+        bookingId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Booking",
+          required: false,
+        },
+        paymentMethod: {
+          type: String,
+          enum: ["cash", "bank_transfer", "adjustment"],
+          default: "cash",
+        },
+      }],
+    },
+    // Driver wallet for earnings
+    wallet: {
+      balance: {
+        type: Number,
+        default: 0,
+      },
+      totalEarnings: {
+        type: Number,
+        default: 0,
+      },
+      lastUpdated: {
+        type: Date,
+        default: Date.now,
+      },
+    },
+    // Game Points System
+    gamePoints: {
+      tgp: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      pgp: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      lastUpdated: {
+        type: Date,
+        default: Date.now,
+      },
+    },
+    // Driver location tracking
+    currentLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        default: [0, 0]
+      },
+      address: {
+        type: String,
+        default: ''
+      },
+      lastUpdated: {
+        type: Date,
+        default: Date.now
+      }
+    },
+    // Driver status for real-time tracking
+    isActive: {
+      type: Boolean,
+      default: false
+    },
+    driverStatus: {
+      type: String,
+      enum: ['online', 'offline', 'busy'],
+      default: 'offline'
+    },
+    lastActiveAt: {
+      type: Date,
+      default: Date.now
+    },
+    // Driver settings for auto-accept and ride preferences
+    driverSettings: {
+      autoAccept: {
+        enabled: {
+          type: Boolean,
+          default: false,
+        },
+        minFare: {
+          type: Number,
+          default: 100,
+        },
+      },
+      ridePreferences: {
+        acceptBike: {
+          type: Boolean,
+          default: true,
+        },
+        acceptRickshaw: {
+          type: Boolean,
+          default: true,
+        },
+        acceptCar: {
+          type: Boolean,
+          default: true,
+        },
+        acceptMini: {
+          type: Boolean,
+          default: true,
+        },
+        pinkCaptainMode: {
+          type: Boolean,
+          default: false,
+        },
+        acceptFemaleOnly: {
+          type: Boolean,
+          default: false,
+        },
+        acceptFamilyRides: {
+          type: Boolean,
+          default: false,
+        },
+        acceptSafeRides: {
+          type: Boolean,
+          default: false,
+        },
+      },
+    },
   },
   { timestamps: true } // Add timestamps option
 );
@@ -131,6 +287,24 @@ userSchema.index({ pendingVehicleData: 1 });
 userSchema.index({ sponsorBy: 1, level: 1 });
 userSchema.index({ level: 1, createdAt: -1 });
 userSchema.index({ kycLevel: 1, role: 1 });
+// New indexes for driver payment tracking
+userSchema.index({ "driverPaymentTracking.isRestricted": 1 });
+userSchema.index({ "driverPaymentTracking.unpaidRidesCount": 1 });
+userSchema.index({ "driverPaymentTracking.totalPendingAmount": 1 });
+userSchema.index({ "wallet.balance": 1 });
+// Indexes for game points
+userSchema.index({ "gamePoints.tgp": 1 });
+userSchema.index({ "gamePoints.pgp": 1 });
+// Indexes for driver location and status
+userSchema.index({ "currentLocation": "2dsphere" });
+userSchema.index({ "isActive": 1 });
+userSchema.index({ "driverStatus": 1 });
+userSchema.index({ "lastActiveAt": 1 });
+userSchema.index({ "role": 1, "isActive": 1, "driverStatus": 1 });
+// Indexes for driver settings
+userSchema.index({ "driverSettings.autoAccept.enabled": 1 });
+userSchema.index({ "driverSettings.ridePreferences.pinkCaptainMode": 1 });
+userSchema.index({ role: 1, "driverSettings.autoAccept.enabled": 1 });
 
 userSchema.pre("save", async function (next) {
   if (this.isModified("password")) {
