@@ -275,6 +275,37 @@ const userSchema = new mongoose.Schema(
         },
       },
     },
+    // Pinned and favorite drivers for users
+    pinnedDrivers: [{
+      driverId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+      },
+      pinnedAt: {
+        type: Date,
+        default: Date.now
+      },
+      note: {
+        type: String,
+        default: ''
+      }
+    }],
+    favoriteDrivers: [{
+      driverId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+      },
+      favoritedAt: {
+        type: Date,
+        default: Date.now
+      },
+      note: {
+        type: String,
+        default: ''
+      }
+    }],
   },
   { timestamps: true } // Add timestamps option
 );

@@ -17,6 +17,15 @@ import {
   getRideMessages,
   submitRating,
   getRideReceipt,
+  // New REST API imports
+  rejectBooking,
+  modifyBookingFare,
+  sendMessage,
+  updateDriverLocation,
+  updateUserLocation,
+  updateDriverStatus,
+  updateAutoAcceptSettings,
+  updateRidePreferences,
 } from "../controllers/bookingController.js";
 import authHandler from "../middlewares/authMIddleware.js";
 
@@ -43,5 +52,15 @@ router.post("/:bookingId/complete", authHandler, completeRide);
 router.get("/:bookingId/messages", authHandler, getRideMessages);
 router.post("/:bookingId/rating", authHandler, submitRating);
 router.get("/:bookingId/receipt", authHandler, getRideReceipt);
+
+// New REST API endpoints for real-time operations
+router.post("/:bookingId/reject", authHandler, rejectBooking);
+router.post("/:bookingId/modify-fare", authHandler, modifyBookingFare);
+router.post("/:bookingId/send-message", authHandler, sendMessage);
+router.post("/driver/location", authHandler, updateDriverLocation);
+router.post("/user/location", authHandler, updateUserLocation);
+router.post("/driver/status", authHandler, updateDriverStatus);
+router.post("/driver/auto-accept-settings", authHandler, updateAutoAcceptSettings);
+router.post("/driver/ride-preferences", authHandler, updateRidePreferences);
 
 export default router;

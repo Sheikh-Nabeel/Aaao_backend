@@ -1641,6 +1641,20 @@ export const findNearbyDrivers = async (booking, io = null) => {
     console.log('Vehicle Type:', booking.vehicleType);
     console.log('Driver Preference:', booking.driverPreference);
     
+    // Handle pinned driver preference
+    if (booking.driverPreference === 'pinned' && booking.pinnedDriverId) {
+      console.log('Pinned driver requested:', booking.pinnedDriverId);
+      const pinnedDriver = await User.findById(booking.pinnedDriverId);
+      
+      if (pinnedDriver && pinnedDriver.role === 'driver' && pinnedDriver.isActive) {
+        console.log('Pinned driver found and active:', pinnedDriver.email);
+        return [pinnedDriver];
+      } else {
+        console.log('Pinned driver not found or not active');
+        return [];
+      }
+    }
+    
     let driverQuery = {
       role: 'driver',
       kycLevel: 2,

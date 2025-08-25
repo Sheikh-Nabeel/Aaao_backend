@@ -1156,6 +1156,445 @@ const setVehicleOwnership = asyncHandler(async (req, res) => {
   });
 });
 
+// Add driver to pinned list
+const addPinnedDriver = asyncHandler(async (req, res) => {
+  const { driverId, note = '' } = req.body;
+  const userId = req.user._id;
+
+  if (!driverId) {
+    return res.status(400).json({
+      message: "Driver ID is required",
+      token: req.cookies.token,
+    });
+  }
+
+  // Validate driver exists and is actually a driver
+  const driver = await User.findById(driverId);
+  if (!driver || driver.role !== 'driver') {
+    return res.status(404).json({
+      message: "Driver not found",
+      token: req.cookies.token,
+    });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  // Check if driver is already pinned
+  const alreadyPinned = user.pinnedDrivers.find(pinned => 
+    pinned.driverId.toString() === driverId
+  );
+
+  if (alreadyPinned) {
+    return res.status(400).json({
+      message: "Driver is already pinned",
+      token: req.cookies.token,
+    });
+  }
+
+  // Add to pinned drivers
+  user.pinnedDrivers.push({
+    driverId: driverId,
+    pinnedAt: new Date(),
+    note: note
+  });
+
+  await user.save();
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Driver added to pinned list successfully",
+    pinnedDriver: {
+      driverId: driver._id,
+      driverName: `${driver.firstName} ${driver.lastName}`,
+      driverEmail: driver.email,
+      pinnedAt: user.pinnedDrivers[user.pinnedDrivers.length - 1].pinnedAt,
+      note: note
+    },
+    token,
+  });
+});
+
+// Remove driver from pinned list
+const removePinnedDriver = asyncHandler(async (req, res) => {
+  const { driverId } = req.params;
+  const userId = req.user._id;
+
+  if (!driverId) {
+    return res.status(400).json({
+      message: "Driver ID is required",
+      token: req.cookies.token,
+    });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  // Find and remove from pinned drivers
+  const pinnedIndex = user.pinnedDrivers.findIndex(pinned => 
+    pinned.driverId.toString() === driverId
+  );
+
+  if (pinnedIndex === -1) {
+    return res.status(404).json({
+      message: "Driver not found in pinned list",
+      token: req.cookies.token,
+    });
+  }
+
+  const removedDriver = user.pinnedDrivers[pinnedIndex];
+  user.pinnedDrivers.splice(pinnedIndex, 1);
+  await user.save();
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Driver removed from pinned list successfully",
+    removedDriver: {
+      driverId: removedDriver.driverId,
+      pinnedAt: removedDriver.pinnedAt,
+      note: removedDriver.note
+    },
+    token,
+  });
+});
+
+// Get pinned drivers list
+const getPinnedDrivers = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  const user = await User.findById(userId).populate('pinnedDrivers.driverId', 'firstName lastName email phoneNumber gender kycLevel kycStatus isActive currentLocation');
+  
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  const pinnedDrivers = user.pinnedDrivers.map(pinned => ({
+    driverId: pinned.driverId._id,
+    driverName: `${pinned.driverId.firstName} ${pinned.driverId.lastName}`,
+    driverEmail: pinned.driverId.email,
+    driverPhone: pinned.driverId.phoneNumber,
+    driverGender: pinned.driverId.gender,
+    driverKycLevel: pinned.driverId.kycLevel,
+    driverKycStatus: pinned.driverId.kycStatus,
+    isActive: pinned.driverId.isActive,
+    currentLocation: pinned.driverId.currentLocation,
+    pinnedAt: pinned.pinnedAt,
+    note: pinned.note
+  }));
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Pinned drivers retrieved successfully",
+    pinnedDrivers,
+    totalPinned: pinnedDrivers.length,
+    token,
+  });
+});
+
+// Add driver to favorites list
+const addFavoriteDriver = asyncHandler(async (req, res) => {
+  const { driverId, note = '' } = req.body;
+  const userId = req.user._id;
+
+  if (!driverId) {
+    return res.status(400).json({
+      message: "Driver ID is required",
+      token: req.cookies.token,
+    });
+  }
+
+  // Validate driver exists and is actually a driver
+  const driver = await User.findById(driverId);
+  if (!driver || driver.role !== 'driver') {
+    return res.status(404).json({
+      message: "Driver not found",
+      token: req.cookies.token,
+    });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  // Check if driver is already in favorites
+  const alreadyFavorited = user.favoriteDrivers.find(favorite => 
+    favorite.driverId.toString() === driverId
+  );
+
+  if (alreadyFavorited) {
+    return res.status(400).json({
+      message: "Driver is already in favorites",
+      token: req.cookies.token,
+    });
+  }
+
+  // Add to favorite drivers
+  user.favoriteDrivers.push({
+    driverId: driverId,
+    favoritedAt: new Date(),
+    note: note
+  });
+
+  await user.save();
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Driver added to favorites successfully",
+    favoriteDriver: {
+      driverId: driver._id,
+      driverName: `${driver.firstName} ${driver.lastName}`,
+      driverEmail: driver.email,
+      favoritedAt: user.favoriteDrivers[user.favoriteDrivers.length - 1].favoritedAt,
+      note: note
+    },
+    token,
+  });
+});
+
+// Remove driver from favorites list
+const removeFavoriteDriver = asyncHandler(async (req, res) => {
+  const { driverId } = req.params;
+  const userId = req.user._id;
+
+  if (!driverId) {
+    return res.status(400).json({
+      message: "Driver ID is required",
+      token: req.cookies.token,
+    });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  // Find and remove from favorite drivers
+  const favoriteIndex = user.favoriteDrivers.findIndex(favorite => 
+    favorite.driverId.toString() === driverId
+  );
+
+  if (favoriteIndex === -1) {
+    return res.status(404).json({
+      message: "Driver not found in favorites list",
+      token: req.cookies.token,
+    });
+  }
+
+  const removedDriver = user.favoriteDrivers[favoriteIndex];
+  user.favoriteDrivers.splice(favoriteIndex, 1);
+  await user.save();
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Driver removed from favorites successfully",
+    removedDriver: {
+      driverId: removedDriver.driverId,
+      favoritedAt: removedDriver.favoritedAt,
+      note: removedDriver.note
+    },
+    token,
+  });
+});
+
+// Get favorite drivers list
+const getFavoriteDrivers = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  const user = await User.findById(userId).populate('favoriteDrivers.driverId', 'firstName lastName email phoneNumber gender kycLevel kycStatus isActive currentLocation');
+  
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  const favoriteDrivers = user.favoriteDrivers.map(favorite => ({
+    driverId: favorite.driverId._id,
+    driverName: `${favorite.driverId.firstName} ${favorite.driverId.lastName}`,
+    driverEmail: favorite.driverId.email,
+    driverPhone: favorite.driverId.phoneNumber,
+    driverGender: favorite.driverId.gender,
+    driverKycLevel: favorite.driverId.kycLevel,
+    driverKycStatus: favorite.driverId.kycStatus,
+    isActive: favorite.driverId.isActive,
+    currentLocation: favorite.driverId.currentLocation,
+    favoritedAt: favorite.favoritedAt,
+    note: favorite.note
+  }));
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Favorite drivers retrieved successfully",
+    favoriteDrivers,
+    totalFavorites: favoriteDrivers.length,
+    token,
+  });
+});
+
+// Get nearby drivers for user (useful for showing available drivers)
+const getNearbyDriversForUser = asyncHandler(async (req, res) => {
+  const { lat, lon, radius = 5, serviceType = null, vehicleType = null } = req.query;
+  const userId = req.user._id;
+
+  if (!lat || !lon) {
+    return res.status(400).json({
+      message: "Latitude and longitude are required",
+      token: req.cookies.token,
+    });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({
+      message: "User not found",
+      token: req.cookies.token,
+    });
+  }
+
+  try {
+    // Build driver query
+    let driverQuery = {
+      role: 'driver',
+      kycLevel: 2,
+      kycStatus: 'approved',
+      isActive: true,
+      currentLocation: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [parseFloat(lon), parseFloat(lat)]
+          },
+          $maxDistance: radius * 1000 // Convert km to meters
+        }
+      }
+    };
+
+    // Add service type filter if specified
+    if (serviceType) {
+      driverQuery.vehicleType = serviceType;
+    }
+
+    // Add vehicle type filter if specified
+    if (vehicleType) {
+      driverQuery.vehicleType = vehicleType;
+    }
+
+    const nearbyDrivers = await User.find(driverQuery)
+      .select('firstName lastName email phoneNumber gender kycLevel kycStatus isActive currentLocation vehicleType')
+      .limit(20);
+
+    const driversWithDistance = nearbyDrivers.map(driver => {
+      const distance = calculateDistance(
+        parseFloat(lat),
+        parseFloat(lon),
+        driver.currentLocation.coordinates[1],
+        driver.currentLocation.coordinates[0]
+      );
+
+      return {
+        driverId: driver._id,
+        driverName: `${driver.firstName} ${driver.lastName}`,
+        driverEmail: driver.email,
+        driverPhone: driver.phoneNumber,
+        driverGender: driver.gender,
+        driverKycLevel: driver.kycLevel,
+        driverKycStatus: driver.kycStatus,
+        isActive: driver.isActive,
+        vehicleType: driver.vehicleType,
+        currentLocation: driver.currentLocation,
+        distance: Math.round(distance * 100) / 100, // Round to 2 decimal places
+        isPinned: user.pinnedDrivers.some(pinned => pinned.driverId.toString() === driver._id.toString()),
+        isFavorite: user.favoriteDrivers.some(favorite => favorite.driverId.toString() === driver._id.toString())
+      };
+    });
+
+    // Sort by distance
+    driversWithDistance.sort((a, b) => a.distance - b.distance);
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRY,
+    });
+    res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+    res.status(200).json({
+      message: "Nearby drivers retrieved successfully",
+      nearbyDrivers: driversWithDistance,
+      totalDrivers: driversWithDistance.length,
+      searchRadius: radius,
+      userLocation: { lat: parseFloat(lat), lon: parseFloat(lon) },
+      token,
+    });
+
+  } catch (error) {
+    console.error('Error finding nearby drivers:', error);
+    res.status(500).json({
+      message: "Error finding nearby drivers",
+      error: error.message,
+      token: req.cookies.token,
+    });
+  }
+});
+
+// Helper function to calculate distance between two coordinates
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 export {
   signupUser,
   verifyOTPUser,
@@ -1173,4 +1612,11 @@ export {
   rejectKYC,
   getPendingKYCs,
   setVehicleOwnership,
+  addPinnedDriver,
+  removePinnedDriver,
+  getPinnedDrivers,
+  addFavoriteDriver,
+  removeFavoriteDriver,
+  getFavoriteDrivers,
+  getNearbyDriversForUser,
 };

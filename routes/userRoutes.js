@@ -16,6 +16,13 @@ import {
   getReferralTree,
   getReferralLink,
   setVehicleOwnership,
+  addPinnedDriver,
+  removePinnedDriver,
+  getPinnedDrivers,
+  addFavoriteDriver,
+  removeFavoriteDriver,
+  getFavoriteDrivers,
+  getNearbyDriversForUser,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -69,6 +76,18 @@ router.post(
 router.post("/logout", authHandler, logout);
 router.post("/resend-otp", resendOtp);
 router.post("/set-vehicle-ownership", authHandler, setVehicleOwnership);
+
+// Pinned and Favorite Drivers Management
+router.post("/pinned-drivers", authHandler, addPinnedDriver);
+router.delete("/pinned-drivers/:driverId", authHandler, removePinnedDriver);
+router.get("/pinned-drivers", authHandler, getPinnedDrivers);
+
+router.post("/favorite-drivers", authHandler, addFavoriteDriver);
+router.delete("/favorite-drivers/:driverId", authHandler, removeFavoriteDriver);
+router.get("/favorite-drivers", authHandler, getFavoriteDrivers);
+
+// Get nearby drivers for user
+router.get("/nearby-drivers", authHandler, getNearbyDriversForUser);
 
 // Admin routes
 router.get("/pending-kycs", authHandler, adminMiddleware, getPendingKYCs);

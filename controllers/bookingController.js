@@ -23,7 +23,8 @@ const getFareAdjustmentSettings = async (serviceType) => {
     return {
       allowedAdjustmentPercentage: 3,
       enableUserFareAdjustment: true,
-      enablePendingBookingFareIncrease: true
+      enablePendingBookingFareIncrease: true,
+      enableDriverFareAdjustment: true,
     };
   } catch (error) {
     console.error('Error fetching fare adjustment settings:', error);
@@ -31,7 +32,8 @@ const getFareAdjustmentSettings = async (serviceType) => {
     return {
       allowedAdjustmentPercentage: 3,
       enableUserFareAdjustment: true,
-      enablePendingBookingFareIncrease: true
+      enablePendingBookingFareIncrease: true,
+      enableDriverFareAdjustment: true,
     };
   }
 };
@@ -2201,6 +2203,535 @@ const getRideReceipt = asyncHandler(async (req, res) => {
   }
 });
 
+// Reject booking request (REST API endpoint)
+const rejectBooking = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const { reason } = req.body;
+  const driverId = req.user._id;
+
+  const user = await User.findById(driverId);
+  if (!user || user.role !== "driver" || user.kycLevel < 2 || user.kycStatus !== "approved") {
+    return res.status(403).json({
+      message: "Only approved drivers can reject bookings",
+      token: req.cookies.token,
+    });
+  }
+
+  const booking = await Booking.findById(bookingId);
+  if (!booking) {
+    return res.status(404).json({
+      message: "Booking not found",
+      token: req.cookies.token,
+    });
+  }
+
+  if (booking.status !== "pending") {
+    return res.status(400).json({
+      message: "Booking is no longer available",
+      token: req.cookies.token,
+    });
+  }
+
+  // Add driver to rejected list
+  if (!booking.rejectedDrivers) {
+    booking.rejectedDrivers = [];
+  }
+
+  booking.rejectedDrivers.push({
+    driver: driverId,
+    reason: reason || "No reason provided",
+    rejectedAt: new Date(),
+  });
+
+  await booking.save();
+
+  // Get Socket.IO instance for real-time notification
+  const io = req.app.get("io");
+  if (io) {
+    io.to(`user_${booking.user}`).emit("booking_rejected", {
+      bookingId: booking._id,
+      message: "Booking has been rejected by a driver",
+      reason: reason || "No reason provided",
+    });
+  }
+
+  const token = jwt.sign({ id: driverId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Booking rejected successfully",
+    bookingId: booking._id,
+    token,
+  });
+});
+
+// Modify booking fare (Driver action - REST API endpoint)
+const modifyBookingFare = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const { newFare, reason } = req.body;
+  const driverId = req.user._id;
+
+  const user = await User.findById(driverId);
+  if (!user || user.role !== "driver" || user.kycLevel < 2 || user.kycStatus !== "approved") {
+    return res.status(403).json({
+      message: "Only approved drivers can modify fare",
+      token: req.cookies.token,
+    });
+  }
+
+  if (!newFare) {
+    return res.status(400).json({
+      message: "New fare is required",
+      token: req.cookies.token,
+    });
+  }
+
+  const booking = await Booking.findById(bookingId).populate("user", "firstName lastName email phoneNumber");
+  if (!booking) {
+    return res.status(404).json({
+      message: "Booking not found",
+      token: req.cookies.token,
+    });
+  }
+
+  if (booking.status !== "pending") {
+    return res.status(400).json({
+      message: "Fare can only be modified for pending bookings",
+      token: req.cookies.token,
+    });
+  }
+
+  // Get fare adjustment settings
+  const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
+  if (!fareSettings.enableDriverFareAdjustment) {
+    return res.status(400).json({
+      message: "Driver fare adjustment is disabled",
+      token: req.cookies.token,
+    });
+  }
+
+  // Validate fare adjustment limits
+  const originalFare = booking.fare;
+  const maxAllowedFare = originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
+  const minAllowedFare = originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
+
+  if (newFare > maxAllowedFare || newFare < minAllowedFare) {
+    return res.status(400).json({
+      message: `Fare adjustment exceeds allowed limit of ${fareSettings.allowedAdjustmentPercentage}%`,
+      allowedRange: { min: minAllowedFare, max: maxAllowedFare },
+      token: req.cookies.token,
+    });
+  }
+
+  // Store fare modification request
+  booking.fareModificationRequest = {
+    requestedBy: driverId,
+    originalFare: originalFare,
+    requestedFare: newFare,
+    reason: reason || "No reason provided",
+    requestedAt: new Date(),
+    status: "pending",
+  };
+
+  await booking.save();
+
+  // Get Socket.IO instance for real-time notification
+  const io = req.app.get("io");
+  if (io) {
+    io.to(`user_${booking.user._id}`).emit("fare_modification_request", {
+      bookingId: booking._id,
+      originalFare: originalFare,
+      requestedFare: newFare,
+      reason: reason || "No reason provided",
+      driver: {
+        id: driverId,
+        name: `${user.firstName} ${user.lastName}`,
+      },
+      requestedAt: booking.fareModificationRequest.requestedAt,
+    });
+  }
+
+  const token = jwt.sign({ id: driverId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Fare modification request sent to user",
+    bookingId: booking._id,
+    originalFare: originalFare,
+    requestedFare: newFare,
+    token,
+  });
+});
+
+// Send message (REST API endpoint)
+const sendMessage = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const { message, messageType = "text", location } = req.body;
+  const userId = req.user._id;
+
+  if (!message) {
+    return res.status(400).json({
+      message: "Message is required",
+      token: req.cookies.token,
+    });
+  }
+
+  const booking = await Booking.findById(bookingId)
+    .populate("user", "_id firstName lastName")
+    .populate("driver", "_id firstName lastName");
+
+  if (!booking) {
+    return res.status(404).json({
+      message: "Booking not found",
+      token: req.cookies.token,
+    });
+  }
+
+  // Verify user authorization
+  const isUser = booking.user._id.toString() === userId.toString();
+  const isDriver = booking.driver && booking.driver._id.toString() === userId.toString();
+
+  if (!isUser && !isDriver) {
+    return res.status(403).json({
+      message: "Unauthorized to send message for this booking",
+      token: req.cookies.token,
+    });
+  }
+
+  if (!["accepted", "started", "in_progress"].includes(booking.status)) {
+    return res.status(400).json({
+      message: "Messages can only be sent for active rides",
+      token: req.cookies.token,
+    });
+  }
+
+  // Create message object
+  const newMessage = {
+    sender: userId,
+    senderType: isUser ? "user" : "driver",
+    message: message.trim(),
+    messageType: messageType,
+    timestamp: new Date(),
+  };
+
+  // Add location if provided for location messages
+  if (messageType === "location" && location && location.coordinates) {
+    newMessage.location = {
+      type: "Point",
+      coordinates: location.coordinates,
+    };
+  }
+
+  // Add message to booking
+  booking.messages.push(newMessage);
+  await booking.save();
+
+  // Get Socket.IO instance for real-time notification
+  const io = req.app.get("io");
+  if (io) {
+    const messageData = {
+      bookingId: booking._id,
+      message: {
+        id: newMessage._id,
+        sender: {
+          id: userId,
+          name: isUser ? `${booking.user.firstName} ${booking.user.lastName}` : `${booking.driver.firstName} ${booking.driver.lastName}`,
+          type: isUser ? "user" : "driver",
+        },
+        content: newMessage.message,
+        messageType: newMessage.messageType,
+        location: newMessage.location,
+        timestamp: newMessage.timestamp,
+      },
+    };
+
+    // Send to the other party
+    if (isUser) {
+      io.to(`driver_${booking.driver._id}`).emit("message_received", messageData);
+    } else {
+      io.to(`user_${booking.user._id}`).emit("ride_message", messageData);
+    }
+  }
+
+  const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Message sent successfully",
+    bookingId: booking._id,
+    messageId: newMessage._id,
+    timestamp: newMessage.timestamp,
+    token,
+  });
+});
+
+// Update driver location (REST API endpoint)
+const updateDriverLocation = asyncHandler(async (req, res) => {
+  const { coordinates, address, heading, speed } = req.body;
+  const driverId = req.user._id;
+
+  const user = await User.findById(driverId);
+  if (!user || user.role !== "driver") {
+    return res.status(403).json({
+      message: "Only drivers can update location",
+      token: req.cookies.token,
+    });
+  }
+
+  if (!coordinates || coordinates.length !== 2) {
+    return res.status(400).json({
+      message: "Valid coordinates are required",
+      token: req.cookies.token,
+    });
+  }
+
+  // Update driver location
+  user.currentLocation = {
+    type: "Point",
+    coordinates: coordinates,
+    address: address || "",
+    heading: heading || 0,
+    speed: speed || 0,
+    lastUpdated: new Date(),
+  };
+
+  await user.save();
+
+  // Get Socket.IO instance for real-time notification
+  const io = req.app.get("io");
+  if (io) {
+    // Broadcast location to users who have active bookings with this driver
+    const activeBookings = await Booking.find({
+      driver: driverId,
+      status: { $in: ["accepted", "started", "in_progress"] },
+    }).populate("user", "_id");
+
+    activeBookings.forEach((booking) => {
+      io.to(`user_${booking.user._id}`).emit("driver_location_update", {
+        bookingId: booking._id,
+        driverLocation: {
+          coordinates: user.currentLocation.coordinates,
+          heading: user.currentLocation.heading,
+          speed: user.currentLocation.speed,
+          timestamp: user.currentLocation.lastUpdated,
+        },
+      });
+    });
+  }
+
+  const token = jwt.sign({ id: driverId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Location updated successfully",
+    coordinates: user.currentLocation.coordinates,
+    timestamp: user.currentLocation.lastUpdated,
+    token,
+  });
+});
+
+// Update user location (REST API endpoint)
+const updateUserLocation = asyncHandler(async (req, res) => {
+  const { coordinates, address, bookingId } = req.body;
+  const userId = req.user._id;
+
+  const user = await User.findById(userId);
+  if (!user || user.role !== "user") {
+    return res.status(403).json({
+      message: "Only users can update user location",
+      token: req.cookies.token,
+    });
+  }
+
+  if (!coordinates || coordinates.length !== 2) {
+    return res.status(400).json({
+      message: "Valid coordinates are required",
+      token: req.cookies.token,
+    });
+  }
+
+  // Update user location
+  user.currentLocation = {
+    type: "Point",
+    coordinates: coordinates,
+    address: address || "",
+    lastUpdated: new Date(),
+  };
+
+  await user.save();
+
+  // Get Socket.IO instance for real-time notification
+  const io = req.app.get("io");
+  if (io && bookingId) {
+    const booking = await Booking.findById(bookingId).populate("driver", "_id");
+    if (booking && booking.driver && ["accepted", "started", "in_progress"].includes(booking.status)) {
+      io.to(`driver_${booking.driver._id}`).emit("user_location_update", {
+        bookingId: booking._id,
+        userLocation: {
+          coordinates: user.currentLocation.coordinates,
+          address: user.currentLocation.address,
+          timestamp: user.currentLocation.lastUpdated,
+        },
+      });
+    }
+  }
+
+  const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Location updated successfully",
+    coordinates: user.currentLocation.coordinates,
+    timestamp: user.currentLocation.lastUpdated,
+    token,
+  });
+});
+
+// Update driver status (REST API endpoint)
+const updateDriverStatus = asyncHandler(async (req, res) => {
+  const { isActive, currentLocation } = req.body;
+  const driverId = req.user._id;
+
+  const user = await User.findById(driverId);
+  if (!user || user.role !== "driver") {
+    return res.status(403).json({
+      message: "Only drivers can update status",
+      token: req.cookies.token,
+    });
+  }
+
+  // Update driver status
+  user.isActive = isActive;
+  user.lastActiveAt = new Date();
+
+  if (currentLocation && currentLocation.coordinates) {
+    user.currentLocation = {
+      type: "Point",
+      coordinates: currentLocation.coordinates,
+      address: currentLocation.address || "",
+    };
+  }
+
+  await user.save();
+
+  const token = jwt.sign({ id: driverId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Driver status updated successfully",
+    isActive: user.isActive,
+    lastActiveAt: user.lastActiveAt,
+    token,
+  });
+});
+
+// Update auto accept settings (REST API endpoint)
+const updateAutoAcceptSettings = asyncHandler(async (req, res) => {
+  const { enabled, maxDistance, minFare, serviceTypes } = req.body;
+  const driverId = req.user._id;
+
+  const user = await User.findById(driverId);
+  if (!user || user.role !== "driver") {
+    return res.status(403).json({
+      message: "Only drivers can update auto-accept settings",
+      token: req.cookies.token,
+    });
+  }
+
+  // Initialize driverSettings if it doesn't exist
+  if (!user.driverSettings) {
+    user.driverSettings = {};
+  }
+
+  user.driverSettings.autoAcceptSettings = {
+    enabled: enabled || false,
+    maxDistance: maxDistance || 5,
+    minFare: minFare || 0,
+    serviceTypes: serviceTypes || [],
+    updatedAt: new Date(),
+  };
+
+  await user.save();
+
+  const token = jwt.sign({ id: driverId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Auto-accept settings updated successfully",
+    settings: user.driverSettings.autoAcceptSettings,
+    token,
+  });
+});
+
+// Update ride preferences (REST API endpoint)
+const updateRidePreferences = asyncHandler(async (req, res) => {
+  const {
+    acceptBike,
+    acceptRickshaw,
+    acceptCar,
+    acceptMini,
+    pinkCaptainMode,
+    acceptFemaleOnly,
+    acceptFamilyRides,
+    acceptSafeRides,
+    acceptFamilyWithGuardianMale,
+    acceptMaleWithoutFemale,
+    acceptNoMaleCompanion,
+    maxRideDistance,
+    preferredAreas,
+  } = req.body;
+  const driverId = req.user._id;
+
+  const user = await User.findById(driverId);
+  if (!user || user.role !== "driver") {
+    return res.status(403).json({
+      message: "Only drivers can update ride preferences",
+      token: req.cookies.token,
+    });
+  }
+
+  // Initialize driverSettings if it doesn't exist
+  if (!user.driverSettings) {
+    user.driverSettings = {};
+  }
+
+  user.driverSettings.ridePreferences = {
+    acceptBike: acceptBike || false,
+    acceptRickshaw: acceptRickshaw || false,
+    acceptCar: acceptCar || false,
+    acceptMini: acceptMini || false,
+    pinkCaptainMode: pinkCaptainMode || false,
+    acceptFemaleOnly: acceptFemaleOnly || false,
+    acceptFamilyRides: acceptFamilyRides || false,
+    acceptSafeRides: acceptSafeRides || false,
+    acceptFamilyWithGuardianMale: acceptFamilyWithGuardianMale || false,
+    acceptMaleWithoutFemale: acceptMaleWithoutFemale || false,
+    acceptNoMaleCompanion: acceptNoMaleCompanion || false,
+    maxRideDistance: maxRideDistance || 50,
+    preferredAreas: preferredAreas || [],
+    updatedAt: new Date(),
+  };
+
+  await user.save();
+
+  const token = jwt.sign({ id: driverId }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    message: "Ride preferences updated successfully",
+    preferences: user.driverSettings.ridePreferences,
+    token,
+  });
+});
+
 export {
   createBooking,
   getNearbyDrivers,
@@ -2219,4 +2750,13 @@ export {
   getRideMessages,
   submitRating,
   getRideReceipt,
+  // New REST API exports
+  rejectBooking,
+  modifyBookingFare,
+  sendMessage,
+  updateDriverLocation,
+  updateUserLocation,
+  updateDriverStatus,
+  updateAutoAcceptSettings,
+  updateRidePreferences,
 };
