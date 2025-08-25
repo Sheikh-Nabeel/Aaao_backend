@@ -122,16 +122,81 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     });
   }
 
-  if (![
-    "car cab", 
-    "bike", 
-    "car recovery", 
-    "shifting & movers"
-  ].includes(serviceType)) {
+  // Import vehicle options to ensure consistency
+  const VALID_SERVICE_TYPES = {
+    "car cab": ["economy", "premium", "xl", "family", "luxury"],
+    "bike": ["economy", "premium", "vip"],
+    "car recovery": [
+      "flatbed towing",
+      "wheel lift towing",
+      "on-road winching",
+      "off-road winching",
+      "battery jump start",
+      "fuel delivery",
+      "luxury & exotic car recovery",
+      "accident & collision recovery",
+      "heavy-duty vehicle recovery",
+      "basement pull-out",
+    ],
+    "shifting & movers": [
+      "mini pickup",
+      "suzuki carry",
+      "small van",
+      "medium truck",
+      "mazda",
+      "covered van",
+      "large truck",
+      "6-wheeler",
+      "container truck",
+    ],
+  };
+
+  const SERVICE_CATEGORY_MAP = {
+    "car recovery": {
+      "towing services": ["flatbed towing", "wheel lift towing"],
+      "winching services": ["on-road winching", "off-road winching"],
+      "roadside assistance": ["battery jump start", "fuel delivery"],
+      "specialized/heavy recovery": [
+        "luxury & exotic car recovery",
+        "accident & collision recovery",
+        "heavy-duty vehicle recovery",
+        "basement pull-out",
+      ],
+    },
+    "shifting & movers": {
+      "small mover": ["mini pickup", "suzuki carry", "small van"],
+      "medium mover": ["medium truck", "mazda", "covered van"],
+      "heavy mover": ["large truck", "6-wheeler", "container truck"],
+    },
+  };
+
+  if (!Object.keys(VALID_SERVICE_TYPES).includes(serviceType)) {
     return res.status(400).json({
-      message: "Invalid service type",
+      message: `Invalid service type. Valid options are: ${Object.keys(VALID_SERVICE_TYPES).join(", ")}`,
       token: req.cookies.token,
     });
+  }
+
+  // Validate vehicleType if provided
+  if (vehicleType && !VALID_SERVICE_TYPES[serviceType]?.includes(vehicleType)) {
+    return res.status(400).json({
+      message: `Invalid vehicleType '${vehicleType}' for serviceType '${serviceType}'. Valid options are: ${VALID_SERVICE_TYPES[serviceType].join(", ")}`,
+      token: req.cookies.token,
+    });
+  }
+
+  // Validate serviceCategory if provided
+  if (serviceCategory && SERVICE_CATEGORY_MAP[serviceType]) {
+    const categoryKey = serviceCategory.toLowerCase();
+    const mapKeys = Object.keys(SERVICE_CATEGORY_MAP[serviceType]);
+    const foundKey = mapKeys.find((k) => k.toLowerCase() === categoryKey);
+    const allowed = foundKey ? SERVICE_CATEGORY_MAP[serviceType][foundKey] : null;
+    if (allowed && vehicleType && !allowed.includes(vehicleType)) {
+      return res.status(400).json({
+        message: `vehicleType '${vehicleType}' does not belong to serviceCategory '${serviceCategory}'`,
+        token: req.cookies.token,
+      });
+    }
   }
 
   try {

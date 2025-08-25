@@ -88,11 +88,11 @@
 
 ## 🏗️ System Overview
 
-This booking system supports **4 main service types** with both **REST APIs** for database operations and **Socket.IO** for real-time communication:
+This booking system supports **4 main service types** with both **REST APIs** for database operations and **Socket.IO** for real-time communication. **All vehicle types and categories match the vehicle registration system for consistency:**
 
 ### Service Types:
 - 🚕 **Car Cab** (Economy, Premium, XL, Family, Luxury)
-- 🏍️ **Bike** (Standard bike service)
+- 🏍️ **Bike** (Economy, Premium, VIP)
 - 🚛 **Shifting & Movers** (Furniture moving, packing, loading)
 - 🔧 **Car Recovery** (Towing, winching, jump start, fuel delivery)
 
@@ -239,7 +239,7 @@ socket.emit('join_driver_room', driverId);
   },
   "serviceType": "bike",
   "serviceCategory": "transport",
-  "vehicleType": "bike",
+  "vehicleType": "economy",
   "routeType": "one_way",
   "distanceInMeters": 1500,
   "passengerCount": 1,
@@ -290,7 +290,7 @@ socket.emit('join_driver_room', driverId);
     "address": "Burj Khalifa, Dubai, UAE"
   },
   "serviceType": "bike",
-  "vehicleType": "bike",
+  "vehicleType": "economy",
   "distanceInMeters": 1500,
   "passengerCount": 1,
   "paymentMethod": "cash"
@@ -298,9 +298,9 @@ socket.emit('join_driver_room', driverId);
 ```
 
 #### **Bike Types Available:**
-- `bike` - Standard motorcycle
-- `scooter` - Electric scooter
-- `bicycle` - Manual bicycle
+- `economy` - Standard motorcycle
+- `premium` - Premium motorcycle with experienced rider
+- `vip` - High-end motorcycle for exclusive experience
 
 ### 3. 🚛 Shifting & Movers Service
 
@@ -428,13 +428,19 @@ socket.emit('join_driver_room', driverId);
 }
 ```
 
-#### **Vehicle Types Available:**
+#### **Service Categories & Vehicle Types:**
+
+**Small Mover:**
 - `mini pickup` - Small pickup truck (40 AED base + 12 AED/km)
 - `suzuki carry` - Suzuki carry van (45 AED base + 13 AED/km)
 - `small van` - Small moving van (50 AED base + 15 AED/km)
+
+**Medium Mover:**
 - `medium truck` - Medium-sized truck (80 AED base + 18 AED/km)
 - `mazda` - Mazda truck (85 AED base + 19 AED/km)
 - `covered van` - Covered moving van (100 AED base + 20 AED/km)
+
+**Heavy Mover:**
 - `large truck` - Large moving truck (150 AED base + 25 AED/km)
 - `6-wheeler` - 6-wheel truck (180 AED base + 28 AED/km)
 - `container truck` - Container truck (200 AED base + 30 AED/km)
@@ -552,15 +558,25 @@ socket.emit('join_driver_room', driverId);
 }
 ```
 
-#### **Vehicle Types Available:**
-- `flatbed towing` - Flatbed tow truck
-- `wheel lift towing` - Wheel lift tow truck
-- `on-road winching` - On-road winching service
-- `off-road winching` - Off-road winching service
+#### **Service Categories & Vehicle Types:**
+
+**Towing Services:**
+- `flatbed towing` - Flatbed tow truck (safest for all vehicles)
+- `wheel lift towing` - Wheel lift tow truck (quick & efficient)
+
+**Winching Services:**
+- `on-road winching` - On-road winching service (roadside recovery)
+- `off-road winching` - Off-road winching service (sand/mud recovery)
+
+**Roadside Assistance:**
 - `battery jump start` - Battery jump start service
 - `fuel delivery` - Fuel delivery service
+
+**Specialized/Heavy Recovery:**
 - `luxury & exotic car recovery` - Luxury car recovery
+- `accident & collision recovery` - Accident recovery
 - `heavy-duty vehicle recovery` - Heavy vehicle recovery
+- `basement pull-out` - Basement parking recovery
 
 #### **Urgency Levels:**
 - `low` - Non-urgent service
@@ -1468,7 +1484,7 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
   },
   "serviceType": "bike",
   "serviceCategory": "transport",
-  "vehicleType": "bike",
+  "vehicleType": "economy",
   "routeType": "one_way",
   "distanceInMeters": 1500,
   "passengerCount": 1,
