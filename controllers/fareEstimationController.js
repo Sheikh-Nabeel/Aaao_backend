@@ -75,12 +75,13 @@ const calculateFareByServiceType = async (serviceType, vehicleType, distance, ro
         serviceOptions: {}
       });
     
-    case "car recovery":
-      return calculateCarRecoveryFare({
-        serviceCategory: vehicleType,
-        distance: distanceInKm,
-        serviceDetails: {}
-      });
+         case "car recovery":
+       return calculateCarRecoveryFare({
+         vehicleType: vehicleType,
+         serviceCategory: serviceCategory || vehicleType,
+         distance: distanceInKm,
+         serviceDetails: {}
+       });
     
     default:
       return 20; // Default minimum fare
@@ -103,6 +104,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     paymentMethod = "cash"
   } = req.body;
   
+
   const userId = req.user._id;
 
   // Validation
@@ -218,9 +220,15 @@ const getFareEstimation = asyncHandler(async (req, res) => {
        fareResult = fareData;
     } else if (serviceType === "car recovery") {
       const fareData = await calculateCarRecoveryFare({
-        serviceCategory: serviceCategory || vehicleType,
+        vehicleType: vehicleType,
+        serviceCategory: serviceCategory,
         distance: distanceInMeters / 1000,
-        serviceDetails
+        serviceDetails,
+        routeType,
+        startTime: req.body.startTime ? new Date(req.body.startTime) : new Date(),
+        waitingMinutes: req.body.waitingMinutes || 0,
+        demandRatio: req.body.demandRatio || 1,
+        cityCode: req.body.cityCode || 'default'
       });
       estimatedFare = fareData?.totalCalculatedFare || fareData?.totalFare || 0;
       fareResult = fareData;

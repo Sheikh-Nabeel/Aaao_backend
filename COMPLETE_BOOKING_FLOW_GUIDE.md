@@ -73,6 +73,194 @@
 - `sofa`, `bed`, `dining_table`, `tv`, `wardrobe`
 - `fridge`, `washing_machine`, `ac`, `other`
 
+### **✅ Correct Car Recovery Request (Tested Successfully):**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Sheikh Zayed Road, Dubai"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Dubai Auto Service Center"
+  },
+  "serviceType": "car recovery",
+  "serviceCategory": "towing services",
+  "vehicleType": "flatbed towing",
+  "routeType": "one_way",
+  "distanceInMeters": 8000,
+  "passengerCount": 0,
+  "serviceDetails": {
+    "carRecovery": {
+      "issueDescription": "Engine won't start, battery seems dead",
+      "urgencyLevel": "high",
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Camry"
+    }
+  }
+}
+```
+
+**🔧 Test Different Car Recovery Services (ALL Dynamic Pricing):**
+
+**Towing Services (Dynamic Pricing):**
+- **Flatbed Towing:** `"vehicleType": "flatbed towing", "serviceCategory": "towing services"` (Base: 50 AED + 7.5/km + 25 AED convenience fee)
+- **Wheel Lift Towing:** `"vehicleType": "wheel lift towing", "serviceCategory": "towing services"` (Base: 50 AED + 7.5/km + 25 AED convenience fee)
+
+**Winching Services (Dynamic Pricing):**
+- **On-Road Winching:** `"vehicleType": "on-road winching", "serviceCategory": "winching services"` (Base: 50 AED + 7.5/km + 50 AED convenience fee)
+- **Off-Road Winching:** `"vehicleType": "off-road winching", "serviceCategory": "winching services"` (Base: 50 AED + 7.5/km + 50 AED convenience fee)
+
+**Roadside Assistance (Dynamic Pricing):**
+- **Battery Jump Start:** `"vehicleType": "battery jump start", "serviceCategory": "roadside assistance"` (Base: 50 AED + 7.5/km + 100 AED convenience fee)
+- **Fuel Delivery:** `"vehicleType": "fuel delivery", "serviceCategory": "roadside assistance"` (Base: 50 AED + 7.5/km + 100 AED convenience fee)
+
+**Specialized/Heavy Recovery (Dynamic Pricing):**
+- **Luxury & Exotic Car Recovery:** `"vehicleType": "luxury & exotic car recovery", "serviceCategory": "specialized/heavy recovery"` (Base: 50 AED + 7.5/km + 75 AED convenience fee)
+- **Heavy-Duty Vehicle Recovery:** `"vehicleType": "heavy-duty vehicle recovery", "serviceCategory": "specialized/heavy recovery"` (Base: 50 AED + 7.5/km + 75 AED convenience fee)
+
+**Example Dynamic Pricing Requests:**
+
+**1. Towing Services (Dynamic Pricing):**
+```json
+{
+  "pickupLocation": { "coordinates": [55.2708, 25.2048], "address": "Dubai Mall" },
+  "dropoffLocation": { "coordinates": [55.2744, 25.1972], "address": "Burj Khalifa" },
+  "serviceType": "car recovery",
+  "serviceCategory": "towing services",
+  "vehicleType": "flatbed towing",
+  "routeType": "one_way",
+  "distanceInMeters": 8000,
+  "startTime": "2024-01-15T14:30:00Z",
+  "waitingMinutes": 0,
+  "demandRatio": 1,
+  "cityCode": "dubai",
+  "serviceDetails": {
+    "carRecovery": {
+      "issueDescription": "Engine won't start",
+      "urgencyLevel": "high",
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Camry"
+    }
+  }
+}
+```
+
+**2. Winching Services (Dynamic Pricing):**
+```json
+{
+  "pickupLocation": { "coordinates": [55.2708, 25.2048], "address": "Dubai Mall" },
+  "dropoffLocation": { "coordinates": [55.2744, 25.1972], "address": "Burj Khalifa" },
+  "serviceType": "car recovery",
+  "serviceCategory": "winching services",
+  "vehicleType": "on-road winching",
+  "routeType": "one_way",
+  "distanceInMeters": 12000,
+  "startTime": "2024-01-15T14:30:00Z",
+  "waitingMinutes": 0,
+  "demandRatio": 1,
+  "cityCode": "dubai",
+  "serviceDetails": {
+    "carRecovery": {
+      "issueDescription": "Car stuck in sand",
+      "urgencyLevel": "high",
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Land Cruiser"
+    }
+  }
+}
+```
+
+**🔧 Test Dynamic Pricing Scenarios:**
+
+**1. Winching Services (Dynamic Pricing - Changes with Distance, Helpers, etc.):**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Dubai Mall"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Burj Khalifa"
+  },
+  "serviceType": "car recovery",
+  "serviceCategory": "winching services",
+  "vehicleType": "on-road winching",
+  "routeType": "one_way",
+  "distanceInMeters": 12000,
+  "waitingMinutes": 10,
+  "demandRatio": 2.5,
+  "startTime": "2024-01-15T23:30:00Z",
+  "serviceDetails": {
+    "carRecovery": {
+      "issueDescription": "Car stuck in sand",
+      "urgencyLevel": "high",
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Land Cruiser"
+    }
+  }
+}
+```
+
+**2. Roadside Assistance (Dynamic Pricing - Changes with Distance, Helpers, etc.):**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Dubai Mall"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Burj Khalifa"
+  },
+  "serviceType": "car recovery",
+  "serviceCategory": "roadside assistance",
+  "vehicleType": "battery jump start",
+  "routeType": "one_way",
+  "distanceInMeters": 8000,
+  "waitingMinutes": 15,
+  "demandRatio": 3.0,
+  "startTime": "2024-01-15T23:30:00Z",
+  "serviceDetails": {
+    "carRecovery": {
+      "issueDescription": "Battery dead",
+      "urgencyLevel": "high",
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Camry"
+    }
+  }
+}
+```
+
+**🧪 Test Different Scenarios (ALL Services Dynamic):**
+
+**Test 1: Towing Services - Change Distance (8km vs 12km)**
+- **8km:** Should give ~94.5 AED
+- **12km:** Should give ~152 AED
+
+**Test 2: Towing Services - Add Waiting Time**
+- **No waiting:** `"waitingMinutes": 0`
+- **With waiting:** `"waitingMinutes": 15` (adds AED 20 max)
+
+**Test 3: Towing Services - Night Charges**
+- **Daytime:** `"startTime": "2024-01-15T14:30:00Z"`
+- **Nighttime:** `"startTime": "2024-01-15T23:30:00Z"` (adds AED 10)
+
+**Test 4: Towing Services - Surge Pricing**
+- **Normal:** `"demandRatio": 1`
+- **High demand:** `"demandRatio": 2.5` (1.5x multiplier)
+- **Very high demand:** `"demandRatio": 3.0` (2.0x multiplier)
+
+**Test 5: Different Service Categories**
+- **Towing Services:** `"serviceCategory": "towing services"` (25 AED convenience fee)
+- **Winching Services:** `"serviceCategory": "winching services"` (50 AED convenience fee)
+- **Roadside Assistance:** `"serviceCategory": "roadside assistance"` (100 AED convenience fee)
+- **Specialized/Heavy Recovery:** `"serviceCategory": "specialized/heavy recovery"` (75 AED convenience fee)
+
+**✅ ALL Services Now Use Dynamic Pricing:**
+All car recovery services now change with distance, waiting time, surge, night charges, etc.
+
 ---
 
 ## 📋 Table of Contents
@@ -452,6 +640,38 @@ socket.emit('join_driver_room', driverId);
 
 ### 4. 🔧 Car Recovery Service
 
+> **✅ Tested Successfully:** 
+> - **Dynamic Pricing:** ALL car recovery services now use dynamic pricing that changes with distance, waiting time, surge, night charges, etc.
+> - **Towing Services:** 8km = 94.5 AED, 12km with waiting/surge/night = 202.13 AED
+> - **Winching Services:** 8km = 152.25 AED, 12km with waiting/surge/night = 228+ AED
+> - **Roadside Assistance:** 8km = 183+ AED, 12km with waiting/surge/night = 283+ AED
+> - **Specialized/Heavy Recovery:** 8km = 147 AED, varies with distance and conditions
+
+**Available Service Categories:**
+- `towing services` - Flatbed towing, Wheel lift towing (Dynamic pricing: 94.5+ AED)
+- `winching services` - On-road winching, Off-road winching (Dynamic pricing: 152+ AED)
+- `roadside assistance` - Battery jump start, Fuel delivery (Dynamic pricing: 183+ AED)
+- `specialized/heavy recovery` - Luxury & exotic car recovery, Accident & collision recovery, Heavy-duty vehicle recovery, Basement pull-out (Dynamic pricing: 147+ AED)
+
+**📋 Dynamic Pricing Structure (ALL Car Recovery Services):**
+
+1. **Base Fare:** AED 50 for first 6 km
+2. **Per KM Rate:** AED 7.5 per km after 6 km
+3. **Minimum Fare:** AED 50 (even for trips < 6 km)
+4. **Platform Fee:** 15% (7.5% driver, 7.5% customer)
+5. **Night Charges:** AED 10 (22:00-06:00)
+6. **Surge Pricing:** 1.5x (demand 2x) or 2.0x (demand 3x)
+7. **City-wise Pricing:** AED 5/km for trips >10 km in specific cities
+8. **Waiting Charges:** Free 5 min, then AED 2/min (max AED 20)
+9. **Convenience Fee:** 
+   - AED 25 (towing services)
+   - AED 50 (winching services) 
+   - AED 100 (roadside assistance)
+   - AED 75 (specialized/heavy recovery)
+10. **VAT:** 5% on total fare
+11. **Refreshment Alert:** For rides >20 km or >30 minutes
+12. **Free Stay:** 0.5 min/km for round trips (max 30 min)
+
 #### **Complete Request Body:**
 ```json
 {
@@ -464,7 +684,7 @@ socket.emit('join_driver_room', driverId);
     "address": "Dubai Auto Service Center"
   },
   "serviceType": "car recovery",
-  "serviceCategory": "emergency",
+  "serviceCategory": "towing services",
   "vehicleType": "flatbed towing",
   "routeType": "one_way",
   "distanceInMeters": 8000,
@@ -545,6 +765,7 @@ socket.emit('join_driver_room', driverId);
     "address": "Dubai Auto Service Center"
   },
   "serviceType": "car recovery",
+  "serviceCategory": "towing services",
   "vehicleType": "flatbed towing",
   "distanceInMeters": 8000,
   "serviceDetails": {
@@ -560,29 +781,83 @@ socket.emit('join_driver_room', driverId);
 
 #### **Service Categories & Vehicle Types:**
 
-**Towing Services:**
+**Towing Services (Standard Pricing):**
 - `flatbed towing` - Flatbed tow truck (safest for all vehicles)
 - `wheel lift towing` - Wheel lift tow truck (quick & efficient)
 
-**Winching Services:**
+**Winching Services (Comprehensive Pricing):**
 - `on-road winching` - On-road winching service (roadside recovery)
 - `off-road winching` - Off-road winching service (sand/mud recovery)
 
-**Roadside Assistance:**
+**Roadside Assistance (Comprehensive Pricing):**
 - `battery jump start` - Battery jump start service
 - `fuel delivery` - Fuel delivery service
 
-**Specialized/Heavy Recovery:**
+**Specialized/Heavy Recovery (Standard Pricing):**
 - `luxury & exotic car recovery` - Luxury car recovery
 - `accident & collision recovery` - Accident recovery
 - `heavy-duty vehicle recovery` - Heavy vehicle recovery
 - `basement pull-out` - Basement parking recovery
+
+#### **📊 Comprehensive Pricing Breakdown Example:**
+
+**Scenario:** 12 km winching service (on-road winching)
+```json
+{
+  "distance": 12,
+  "serviceCategory": "winching services",
+  "vehicleType": "on-road winching",
+  "startTime": "2024-01-15T14:30:00Z",
+  "waitingMinutes": 0,
+  "demandRatio": 1,
+  "cityCode": "dubai"
+}
+```
+
+**Pricing Breakdown:**
+1. **Base Fare:** AED 50 (first 6 km)
+2. **Distance Fare:** (12 - 6) × AED 7.5 = AED 45
+3. **Subtotal:** AED 50 + AED 45 = AED 95
+4. **Convenience Fee:** AED 50 (winching services)
+5. **Night Charges:** AED 0 (daytime service)
+6. **Surge Charges:** AED 0 (normal demand)
+7. **City Charges:** AED 0 (within city limits)
+8. **Waiting Charges:** AED 0 (no waiting)
+9. **Subtotal Before VAT:** AED 95 + AED 50 = AED 145
+10. **VAT (5%):** AED 145 × 0.05 = AED 7.25
+11. **Platform Fee (15%):** AED 95 × 0.15 = AED 14.25
+12. **Total Fare:** AED 145 + AED 7.25 = **AED 152.25**
+
+**Driver Earnings:** AED 95 - AED 14.25 = **AED 80.75**
+**Platform Share:** AED 14.25 (7.5% customer + 7.5% driver)
 
 #### **Urgency Levels:**
 - `low` - Non-urgent service
 - `medium` - Moderate urgency
 - `high` - High urgency
 - `emergency` - Emergency service
+
+#### **🔄 Refreshment Alert System:**
+- **Trigger:** Rides >20 km OR >30 minutes
+- **Driver Options:**
+  - **Continue** - No overtime charges
+  - **Start Overtime Charges** - Begin charging customer
+- **Overtime Charges:** AED 1 per 5 minutes (max 30 minutes)
+- **Failsafe:** No automatic charging without driver consent
+
+#### **❌ Cancellation Logic:**
+- **Before driver arrival:** AED 2 (if rider crossed 25% of driver's distance)
+- **Driver covered ≥50%:** AED 5
+- **After driver arrived:** AED 10
+
+#### **🌙 Night Charges:**
+- **Time:** 22:00–06:00
+- **Charge:** AED 10 OR 1.25x multiplier (admin configurable)
+
+#### **📈 Surge Pricing:**
+- **1.5x:** When demand = 2x available cars
+- **2.0x:** When demand = 3x available cars
+- **Admin Control:** No Surge / 1.5x / 2.0x options
 
 ---
 

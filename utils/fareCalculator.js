@@ -239,58 +239,168 @@ const calculateShiftingMoversFare = async (bookingData) => {
   }
 };
 
-// Calculate fare for car recovery service
+// Calculate fare for car recovery service - ALL services now use dynamic pricing
 const calculateCarRecoveryFare = async (bookingData) => {
   try {
-    const { vehicleType, serviceCategory, recoveryDetails } = bookingData;
+    const { 
+      vehicleType, 
+      serviceCategory, 
+      distance, 
+      serviceDetails, 
+      routeType = 'one_way',
+      startTime = new Date(),
+      waitingMinutes = 0,
+      demandRatio = 1,
+      cityCode = 'default'
+    } = bookingData;
     
-    const config = await PricingConfig.findOne({ 
-      serviceType: 'car_recovery', 
-      isActive: true 
-    });
+    // ALL car recovery services now use dynamic pricing
+    return await calculateDynamicCarRecoveryFare(bookingData);
+  } catch (error) {
+    throw new Error(`Car recovery fare calculation error: ${error.message}`);
+  }
+};
+
+// Calculate fare for ALL car recovery services with dynamic pricing
+const calculateDynamicCarRecoveryFare = async (bookingData) => {
+  try {
+    const { 
+      vehicleType, 
+      serviceCategory, 
+      distance, 
+      serviceDetails, 
+      routeType = 'one_way',
+      startTime = new Date(),
+      waitingMinutes = 0,
+      demandRatio = 1,
+      cityCode = 'default'
+    } = bookingData;
     
-    if (!config || !config.carRecoveryConfig) {
-      throw new Error('Car recovery pricing configuration not found');
+    // 1. Base Fare: Always apply AED 50 for first 6 km
+    const baseFare = 50;
+    
+    // 2. Per KM Rate: After 6 km, charge AED 7.5 per km
+    const perKmRate = 7.5;
+    const distanceFare = distance > 6 ? (distance - 6) * perKmRate : 0;
+    
+    // 3. Minimum Fare: If total trip < 6 km → still charge AED 50 minimum
+    const subtotal = baseFare + distanceFare;
+    const minimumFare = 50;
+    const adjustedSubtotal = Math.max(subtotal, minimumFare);
+    
+    // 4. Platform Fee: Deduct 15% of total fare (7.5% driver, 7.5% customer)
+    const platformFeePercentage = 15;
+    const platformFeeAmount = (adjustedSubtotal * platformFeePercentage) / 100;
+    const customerPlatformFee = platformFeeAmount * 0.5; // 7.5%
+    const driverPlatformFee = platformFeeAmount * 0.5; // 7.5%
+    
+    // 5. Night Charges: If ride start time between 22:00–06:00 → add AED 10
+    const hour = startTime.getHours();
+    const isNightTime = hour >= 22 || hour < 6;
+    const nightCharges = isNightTime ? 10 : 0;
+    
+    // 6. Surge Pricing: Based on demand/supply ratio
+    let surgeMultiplier = 1;
+    let surgeCharges = 0;
+    if (demandRatio >= 3) {
+      surgeMultiplier = 2.0; // 2.0x if demand = 3x cars
+    } else if (demandRatio >= 2) {
+      surgeMultiplier = 1.5; // 1.5x if demand = 2x cars
+    }
+    surgeCharges = (adjustedSubtotal + nightCharges) * (surgeMultiplier - 1);
+    
+    // 7. City-wise Pricing: If trip >10 km in specific city → apply AED 5/km instead of default
+    let cityCharges = 0;
+    if (distance > 10 && cityCode !== 'default') {
+      const citySpecificRate = 5; // AED 5/km for city trips
+      cityCharges = distance * citySpecificRate;
     }
     
-    const pricing = config.carRecoveryConfig;
-    
-    // Find the specific pricing for the vehicle type and service category
-    const servicePricing = pricing.find(p => 
-      p.vehicleType === vehicleType && p.serviceCategory === serviceCategory
-    );
-    
-    if (!servicePricing) {
-      throw new Error(`Pricing not found for vehicle type: ${vehicleType}, service category: ${serviceCategory}`);
+    // 8. Waiting Charges: Free wait: 5 minutes, After 5 mins → AED 2/minute, Stop charging after AED 20 cap
+    const freeWaitMinutes = 5;
+    const waitingRatePerMinute = 2;
+    const maxWaitingCharges = 20;
+    let waitingCharges = 0;
+    if (waitingMinutes > freeWaitMinutes) {
+      waitingCharges = Math.min((waitingMinutes - freeWaitMinutes) * waitingRatePerMinute, maxWaitingCharges);
     }
     
-    const serviceCharges = servicePricing.serviceCharges;
-    const platformChargesAmount = (serviceCharges * servicePricing.platformCharges.percentage) / 100;
+    // 9. Convenience Fee: Based on service type
+    let convenienceFee = 0;
+    if (serviceCategory === 'winching services') {
+      convenienceFee = 50; // AED 50 for winching services
+    } else if (serviceCategory === 'roadside assistance') {
+      convenienceFee = 100; // AED 100 for roadside assistance
+    } else if (serviceCategory === 'towing services') {
+      convenienceFee = 25; // AED 25 for towing services
+    } else if (serviceCategory === 'specialized/heavy recovery') {
+      convenienceFee = 75; // AED 75 for specialized/heavy recovery
+    }
+    
+    // 10. VAT: Apply country-based VAT on total fare
+    const vatRate = 5; // 5% VAT for UAE
+    const subtotalBeforeVat = adjustedSubtotal + nightCharges + surgeCharges + cityCharges + waitingCharges + convenienceFee;
+    const vatAmount = (subtotalBeforeVat * vatRate) / 100;
+    
+    // Calculate total fare
+    const totalFare = subtotalBeforeVat + vatAmount;
+    
+    // 11. Refreshment Alert: Trigger if ride >20 km OR >30 minutes
+    const refreshmentAlert = distance > 20 || (waitingMinutes + (distance * 2)) > 30; // Rough estimate for trip duration
+    
+    // 12. Free Stay Minutes (Round Trips only)
+    let freeStayMinutes = 0;
+    if (routeType === 'round_trip') {
+      freeStayMinutes = Math.min(distance * 0.5, 30); // 0.5 min per km, max 30 minutes
+    }
     
     let fareBreakdown = {
-      baseFare: serviceCharges,
-      distanceFare: 0,
-      serviceFees: {
-        recoveryService: serviceCharges
-      },
-      locationCharges: {},
-      itemCharges: 0,
+      baseFare,
+      distanceFare,
+      minimumFare,
+      subtotal: adjustedSubtotal,
+      nightCharges,
+      surgeCharges,
+      surgeMultiplier,
+      cityCharges,
+      waitingCharges,
+      convenienceFee,
       platformCharges: {
-        percentage: servicePricing.platformCharges.percentage,
-        amount: platformChargesAmount,
-        splitRatio: servicePricing.platformCharges.splitRatio,
-        customerShare: platformChargesAmount * (servicePricing.platformCharges.splitRatio / 100),
-        providerShare: platformChargesAmount * ((100 - servicePricing.platformCharges.splitRatio) / 100)
+        percentage: platformFeePercentage,
+        amount: platformFeeAmount,
+        customerShare: customerPlatformFee,
+        driverShare: driverPlatformFee,
+        splitRatio: {
+          customer: 50,
+          serviceProvider: 50
+        }
       },
-      totalCalculatedFare: serviceCharges + platformChargesAmount,
+      vatAmount,
+      vatRate,
+      totalCalculatedFare: totalFare,
+      refreshmentAlert,
+      freeStayMinutes,
       vehicleType,
       serviceCategory,
-      recoveryDetails
+      pricingDetails: {
+        perKmRate,
+        freeWaitMinutes,
+        waitingRatePerMinute,
+        maxWaitingCharges,
+        nightTimeHours: '22:00-06:00',
+        surgePricing: {
+          enabled: true,
+          thresholds: {
+            '1.5x': 2,
+            '2.0x': 3
+          }
+        }
+      }
     };
     
     return fareBreakdown;
   } catch (error) {
-    throw new Error(`Car recovery fare calculation error: ${error.message}`);
+    throw new Error(`Winching/Roadside fare calculation error: ${error.message}`);
   }
 };
 
