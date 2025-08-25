@@ -23,7 +23,7 @@ const userSchema = new mongoose.Schema(
     },
     lastName: {
       type: String,
-      required: [true, "Last name is required"],
+      required: false,
       trim: true,
     },
     email: {
@@ -39,11 +39,19 @@ const userSchema = new mongoose.Schema(
       required: [true, "Phone number is required"],
       unique: true,
       trim: true,
+      minlength: [
+        10,
+        "Phone number must be exactly 13 characters including country code",
+      ],
+      maxlength: [
+        13,
+        "Phone number must be exactly 13 characters including country code",
+      ],
     },
     password: {
       type: String,
       required: [true, "Password is required"],
-      minlength: [6, "Password must be at least 6 characters"],
+      minlength: [8, "Password must be at least 8 characters"],
     },
     sponsorId: {
       type: String,
@@ -106,207 +114,12 @@ const userSchema = new mongoose.Schema(
       default: "customer",
       enum: ["customer", "driver", "admin", "superadmin"],
     },
-    // Driver payment tracking for cash rides
-    driverPaymentTracking: {
-      totalPendingAmount: {
-        type: Number,
-        default: 0,
-      },
-      unpaidRidesCount: {
-        type: Number,
-        default: 0,
-      },
-      lastPaymentDate: {
-        type: Date,
-        required: false,
-      },
-      isRestricted: {
-        type: Boolean,
-        default: false, // true if driver has 3+ unpaid rides
-      },
-      restrictedAt: {
-        type: Date,
-        required: false,
-      },
-      paymentHistory: [{
-        amount: {
-          type: Number,
-          required: true,
-        },
-        paidAt: {
-          type: Date,
-          default: Date.now,
-        },
-        bookingId: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Booking",
-          required: false,
-        },
-        paymentMethod: {
-          type: String,
-          enum: ["cash", "bank_transfer", "adjustment"],
-          default: "cash",
-        },
-      }],
-    },
-    // Driver wallet for earnings
-    wallet: {
-      balance: {
-        type: Number,
-        default: 0,
-      },
-      totalEarnings: {
-        type: Number,
-        default: 0,
-      },
-      lastUpdated: {
-        type: Date,
-        default: Date.now,
-      },
-    },
-    // Game Points System
-    gamePoints: {
-      tgp: {
-        type: Number,
-        default: 0,
-        min: 0,
-      },
-      pgp: {
-        type: Number,
-        default: 0,
-        min: 0,
-      },
-      lastUpdated: {
-        type: Date,
-        default: Date.now,
-      },
-    },
-    // Driver location tracking
-    currentLocation: {
-      type: {
-        type: String,
-        enum: ['Point'],
-        default: 'Point'
-      },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-        default: [0, 0]
-      },
-      address: {
-        type: String,
-        default: ''
-      },
-      lastUpdated: {
-        type: Date,
-        default: Date.now
-      }
-    },
-    // Driver status for real-time tracking
-    isActive: {
-      type: Boolean,
-      default: false
-    },
-    driverStatus: {
-      type: String,
-      enum: ['online', 'offline', 'busy'],
-      default: 'offline'
-    },
-    lastActiveAt: {
-      type: Date,
-      default: Date.now
-    },
-    // Driver settings for auto-accept and ride preferences
-    driverSettings: {
-      autoAccept: {
-        enabled: {
-          type: Boolean,
-          default: false,
-        },
-        minFare: {
-          type: Number,
-          default: 100,
-        },
-      },
-      ridePreferences: {
-        acceptBike: {
-          type: Boolean,
-          default: true,
-        },
-        acceptRickshaw: {
-          type: Boolean,
-          default: true,
-        },
-        acceptCar: {
-          type: Boolean,
-          default: true,
-        },
-        acceptMini: {
-          type: Boolean,
-          default: true,
-        },
-        pinkCaptainMode: {
-          type: Boolean,
-          default: false,
-        },
-        acceptFemaleOnly: {
-          type: Boolean,
-          default: false,
-        },
-        acceptFamilyRides: {
-          type: Boolean,
-          default: false,
-        },
-        acceptSafeRides: {
-          type: Boolean,
-          default: false,
-        },
-        acceptFamilyWithGuardianMale: {
-          type: Boolean,
-          default: false,
-        },
-        acceptMaleWithoutFemale: {
-          type: Boolean,
-          default: false,
-        },
-        acceptNoMaleCompanion: {
-          type: Boolean,
-          default: false,
-        },
-      },
-    },
-    // Pinned and favorite drivers for users
-    pinnedDrivers: [{
-      driverId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
-      },
-      pinnedAt: {
-        type: Date,
-        default: Date.now
-      },
-      note: {
-        type: String,
-        default: ''
-      }
-    }],
-    favoriteDrivers: [{
-      driverId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
-      },
-      favoritedAt: {
-        type: Date,
-        default: Date.now
-      },
-      note: {
-        type: String,
-        default: ''
-      }
-    }],
+    hasDriver: {
+    type: String,
+    default: "No",
   },
-  { timestamps: true } // Add timestamps option
+  },
+  { timestamps: true }
 );
 
 userSchema.index({ username: 1 });
@@ -318,7 +131,7 @@ userSchema.index({ level: 1 });
 userSchema.index({ kycLevel: 1 });
 userSchema.index({ kycStatus: 1 });
 userSchema.index({ role: 1 });
-userSchema.index({ createdAt: -1 }); // Index on createdAt (auto-generated by timestamps)
+userSchema.index({ createdAt: -1 });
 userSchema.index({ isVerified: 1 });
 userSchema.index({ firstName: 1, lastName: 1 });
 userSchema.index({ directReferrals: 1 });

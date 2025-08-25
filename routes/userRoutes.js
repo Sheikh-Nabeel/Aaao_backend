@@ -15,6 +15,7 @@ import {
   fixReferralRelationships,
   getReferralTree,
   getReferralLink,
+  getUserByUsername,
   setVehicleOwnership,
   addPinnedDriver,
   removePinnedDriver,
@@ -62,7 +63,7 @@ router.post("/signup", signupUser);
 router.post("/verify-otp", verifyOTPUser);
 router.post("/login", loginUser);
 router.post("/forgot-password", forgotPassword);
-router.post("/reset-password",  resetPassword);
+router.post("/reset-password", resetPassword);
 router.post(
   "/submit-kyc",
   authHandler,
@@ -93,7 +94,7 @@ router.get("/nearby-drivers", authHandler, getNearbyDriversForUser);
 router.get("/pending-kycs", authHandler, adminMiddleware, getPendingKYCs);
 router.post("/approve-kyc", authHandler, adminMiddleware, approveKYC);
 router.post("/reject-kyc", authHandler, adminMiddleware, rejectKYC);
-router.get("/referral-link", authHandler, getReferralLink); 
+router.get("/referral-link", authHandler, getReferralLink);
 router.get("/all", authHandler, adminMiddleware, getAllUsers);
 router.post(
   "/fix-referrals",
@@ -106,5 +107,7 @@ router.get("/referral-tree", authHandler, getReferralTree);
 // Superadmin routes for allowed sections
 router.post("/allowed-sections", superadminAuth, manageAllowedSections);
 router.get("/allowed-sections", superadminAuth, getAllowedSections);
+router.get("/by-username", getUserByUsername);
+
 
 export default router;

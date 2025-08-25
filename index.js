@@ -13,11 +13,14 @@ import driversRoutes from "./routes/driversRoutes.js";
 import vehiclesRoutes from "./routes/vehiclesRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js"; // Added booking routes
 import mlmRoutes from "./routes/mlmRoutes.js"; // Added MLM routes
+import vehicleHiriing from "./routes/vehicleHiringRoutes.js"; // Added MLM routes
+
 import adminPricingRoutes from "./routes/adminPricingRoutes.js"; // Added admin pricing routes
 import adminComprehensivePricingRoutes from "./routes/adminComprehensivePricingRoutes.js"; // Added comprehensive pricing routes
 import appointmentRoutes from "./routes/appointmentRoutes.js"; // Added appointment routes
 import fareEstimationRoutes from "./routes/fareEstimationRoutes.js"; // Added fare estimation routes
 import walletRoutes from "./routes/walletRoutes.js"; // Added wallet routes
+
 import cloudinary from "cloudinary";
 import "colors";
 import path from "path";
@@ -92,6 +95,7 @@ app.use("/api/drivers", driversRoutes);
 app.use("/api/vehicles", vehiclesRoutes);
 app.use("/api/bookings", bookingRoutes); // Added booking routes
 app.use("/api/mlm", mlmRoutes); // Added MLM routes
+app.use("/api/vehicle-hiring", vehicleHiringRoutes);
 app.use("/api/admin/pricing", adminPricingRoutes); // Added admin pricing routes
 app.use("/api/admin/comprehensive-pricing", adminComprehensivePricingRoutes); // Added comprehensive pricing routes
 app.use("/api/appointments", appointmentRoutes); // Added appointment routes

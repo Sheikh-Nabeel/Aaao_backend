@@ -5,6 +5,7 @@ import {
   updateVehicle,
   getUserVehicleInfo,
   getCurrentUser,
+  getUserById,
   getVehicleSelectFlow,
   getPendingRequests,
   acceptBookingRequest,
@@ -18,7 +19,7 @@ import multer from "multer";
 import path from "path";
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
+  destination: (req, file, cb) => cb(null, "Uploads/"),
   filename: (req, file, cb) =>
     cb(null, Date.now() + path.extname(file.originalname)),
 });
@@ -58,6 +59,7 @@ router.post(
 );
 router.get("/user-vehicle-info", authHandler, getUserVehicleInfo);
 router.get("/get-current-user", authHandler, getCurrentUser);
+router.get("/get-user-by-id", authHandler, getUserById);
 router.get("/vehicle-select-flow", getVehicleSelectFlow);
 
 // Driver booking request endpoints

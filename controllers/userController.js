@@ -85,7 +85,7 @@ const generateEmailTemplate = ({
 // Ensure uploads folder exists
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+  fs.mkdirSync(UploadsDir, { recursive: true });
 }
 
 const generateOTP = () =>
@@ -107,7 +107,6 @@ const signupUser = asyncHandler(async (req, res) => {
   if (
     !username ||
     !firstName ||
-    !lastName ||
     !email ||
     !phoneNumber ||
     !password ||
@@ -119,6 +118,23 @@ const signupUser = asyncHandler(async (req, res) => {
 
   // Normalize email to lowercase
   const normalizedEmail = email.trim().toLowerCase();
+
+  // Check for existing email, username, and phone number
+  const existingEmail = await User.findOne({ email: normalizedEmail });
+  const existingUsername = await User.findOne({ username });
+  const existingPhone = await User.findOne({ phoneNumber });
+
+  const errors = {};
+  if (existingEmail) errors.email = "This email is already registered";
+  if (existingUsername) errors.username = "This username is already taken";
+  if (existingPhone)
+    errors.phoneNumber = "This phone number is already registered";
+
+  // If there are any errors, return them
+  if (Object.keys(errors).length > 0) {
+    res.status(400).json({ errors });
+    return;
+  }
 
   let finalSponsorBy = sponsorBy;
   if (referralUsername) {
@@ -157,19 +173,19 @@ const signupUser = asyncHandler(async (req, res) => {
     existingUser.otpExpires = otpExpires;
     existingUser.username = username;
     existingUser.firstName = firstName;
-    existingUser.lastName = lastName;
+    existingUser.lastName = lastName || "";
     existingUser.phoneNumber = phoneNumber;
     existingUser.password = password;
     existingUser.sponsorBy = finalSponsorBy || null;
     existingUser.gender = gender;
-    existingUser.email = normalizedEmail; // Ensure stored as lowercase
+    existingUser.email = normalizedEmail;
     await existingUser.save();
     console.log("Updated existing user:", existingUser.email, existingUser.otp);
   } else {
     const user = await User.create({
       username,
       firstName,
-      lastName,
+      lastName: lastName || "",
       email: normalizedEmail,
       phoneNumber,
       password,
@@ -189,11 +205,11 @@ const signupUser = asyncHandler(async (req, res) => {
   try {
     await transporter.sendMail({
       from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: normalizedEmail, // Use normalized email
+      to: normalizedEmail,
       subject: "Your OTP for AAAO GO Account Verification",
       html: generateEmailTemplate({
         subject: "Your OTP for AAAO GO Account Verification",
-        greeting: `Hello ${firstName} ${lastName},`,
+        greeting: `Hello ${firstName}${lastName ? " " + lastName : ""},`,
         message: `Your OTP for account verification is: <strong>${otp}</strong>. Please enter this OTP to verify within 10 minutes.`,
         ctaText: "Verify Now",
         ctaUrl: `${process.env.APP_URL}/verify-otp`,
@@ -244,7 +260,9 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     });
     if (sponsor) {
       await updateReferralTree(user._id, user.sponsorBy);
-      sponsorName = `${sponsor.firstName} ${sponsor.lastName}`;
+      sponsorName = `${sponsor.firstName}${
+        sponsor.lastName ? " " + sponsor.lastName : ""
+      }`;
     }
   }
 
@@ -263,7 +281,7 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     secure: process.env.NODE_ENV === "production",
   });
   const sponsoredUsers = user.sponsorTree
-    .map((s) => `${s.firstName} ${s.lastName}`)
+    .map((s) => `${s.firstName}${s.lastName ? " " + s.lastName : ""}`)
     .join(", ");
   res.status(201).json({
     message: "Registration completed successfully",
@@ -274,14 +292,14 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     level: user.level,
     sponsorTree: user.sponsorTree.map((s) => ({
       id: s._id,
-      name: `${s.firstName} ${s.lastName}`,
+      name: `${s.firstName}${s.lastName ? " " + s.lastName : ""}`,
     })),
     sponsoredUsers: sponsoredUsers || "No sponsored users",
     sponsorName: sponsorName,
     user: {
       username: user.username,
       firstName: user.firstName,
-      lastName: user.lastName,
+      lastName: user.lastName || "",
       email: user.email,
       phoneNumber: user.phoneNumber,
       sponsorBy: user.sponsorBy,
@@ -321,14 +339,16 @@ const loginUser = asyncHandler(async (req, res) => {
     expiresIn: process.env.JWT_EXPIRY,
   });
   const sponsoredUsers = user.sponsorTree
-    .map((s) => `${s.firstName} ${s.lastName}`)
+    .map((s) => `${s.firstName}${s.lastName ? " " + s.lastName : ""}`)
     .join(", ");
   let sponsorName = null;
   if (user.sponsorBy) {
     const sponsor = await User.findOne({
       $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
     });
-    sponsorName = sponsor ? `${sponsor.firstName} ${sponsor.lastName}` : null;
+    sponsorName = sponsor
+      ? `${sponsor.firstName}${sponsor.lastName ? " " + sponsor.lastName : ""}`
+      : null;
   }
   res
     .cookie("token", token, {
@@ -347,14 +367,14 @@ const loginUser = asyncHandler(async (req, res) => {
       level: user.level,
       sponsorTree: user.sponsorTree.map((s) => ({
         id: s._id,
-        name: `${s.firstName} ${s.lastName}`,
+        name: `${s.firstName}${s.lastName ? " " + s.lastName : ""}`,
       })),
       sponsoredUsers: sponsoredUsers || "No sponsored users",
       sponsorName: sponsorName,
       user: {
         username: user.username,
         firstName: user.firstName,
-        lastName: user.lastName,
+        lastName: user.lastName || "",
         email: user.email,
         phoneNumber: user.phoneNumber,
         sponsorBy: user.sponsorBy,
@@ -393,7 +413,13 @@ const forgotPassword = asyncHandler(async (req, res) => {
     res.status(500);
     throw new Error("Failed to update user with OTP");
   }
-  console.log(`ForgotPassword - Updated user: ${updatedUser._id}, resetOtp: ${updatedUser.resetOtp} (type: ${typeof updatedUser.resetOtp}), resetOtpExpires: ${new Date(updatedUser.resetOtpExpires)}`);
+  console.log(
+    `ForgotPassword - Updated user: ${updatedUser._id}, resetOtp: ${
+      updatedUser.resetOtp
+    } (type: ${typeof updatedUser.resetOtp}), resetOtpExpires: ${new Date(
+      updatedUser.resetOtpExpires
+    )}`
+  );
   try {
     await transporter.sendMail({
       from: `"AAAO GO" <chyousafawais667@gmail.com>`,
@@ -401,7 +427,9 @@ const forgotPassword = asyncHandler(async (req, res) => {
       subject: "Your OTP for AAAO GO Password Reset",
       html: generateEmailTemplate({
         subject: "Your OTP for AAAO GO Password Reset",
-        greeting: `Hello ${user.firstName} ${user.lastName},`,
+        greeting: `Hello ${user.firstName}${
+          user.lastName ? " " + user.lastName : ""
+        },`,
         message: `Your OTP for password reset is: <strong>${resetOtp}</strong>. Please use this OTP within 10 minutes.`,
         ctaText: "Reset Password",
         ctaUrl: `${process.env.APP_URL}/reset-password`,
@@ -438,9 +466,15 @@ const resetPassword = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error("User not found");
   }
-  console.log(`ResetPassword - userId: ${userId}, input resetOtp: ${resetOtp} (type: ${typeof resetOtp}), stored resetOtp: ${user.resetOtp} (type: ${typeof user.resetOtp}), resetOtpExpires: ${user.resetOtpExpires ? new Date(user.resetOtpExpires) : 'null'}, current time: ${new Date(Date.now())}`);
+  console.log(
+    `ResetPassword - userId: ${userId}, input resetOtp: ${resetOtp} (type: ${typeof resetOtp}), stored resetOtp: ${
+      user.resetOtp
+    } (type: ${typeof user.resetOtp}), resetOtpExpires: ${
+      user.resetOtpExpires ? new Date(user.resetOtpExpires) : "null"
+    }, current time: ${new Date(Date.now())}`
+  );
   if (
-    user.resetOtp !== String(resetOtp).trim() || // Convert to string and trim
+    user.resetOtp !== String(resetOtp).trim() ||
     !user.resetOtpExpires ||
     user.resetOtpExpires < Date.now()
   ) {
@@ -478,13 +512,7 @@ const submitKYC = asyncHandler(async (req, res) => {
     });
   }
   const [firstName, ...lastNameParts] = fullName.trim().split(" ");
-  const lastName = lastNameParts.join(" ");
-  if (!firstName || !lastName) {
-    return res.status(400).json({
-      message: "Full name must contain both first and last names",
-      userId,
-    });
-  }
+  const lastName = lastNameParts.join(" ") || "";
   const user = await User.findById(userId);
   if (!user) {
     return res.status(400).json({ message: "User not found", userId });
@@ -578,7 +606,9 @@ const resendOtp = asyncHandler(async (req, res) => {
       subject: "Your New OTP for AAAO GO Account Verification",
       html: generateEmailTemplate({
         subject: "Your New OTP for AAAO GO Account Verification",
-        greeting: `Hello ${user.firstName} ${user.lastName},`,
+        greeting: `Hello ${user.firstName}${
+          user.lastName ? " " + user.lastName : ""
+        },`,
         message: `Your new OTP for account verification is: <strong>${newOtp}</strong>. Please enter this OTP to verify within 10 minutes.`,
         ctaText: "Verify Now",
         ctaUrl: `${process.env.APP_URL}/verify-otp`,
@@ -635,7 +665,10 @@ async function updateReferralTree(newUserId, sponsorIdentifier) {
 
 async function computeNextLevels(user) {
   const visited = new Set([user._id.toString()]);
-  const toObjectId = (id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(id));
+  const toObjectId = (id) =>
+    id instanceof mongoose.Types.ObjectId
+      ? id
+      : new mongoose.Types.ObjectId(id);
 
   let current = Array.isArray(user.directReferrals)
     ? Array.from(new Set(user.directReferrals.map((id) => id.toString())))
@@ -652,7 +685,10 @@ async function computeNextLevels(user) {
     ).lean();
     let nextIds = [];
     for (const doc of docs) {
-      if (Array.isArray(doc.directReferrals) && doc.directReferrals.length > 0) {
+      if (
+        Array.isArray(doc.directReferrals) &&
+        doc.directReferrals.length > 0
+      ) {
         nextIds.push(...doc.directReferrals.map((id) => id.toString()));
       }
     }
@@ -728,7 +764,10 @@ async function updateLevel4Referrals(user) {
 async function checkAndUpdateUserLevel(user) {
   const levels = Array.isArray(user.nextLevels) ? user.nextLevels : [];
   if (levels.length === 0) {
-    if (Array.isArray(user.directReferrals) && user.directReferrals.length > 0) {
+    if (
+      Array.isArray(user.directReferrals) &&
+      user.directReferrals.length > 0
+    ) {
       // Ensure nextLevels calculated if missing
       await updateUserNextLevels(user);
     }
@@ -739,7 +778,7 @@ async function checkAndUpdateUserLevel(user) {
   for (let i = 0; i < effectiveLevels.length; i++) {
     const ids = effectiveLevels[i] || [];
     if (ids.length >= threshold) {
-      newLevel = i + 1; // level index starts at 1
+      newLevel = i + 1;
     } else {
       break;
     }
@@ -779,7 +818,7 @@ const getReferralTree = asyncHandler(async (req, res) => {
     user: {
       id: user._id,
       username: user.username,
-      name: `${user.firstName} ${user.lastName}`,
+      name: `${user.firstName}${user.lastName ? " " + user.lastName : ""}`,
       email: user.email,
       sponsorId: user.sponsorId,
       level: user.level,
@@ -826,7 +865,12 @@ const getReferralTree = asyncHandler(async (req, res) => {
         _id: 0,
         id: "$_id",
         username: "$username",
-        name: { $concat: ["$firstName", " ", "$lastName"] },
+        name: {
+          $concat: [
+            "$firstName",
+            { $cond: { if: "$lastName", then: " $lastName", else: "" } },
+          ],
+        },
         email: 1,
         sponsorId: 1,
         level: 1,
@@ -859,7 +903,10 @@ const getReferralTree = asyncHandler(async (req, res) => {
   processLevel(levelsIds[1] || [], "level2");
   processLevel(levelsIds[2] || [], "level3");
   processLevel(levelsIds[3] || [], "level4");
-  referralTree.counts.totalReferrals = Object.values(dynamicCounts).reduce((a, b) => a + b, 0);
+  referralTree.counts.totalReferrals = Object.values(dynamicCounts).reduce(
+    (a, b) => a + b,
+    0
+  );
 
   // Dynamic members for all depths
   for (let i = 0; i < levelsIds.length; i++) {
@@ -898,7 +945,10 @@ const getAllUsers = asyncHandler(async (req, res) => {
   ).sort({ createdAt: -1 });
   res.status(200).json({
     message: "All users retrieved successfully",
-    users,
+    users: users.map((user) => ({
+      ...user._doc,
+      lastName: user.lastName || "",
+    })),
     totalUsers: users.length,
   });
 });
@@ -999,7 +1049,9 @@ const approveKYC = asyncHandler(async (req, res) => {
       subject: `KYC Level ${kycLevelToApprove} Approved`,
       html: generateEmailTemplate({
         subject: `KYC Level ${kycLevelToApprove} Approved`,
-        greeting: `Hello ${updatedUser.firstName} ${updatedUser.lastName},`,
+        greeting: `Hello ${updatedUser.firstName}${
+          updatedUser.lastName ? " " + updatedUser.lastName : ""
+        },`,
         message: `Your KYC Level ${kycLevelToApprove} submission has been approved. You can now proceed with the next steps in the AAAO GO application.`,
         ctaText: "Log In to Continue",
         ctaUrl: `${process.env.APP_URL}/login`,
@@ -1046,7 +1098,9 @@ const rejectKYC = asyncHandler(async (req, res) => {
       subject: "KYC Submission Rejected",
       html: generateEmailTemplate({
         subject: "KYC Submission Rejected",
-        greeting: `Hello ${user.firstName} ${user.lastName},`,
+        greeting: `Hello ${user.firstName}${
+          user.lastName ? " " + user.lastName : ""
+        },`,
         message: `Your KYC submission has been rejected. <strong>Reason:</strong> ${
           reason || "No reason provided"
         }. Please resubmit with corrected information.`,
@@ -1081,7 +1135,7 @@ const getPendingKYCs = asyncHandler(async (req, res) => {
       return {
         userId: user._id,
         username: user.username,
-        name: `${user.firstName} ${user.lastName}`,
+        name: `${user.firstName}${user.lastName ? " " + user.lastName : ""}`,
         email: user.email,
         country: user.country,
         kycLevel: user.kycLevel,
@@ -1121,479 +1175,30 @@ const getPendingKYCs = asyncHandler(async (req, res) => {
   });
 });
 
-// Set vehicle ownership status
-const setVehicleOwnership = asyncHandler(async (req, res) => {
-  const { hasVehicle } = req.body;
-  const userId = req.user._id;
+const getUserByUsername = asyncHandler(async (req, res) => {
+  const { username } = req.query;
 
-  if (!hasVehicle || !["yes", "no"].includes(hasVehicle)) {
-    return res.status(400).json({
-      message: "hasVehicle must be either 'yes' or 'no'",
-      token: req.cookies.token,
-    });
+  if (!username) {
+    res.status(400);
+    throw new Error("Username is required");
   }
 
-  const user = await User.findById(userId);
+  const user = await User.findOne({
+    $or: [{ username }, { sponsorId: username }],
+  }).select("firstName lastName");
+
   if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
+    res.status(404);
+    throw new Error("User not found");
   }
-
-  user.hasVehicle = hasVehicle;
-  await user.save();
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-  
-  res.status(200).json({
-    message: `Vehicle ownership status updated to '${hasVehicle}'`,
-    hasVehicle: user.hasVehicle,
-    token,
-  });
-});
-
-// Add driver to pinned list
-const addPinnedDriver = asyncHandler(async (req, res) => {
-  const { driverId, note = '' } = req.body;
-  const userId = req.user._id;
-
-  if (!driverId) {
-    return res.status(400).json({
-      message: "Driver ID is required",
-      token: req.cookies.token,
-    });
-  }
-
-  // Validate driver exists and is actually a driver
-  const driver = await User.findById(driverId);
-  if (!driver || driver.role !== 'driver') {
-    return res.status(404).json({
-      message: "Driver not found",
-      token: req.cookies.token,
-    });
-  }
-
-  const user = await User.findById(userId);
-  if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
-  }
-
-  // Check if driver is already pinned
-  const alreadyPinned = user.pinnedDrivers.find(pinned => 
-    pinned.driverId.toString() === driverId
-  );
-
-  if (alreadyPinned) {
-    return res.status(400).json({
-      message: "Driver is already pinned",
-      token: req.cookies.token,
-    });
-  }
-
-  // Add to pinned drivers
-  user.pinnedDrivers.push({
-    driverId: driverId,
-    pinnedAt: new Date(),
-    note: note
-  });
-
-  await user.save();
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
 
   res.status(200).json({
-    message: "Driver added to pinned list successfully",
-    pinnedDriver: {
-      driverId: driver._id,
-      driverName: `${driver.firstName} ${driver.lastName}`,
-      driverEmail: driver.email,
-      pinnedAt: user.pinnedDrivers[user.pinnedDrivers.length - 1].pinnedAt,
-      note: note
+    user: {
+      firstName: user.firstName,
+      lastName: user.lastName || "",
     },
-    token,
   });
 });
-
-// Remove driver from pinned list
-const removePinnedDriver = asyncHandler(async (req, res) => {
-  const { driverId } = req.params;
-  const userId = req.user._id;
-
-  if (!driverId) {
-    return res.status(400).json({
-      message: "Driver ID is required",
-      token: req.cookies.token,
-    });
-  }
-
-  const user = await User.findById(userId);
-  if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
-  }
-
-  // Find and remove from pinned drivers
-  const pinnedIndex = user.pinnedDrivers.findIndex(pinned => 
-    pinned.driverId.toString() === driverId
-  );
-
-  if (pinnedIndex === -1) {
-    return res.status(404).json({
-      message: "Driver not found in pinned list",
-      token: req.cookies.token,
-    });
-  }
-
-  const removedDriver = user.pinnedDrivers[pinnedIndex];
-  user.pinnedDrivers.splice(pinnedIndex, 1);
-  await user.save();
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-
-  res.status(200).json({
-    message: "Driver removed from pinned list successfully",
-    removedDriver: {
-      driverId: removedDriver.driverId,
-      pinnedAt: removedDriver.pinnedAt,
-      note: removedDriver.note
-    },
-    token,
-  });
-});
-
-// Get pinned drivers list
-const getPinnedDrivers = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-
-  const user = await User.findById(userId).populate('pinnedDrivers.driverId', 'firstName lastName email phoneNumber gender kycLevel kycStatus isActive currentLocation');
-  
-  if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
-  }
-
-  const pinnedDrivers = user.pinnedDrivers.map(pinned => ({
-    driverId: pinned.driverId._id,
-    driverName: `${pinned.driverId.firstName} ${pinned.driverId.lastName}`,
-    driverEmail: pinned.driverId.email,
-    driverPhone: pinned.driverId.phoneNumber,
-    driverGender: pinned.driverId.gender,
-    driverKycLevel: pinned.driverId.kycLevel,
-    driverKycStatus: pinned.driverId.kycStatus,
-    isActive: pinned.driverId.isActive,
-    currentLocation: pinned.driverId.currentLocation,
-    pinnedAt: pinned.pinnedAt,
-    note: pinned.note
-  }));
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-
-  res.status(200).json({
-    message: "Pinned drivers retrieved successfully",
-    pinnedDrivers,
-    totalPinned: pinnedDrivers.length,
-    token,
-  });
-});
-
-// Add driver to favorites list
-const addFavoriteDriver = asyncHandler(async (req, res) => {
-  const { driverId, note = '' } = req.body;
-  const userId = req.user._id;
-
-  if (!driverId) {
-    return res.status(400).json({
-      message: "Driver ID is required",
-      token: req.cookies.token,
-    });
-  }
-
-  // Validate driver exists and is actually a driver
-  const driver = await User.findById(driverId);
-  if (!driver || driver.role !== 'driver') {
-    return res.status(404).json({
-      message: "Driver not found",
-      token: req.cookies.token,
-    });
-  }
-
-  const user = await User.findById(userId);
-  if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
-  }
-
-  // Check if driver is already in favorites
-  const alreadyFavorited = user.favoriteDrivers.find(favorite => 
-    favorite.driverId.toString() === driverId
-  );
-
-  if (alreadyFavorited) {
-    return res.status(400).json({
-      message: "Driver is already in favorites",
-      token: req.cookies.token,
-    });
-  }
-
-  // Add to favorite drivers
-  user.favoriteDrivers.push({
-    driverId: driverId,
-    favoritedAt: new Date(),
-    note: note
-  });
-
-  await user.save();
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-
-  res.status(200).json({
-    message: "Driver added to favorites successfully",
-    favoriteDriver: {
-      driverId: driver._id,
-      driverName: `${driver.firstName} ${driver.lastName}`,
-      driverEmail: driver.email,
-      favoritedAt: user.favoriteDrivers[user.favoriteDrivers.length - 1].favoritedAt,
-      note: note
-    },
-    token,
-  });
-});
-
-// Remove driver from favorites list
-const removeFavoriteDriver = asyncHandler(async (req, res) => {
-  const { driverId } = req.params;
-  const userId = req.user._id;
-
-  if (!driverId) {
-    return res.status(400).json({
-      message: "Driver ID is required",
-      token: req.cookies.token,
-    });
-  }
-
-  const user = await User.findById(userId);
-  if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
-  }
-
-  // Find and remove from favorite drivers
-  const favoriteIndex = user.favoriteDrivers.findIndex(favorite => 
-    favorite.driverId.toString() === driverId
-  );
-
-  if (favoriteIndex === -1) {
-    return res.status(404).json({
-      message: "Driver not found in favorites list",
-      token: req.cookies.token,
-    });
-  }
-
-  const removedDriver = user.favoriteDrivers[favoriteIndex];
-  user.favoriteDrivers.splice(favoriteIndex, 1);
-  await user.save();
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-
-  res.status(200).json({
-    message: "Driver removed from favorites successfully",
-    removedDriver: {
-      driverId: removedDriver.driverId,
-      favoritedAt: removedDriver.favoritedAt,
-      note: removedDriver.note
-    },
-    token,
-  });
-});
-
-// Get favorite drivers list
-const getFavoriteDrivers = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-
-  const user = await User.findById(userId).populate('favoriteDrivers.driverId', 'firstName lastName email phoneNumber gender kycLevel kycStatus isActive currentLocation');
-  
-  if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
-  }
-
-  const favoriteDrivers = user.favoriteDrivers.map(favorite => ({
-    driverId: favorite.driverId._id,
-    driverName: `${favorite.driverId.firstName} ${favorite.driverId.lastName}`,
-    driverEmail: favorite.driverId.email,
-    driverPhone: favorite.driverId.phoneNumber,
-    driverGender: favorite.driverId.gender,
-    driverKycLevel: favorite.driverId.kycLevel,
-    driverKycStatus: favorite.driverId.kycStatus,
-    isActive: favorite.driverId.isActive,
-    currentLocation: favorite.driverId.currentLocation,
-    favoritedAt: favorite.favoritedAt,
-    note: favorite.note
-  }));
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-
-  res.status(200).json({
-    message: "Favorite drivers retrieved successfully",
-    favoriteDrivers,
-    totalFavorites: favoriteDrivers.length,
-    token,
-  });
-});
-
-// Get nearby drivers for user (useful for showing available drivers)
-const getNearbyDriversForUser = asyncHandler(async (req, res) => {
-  const { lat, lon, radius = 5, serviceType = null, vehicleType = null } = req.query;
-  const userId = req.user._id;
-
-  if (!lat || !lon) {
-    return res.status(400).json({
-      message: "Latitude and longitude are required",
-      token: req.cookies.token,
-    });
-  }
-
-  const user = await User.findById(userId);
-  if (!user) {
-    return res.status(404).json({
-      message: "User not found",
-      token: req.cookies.token,
-    });
-  }
-
-  try {
-    // Build driver query
-    let driverQuery = {
-      role: 'driver',
-      kycLevel: 2,
-      kycStatus: 'approved',
-      isActive: true,
-      currentLocation: {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: [parseFloat(lon), parseFloat(lat)]
-          },
-          $maxDistance: radius * 1000 // Convert km to meters
-        }
-      }
-    };
-
-    // Add service type filter if specified
-    if (serviceType) {
-      driverQuery.vehicleType = serviceType;
-    }
-
-    // Add vehicle type filter if specified
-    if (vehicleType) {
-      driverQuery.vehicleType = vehicleType;
-    }
-
-    const nearbyDrivers = await User.find(driverQuery)
-      .select('firstName lastName email phoneNumber gender kycLevel kycStatus isActive currentLocation vehicleType')
-      .limit(20);
-
-    const driversWithDistance = nearbyDrivers.map(driver => {
-      const distance = calculateDistance(
-        parseFloat(lat),
-        parseFloat(lon),
-        driver.currentLocation.coordinates[1],
-        driver.currentLocation.coordinates[0]
-      );
-
-      return {
-        driverId: driver._id,
-        driverName: `${driver.firstName} ${driver.lastName}`,
-        driverEmail: driver.email,
-        driverPhone: driver.phoneNumber,
-        driverGender: driver.gender,
-        driverKycLevel: driver.kycLevel,
-        driverKycStatus: driver.kycStatus,
-        isActive: driver.isActive,
-        vehicleType: driver.vehicleType,
-        currentLocation: driver.currentLocation,
-        distance: Math.round(distance * 100) / 100, // Round to 2 decimal places
-        isPinned: user.pinnedDrivers.some(pinned => pinned.driverId.toString() === driver._id.toString()),
-        isFavorite: user.favoriteDrivers.some(favorite => favorite.driverId.toString() === driver._id.toString())
-      };
-    });
-
-    // Sort by distance
-    driversWithDistance.sort((a, b) => a.distance - b.distance);
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRY,
-    });
-    res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
-
-    res.status(200).json({
-      message: "Nearby drivers retrieved successfully",
-      nearbyDrivers: driversWithDistance,
-      totalDrivers: driversWithDistance.length,
-      searchRadius: radius,
-      userLocation: { lat: parseFloat(lat), lon: parseFloat(lon) },
-      token,
-    });
-
-  } catch (error) {
-    console.error('Error finding nearby drivers:', error);
-    res.status(500).json({
-      message: "Error finding nearby drivers",
-      error: error.message,
-      token: req.cookies.token,
-    });
-  }
-});
-
-// Helper function to calculate distance between two coordinates
-const calculateDistance = (lat1, lon1, lat2, lon2) => {
-  const R = 6371; // Earth's radius in kilometers
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
 
 export {
   signupUser,
@@ -1611,12 +1216,5 @@ export {
   approveKYC,
   rejectKYC,
   getPendingKYCs,
-  setVehicleOwnership,
-  addPinnedDriver,
-  removePinnedDriver,
-  getPinnedDrivers,
-  addFavoriteDriver,
-  removeFavoriteDriver,
-  getFavoriteDrivers,
-  getNearbyDriversForUser,
+  getUserByUsername,
 };
