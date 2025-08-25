@@ -581,7 +581,6 @@ const bookingSchema = new mongoose.Schema({
   receipt: {
     receiptNumber: {
       type: String,
-      unique: true,
       required: false,
     },
     generatedAt: {

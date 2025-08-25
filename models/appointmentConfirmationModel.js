@@ -76,8 +76,7 @@ const appointmentConfirmationSchema = new mongoose.Schema({
   appointmentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Booking',
-    required: true,
-    unique: true
+    required: true
   },
   customerId: {
     type: mongoose.Schema.Types.ObjectId,

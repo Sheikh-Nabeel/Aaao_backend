@@ -47,7 +47,6 @@ const userSchema = new mongoose.Schema(
     },
     sponsorId: {
       type: String,
-      unique: true,
       required: true,
       default: function () {
         return `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`;
