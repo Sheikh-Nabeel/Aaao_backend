@@ -108,6 +108,7 @@ const setDriverDecision = asyncHandler(async (req, res) => {
 const submitDriverHiring = asyncHandler(async (req, res) => {
   const {
     userId,
+    vehicleId,
     vehicleOwnerName,
     companyName,
     companyEmirate,
@@ -135,12 +136,18 @@ const submitDriverHiring = asyncHandler(async (req, res) => {
     return res.status(403).json({ message: "User must select 'no' for driver to submit hiring request", token: req.cookies.token });
   }
 
+  const vehicle = await VehicleRegistration.findById(vehicleId);
+  if (!vehicle || vehicle.userId.toString() !== userId) {
+    return res.status(403).json({ message: "Invalid or unauthorized vehicle ID", token: req.cookies.token });
+  }
+
   const vehicleImagesUrls = req.files?.vehicleImages ? req.files.vehicleImages.map((f) => uploadToLocal(f)) : [];
   const registrationCardFront = req.files?.registrationCardFront ? uploadToLocal(req.files.registrationCardFront[0]) : null;
   const registrationCardBack = req.files?.registrationCardBack ? uploadToLocal(req.files.registrationCardBack[0]) : null;
 
   const driverHiring = new DriverHiring({
     userId,
+    vehicleId,
     vehicleOwnerName: vehicleOwnerName || "",
     companyName: companyName || "",
     companyEmirate: companyEmirate || "",
@@ -191,7 +198,7 @@ const submitDriverHiring = asyncHandler(async (req, res) => {
   });
 });
 
-
+// API 4: Get Vehicle and Driver Hiring Data
 const getVehicleAndDriverHiring = asyncHandler(async (req, res) => {
   const { userId } = req.query;
 
@@ -203,12 +210,12 @@ const getVehicleAndDriverHiring = asyncHandler(async (req, res) => {
 
   // Fetch vehicle registrations
   const vehicles = await VehicleRegistration.find({ userId })
-    .select("-__v") // Exclude version key
+    .select("-__v")
     .lean();
 
   // Fetch driver hiring requests
   const driverHirings = await DriverHiring.find({ userId })
-    .select("-__v") // Exclude version key
+    .select("-__v")
     .lean();
 
   // Prepare response
@@ -222,6 +229,73 @@ const getVehicleAndDriverHiring = asyncHandler(async (req, res) => {
   res.status(200).json(response);
 });
 
+// API 5: Delete Vehicle Registration
+const deleteVehicle = asyncHandler(async (req, res) => {
+  const { userId, vehicleId } = req.params;
 
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ message: "User not found", token: req.cookies.token });
+  }
 
-export { registerVehicle, setDriverDecision, submitDriverHiring , getVehicleAndDriverHiring  };
+  const vehicle = await VehicleRegistration.findById(vehicleId);
+  if (!vehicle || vehicle.userId.toString() !== userId) {
+    return res.status(403).json({ message: "Invalid or unauthorized vehicle ID", token: req.cookies.token });
+  }
+
+  // Check if vehicle is referenced in any driver hiring posts
+  const driverHiring = await DriverHiring.findOne({ vehicleId });
+  if (driverHiring) {
+    return res.status(400).json({ message: "Cannot delete vehicle as it is referenced in a driver hiring post", token: req.cookies.token });
+  }
+
+  await VehicleRegistration.deleteOne({ _id: vehicleId });
+
+  // Update user's pendingVehicleData if it matches the deleted vehicle
+  if (user.pendingVehicleData && user.pendingVehicleData.toString() === vehicleId) {
+    user.pendingVehicleData = null;
+    await user.save();
+  }
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRY });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Vehicle registration deleted successfully",
+    token,
+  });
+});
+
+// API 6: Delete Driver Hiring Post
+const deleteDriverHiring = asyncHandler(async (req, res) => {
+  const { userId, driverHiringId } = req.params;
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ message: "User not found", token: req.cookies.token });
+  }
+
+  const driverHiring = await DriverHiring.findById(driverHiringId);
+  if (!driverHiring || driverHiring.userId.toString() !== userId) {
+    return res.status(403).json({ message: "Invalid or unauthorized driver hiring ID", token: req.cookies.token });
+  }
+
+  await DriverHiring.deleteOne({ _id: driverHiringId });
+
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRY });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
+  res.status(200).json({
+    message: "Driver hiring post deleted successfully",
+    token,
+  });
+});
+
+export { 
+  registerVehicle, 
+  setDriverDecision, 
+  submitDriverHiring, 
+  getVehicleAndDriverHiring,
+  deleteVehicle,
+  deleteDriverHiring 
+};

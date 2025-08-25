@@ -173,6 +173,11 @@ const driverHiringSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    vehicleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "VehicleRegistration",
+      required: [true, "Vehicle ID is required"],
+    },
     vehicleOwnerName: { type: String, required: true },
     companyName: { type: String, required: false },
     companyEmirate: { type: String, required: false },
@@ -258,7 +263,7 @@ const driverHiringSchema = new mongoose.Schema(
 );
 
 vehicleRegistrationSchema.index({ userId: 1 });
-driverHiringSchema.index({ userId: 1 });
+driverHiringSchema.index({ userId: 1, vehicleId: 1 });
 
 export const VehicleRegistration =
   mongoose.models.VehicleRegistration ||
