@@ -69,8 +69,16 @@ const SELECT_FLOW = [
         label: "Towing Services",
         imageHint: "Tow truck carrying a sedan on flatbed",
         subServices: [
-          { key: "flatbed towing", label: "Flatbed Towing", info: "Safest option for all vehicles, including luxury/exotic cars & low clearance models." },
-          { key: "wheel lift towing", label: "Wheel Lift Towing", info: "Quick & efficient method lifting front or rear wheels, suitable for short-distance towing." },
+          {
+            key: "flatbed towing",
+            label: "Flatbed Towing",
+            info: "Safest option for all vehicles, including luxury/exotic cars & low clearance models.",
+          },
+          {
+            key: "wheel lift towing",
+            label: "Wheel Lift Towing",
+            info: "Quick & efficient method lifting front or rear wheels, suitable for short-distance towing.",
+          },
         ],
       },
       {
@@ -78,8 +86,16 @@ const SELECT_FLOW = [
         label: "Winching Services",
         imageHint: "4x4 recovery vehicle pulling SUV from roadside mud",
         subServices: [
-          { key: "on-road winching", label: "On-Road Winching", info: "For vehicles stuck roadside due to ditch, breakdown, or minor accident." },
-          { key: "off-road winching", label: "Off-Road Winching", info: "Recovery for vehicles stuck in sand, mud, or rough terrain." },
+          {
+            key: "on-road winching",
+            label: "On-Road Winching",
+            info: "For vehicles stuck roadside due to ditch, breakdown, or minor accident.",
+          },
+          {
+            key: "off-road winching",
+            label: "Off-Road Winching",
+            info: "Recovery for vehicles stuck in sand, mud, or rough terrain.",
+          },
         ],
       },
       {
@@ -87,8 +103,16 @@ const SELECT_FLOW = [
         label: "Roadside Assistance",
         imageHint: "Technician helping with car battery on roadside",
         subServices: [
-          { key: "battery jump start", label: "Battery Jump Start", info: "Portable jump-start service when battery is dead." },
-          { key: "fuel delivery", label: "Fuel Delivery", info: "Fuel delivered directly to stranded vehicles (petrol/diesel)." },
+          {
+            key: "battery jump start",
+            label: "Battery Jump Start",
+            info: "Portable jump-start service when battery is dead.",
+          },
+          {
+            key: "fuel delivery",
+            label: "Fuel Delivery",
+            info: "Fuel delivered directly to stranded vehicles (petrol/diesel).",
+          },
         ],
       },
       {
@@ -96,14 +120,34 @@ const SELECT_FLOW = [
         label: "Specialized/Heavy Recovery",
         imageHint: "Heavy-duty 6-wheeler tow truck pulling a large truck",
         subServices: [
-          { key: "luxury & exotic car recovery", label: "Luxury & Exotic Car Recovery", info: "Secure handling of high-end vehicles." },
-          { key: "accident & collision recovery", label: "Accident & Collision Recovery", info: "Safe recovery after accidents." },
-          { key: "heavy-duty vehicle recovery", label: "Heavy-Duty Vehicle Recovery", info: "Tow buses, trucks, and trailers." },
-          { key: "basement pull-out", label: "Basement Pull-Out", info: "Specialized service for underground/basement parking." },
+          {
+            key: "luxury & exotic car recovery",
+            label: "Luxury & Exotic Car Recovery",
+            info: "Secure handling of high-end vehicles.",
+          },
+          {
+            key: "accident & collision recovery",
+            label: "Accident & Collision Recovery",
+            info: "Safe recovery after accidents.",
+          },
+          {
+            key: "heavy-duty vehicle recovery",
+            label: "Heavy-Duty Vehicle Recovery",
+            info: "Tow buses, trucks, and trailers.",
+          },
+          {
+            key: "basement pull-out",
+            label: "Basement Pull-Out",
+            info: "Specialized service for underground/basement parking.",
+          },
         ],
       },
     ],
-    helpers: { packingHelper: false, loadingUnloadingHelper: false, fixingHelper: false },
+    helpers: {
+      packingHelper: false,
+      loadingUnloadingHelper: false,
+      fixingHelper: false,
+    },
     roundTrip: { discount: "AED 10", freeStayMinutes: 30 },
   },
   {
@@ -129,31 +173,75 @@ const SELECT_FLOW = [
         vehicles: ["large truck", "6-wheeler", "container truck"],
       },
     ],
-    helpers: { packingHelper: true, loadingUnloadingHelper: true, fixingHelper: true },
+    helpers: {
+      packingHelper: true,
+      loadingUnloadingHelper: true,
+      fixingHelper: true,
+    },
     roundTrip: { discount: "AED 10", freeStayMinutes: 30 },
   },
   {
     key: "car cab",
     label: "Car Cab",
     subServices: [
-      { key: "economy", label: "Economy", info: "Budget-friendly rides. Hatchbacks & small sedans. Ideal for daily use & short trips." },
-      { key: "premium", label: "Premium", info: "Business-class comfort. Luxury sedans & executive cars. Perfect for corporate travel & events." },
-      { key: "xl", label: "XL (Group Ride)", info: "SUVs & 7-seaters. Extra luggage space. Great for groups & airport transfers." },
-      { key: "family", label: "Family", info: "Spacious & safe for families. Optional child seat. Focus on comfort & safety for kids." },
-      { key: "luxury", label: "Luxury (VIP)", info: "Ultra-luxury cars like Hummer, GMC, Range Rover, Lexus, Mercedes, BMW. High-class comfort & prestige." },
+      {
+        key: "economy",
+        label: "Economy",
+        info: "Budget-friendly rides. Hatchbacks & small sedans. Ideal for daily use & short trips.",
+      },
+      {
+        key: "premium",
+        label: "Premium",
+        info: "Business-class comfort. Luxury sedans & executive cars. Perfect for corporate travel & events.",
+      },
+      {
+        key: "xl",
+        label: "XL (Group Ride)",
+        info: "SUVs & 7-seaters. Extra luggage space. Great for groups & airport transfers.",
+      },
+      {
+        key: "family",
+        label: "Family",
+        info: "Spacious & safe for families. Optional child seat. Focus on comfort & safety for kids.",
+      },
+      {
+        key: "luxury",
+        label: "Luxury (VIP)",
+        info: "Ultra-luxury cars like Hummer, GMC, Range Rover, Lexus, Mercedes, BMW. High-class comfort & prestige.",
+      },
     ],
-    helpers: { packingHelper: false, loadingUnloadingHelper: false, fixingHelper: false },
+    helpers: {
+      packingHelper: false,
+      loadingUnloadingHelper: false,
+      fixingHelper: false,
+    },
     roundTrip: { discount: "AED 10", freeStayMinutes: 30 },
   },
   {
     key: "bike",
     label: "Bike",
     subServices: [
-      { key: "economy", label: "Economy", info: "Budget-friendly motorbike rides." },
-      { key: "premium", label: "Premium", info: "Comfortable bikes with experienced riders." },
-      { key: "vip", label: "VIP", info: "Stylish, high-end bikes for an exclusive experience." },
+      {
+        key: "economy",
+        label: "Economy",
+        info: "Budget-friendly motorbike rides.",
+      },
+      {
+        key: "premium",
+        label: "Premium",
+        info: "Comfortable bikes with experienced riders.",
+      },
+      {
+        key: "vip",
+        label: "VIP",
+        info: "Stylish, high-end bikes for an exclusive experience.",
+      },
     ],
-    helpers: { packingHelper: false, loadingUnloadingHelper: false, fixingHelper: false },
+    helpers: {
+      packingHelper: false,
+      loadingUnloadingHelper: false,
+      fixingHelper: false,
+    },
     roundTrip: { discount: "AED 10", freeStayMinutes: 30 },
   },
 ];
@@ -222,8 +310,6 @@ const uploadLicense = asyncHandler(async (req, res) => {
   });
 });
 
-// Removed vehicle decision step; user will proceed to vehicle registration
-
 const registerVehicle = asyncHandler(async (req, res) => {
   const {
     userId,
@@ -284,7 +370,9 @@ const registerVehicle = asyncHandler(async (req, res) => {
     const categoryKey = serviceCategory.toLowerCase();
     const mapKeys = Object.keys(SERVICE_CATEGORY_MAP[serviceType]);
     const foundKey = mapKeys.find((k) => k.toLowerCase() === categoryKey);
-    const allowed = foundKey ? SERVICE_CATEGORY_MAP[serviceType][foundKey] : null;
+    const allowed = foundKey
+      ? SERVICE_CATEGORY_MAP[serviceType][foundKey]
+      : null;
     if (allowed && vehicleType && !allowed.includes(vehicleType)) {
       return res.status(400).json({
         message: `vehicleType '${vehicleType}' does not belong to serviceCategory '${serviceCategory}'`,
@@ -365,10 +453,10 @@ const registerVehicle = asyncHandler(async (req, res) => {
   res.status(201).json({
     message: "Vehicle registration submitted and pending admin approval",
     vehicleId: vehicle._id,
-    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    serviceTypes: VALID_SERVICE_TYPES,
     roundTripInfo: {
       discount: "AED 10",
-      freeStayMinutes: 30, // Configurable in frontend or env
+      freeStayMinutes: 30,
       note: "Apply discount and free stay minutes for round-trip bookings in frontend",
     },
     token,
@@ -432,10 +520,18 @@ const updateVehicle = asyncHandler(async (req, res) => {
       const categoryKey = serviceCategory.toLowerCase();
       const mapKeys = Object.keys(SERVICE_CATEGORY_MAP[effectiveType]);
       const foundKey = mapKeys.find((k) => k.toLowerCase() === categoryKey);
-      const allowed = foundKey ? SERVICE_CATEGORY_MAP[effectiveType][foundKey] : null;
-      if (allowed && (vehicleType || vehicle.vehicleType) && !allowed.includes(vehicleType || vehicle.vehicleType)) {
+      const allowed = foundKey
+        ? SERVICE_CATEGORY_MAP[effectiveType][foundKey]
+        : null;
+      if (
+        allowed &&
+        (vehicleType || vehicle.vehicleType) &&
+        !allowed.includes(vehicleType || vehicle.vehicleType)
+      ) {
         return res.status(400).json({
-          message: `vehicleType '${vehicleType || vehicle.vehicleType}' does not belong to serviceCategory '${serviceCategory}'`,
+          message: `vehicleType '${
+            vehicleType || vehicle.vehicleType
+          }' does not belong to serviceCategory '${serviceCategory}'`,
           token: req.cookies.token,
         });
       }
@@ -503,10 +599,10 @@ const updateVehicle = asyncHandler(async (req, res) => {
   res.status(200).json({
     message: "Vehicle updated successfully",
     vehicleId: vehicle._id,
-    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    serviceTypes: VALID_SERVICE_TYPES,
     roundTripInfo: {
       discount: "AED 10",
-      freeStayMinutes: 30, // Configurable in frontend or env
+      freeStayMinutes: 30,
       note: "Apply discount and free stay minutes for round-trip bookings in frontend",
     },
     token,
@@ -545,10 +641,10 @@ const getUserVehicleInfo = asyncHandler(async (req, res) => {
       selfieImage: user.selfieImage,
     },
     vehicle: vehicle ? vehicle.toObject() : null,
-    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    serviceTypes: VALID_SERVICE_TYPES,
     roundTripInfo: {
       discount: "AED 10",
-      freeStayMinutes: 30, // Configurable in frontend or env
+      freeStayMinutes: 30,
       note: "Apply discount and free stay minutes for round-trip bookings in frontend",
     },
   };
@@ -596,10 +692,63 @@ const getCurrentUser = asyncHandler(async (req, res) => {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     },
-    serviceTypes: VALID_SERVICE_TYPES, // Include for frontend
+    serviceTypes: VALID_SERVICE_TYPES,
     roundTripInfo: {
       discount: "AED 10",
-      freeStayMinutes: 30, // Configurable in frontend or env
+      freeStayMinutes: 30,
+      note: "Apply discount and free stay minutes for round-trip bookings in frontend",
+    },
+    token,
+  });
+});
+
+const getUserById = asyncHandler(async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({
+      message: "User ID is required",
+      token: req.cookies.token,
+    });
+  }
+
+  const user = await User.findById(userId)
+    .select("-password -__v")
+    .populate("pendingVehicleData");
+  if (!user) {
+    return res
+      .status(404)
+      .json({ message: "User not found", token: req.cookies.token });
+  }
+
+  const token = jwt.sign({ id: req.user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+  res.status(200).json({
+    user: {
+      username: user.username,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      role: user.role,
+      kycLevel: user.kycLevel,
+      kycStatus: user.kycStatus,
+      licenseImage: user.licenseImage,
+      hasVehicle: user.hasVehicle,
+      pendingVehicleData: user.pendingVehicleData,
+      country: user.country,
+      gender: user.gender,
+      cnicImages: user.cnicImages,
+      selfieImage: user.selfieImage,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    },
+    serviceTypes: VALID_SERVICE_TYPES,
+    roundTripInfo: {
+      discount: "AED 10",
+      freeStayMinutes: 30,
       note: "Apply discount and free stay minutes for round-trip bookings in frontend",
     },
     token,
@@ -612,5 +761,6 @@ export {
   updateVehicle,
   getUserVehicleInfo,
   getCurrentUser,
+  getUserById,
   getVehicleSelectFlow,
 };

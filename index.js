@@ -11,6 +11,7 @@ import driversRoutes from "./routes/driversRoutes.js";
 import vehiclesRoutes from "./routes/vehiclesRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js"; // Added booking routes
 import mlmRoutes from "./routes/mlmRoutes.js"; // Added MLM routes
+import vehicleHiringRoutes from "./routes/vehicleHiringRoutes.js"; // Added MLM routes
 import cloudinary from "cloudinary";
 import "colors";
 import path from "path";
@@ -71,6 +72,7 @@ app.use("/api/drivers", driversRoutes);
 app.use("/api/vehicles", vehiclesRoutes);
 app.use("/api/bookings", bookingRoutes); // Added booking routes
 app.use("/api/mlm", mlmRoutes); // Added MLM routes
+app.use("/api/vehicle-hiring", vehicleHiringRoutes);
 
 connectDB();
 
