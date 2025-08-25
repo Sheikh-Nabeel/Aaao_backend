@@ -1,5 +1,73 @@
 # 🚗 Complete Booking Flow Guide - All Service Types
 
+## 🎯 **Quick Test Request Data (Floor Charges Working)**
+
+### **✅ Correct Shifting & Movers Request (Floor Charges Enabled):**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Apartment 123, Building A, Dubai"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Villa 456, Palm Jumeirah, Dubai"
+  },
+  "serviceType": "shifting & movers",
+  "vehicleType": "small van",
+  "distanceInMeters": 15000,
+  "furnitureDetails": {
+    "sofa": 2,
+    "bed": 1,
+    "dining_table": 3,
+    "tv": 2,
+    "wardrobe": 2,
+    "fridge": 1,
+    "washing_machine": 1,
+    "ac": 1,
+    "other": 5
+  },
+  "serviceDetails": {
+    "shiftingMovers": {
+      "selectedServices": {
+        "loadingUnloading": true,
+        "packing": false,
+        "fixing": true,
+        "helpers": true,
+        "wheelchairHelper": false
+      },
+      "pickupFloorDetails": {
+        "floor": 5,
+        "hasLift": true,
+        "accessType": "lift"
+      },
+      "dropoffFloorDetails": {
+        "floor": 0,
+        "hasLift": false,
+        "accessType": "ground"
+      },
+      "extras": [
+        { "name": "Packing Material", "count": 5 },
+        { "name": "Extra Helper", "count": 1 },
+        { "name": "Furniture Assembly", "count": 1 }
+      ]
+    }
+  }
+}
+```
+
+**🔧 Test Different Floor Scenarios:**
+- **Ground Floor:** Change `"floor": 0` (no floor charges)
+- **2nd Floor Stairs:** Change to `"floor": 2, "accessType": "stairs"` (+154 AED)
+- **5th Floor Lift:** Change to `"floor": 5, "accessType": "lift"` (+75 AED)
+- **10th Floor Stairs:** Change to `"floor": 10, "accessType": "stairs"` (+1386 AED)
+
+**✅ Supported Furniture Items:**
+- `sofa`, `bed`, `dining_table`, `tv`, `wardrobe`
+- `fridge`, `washing_machine`, `ac`, `other`
+
+---
+
 ## 📋 Table of Contents
 1. [System Overview](#system-overview)
 2. [Authentication & Socket Connection](#authentication--socket-connection)
@@ -108,7 +176,13 @@ socket.emit('join_driver_room', driverId);
     "music": false,
     "wifi": false,
     "childSeat": false,
-    "petFriendly": false
+    "petFriendly": false,
+    "wheelchairAccessible": false,
+    "premiumFeatures": {
+      "leatherSeats": false,
+      "climateControl": false,
+      "entertainmentSystem": false
+    }
   },
   "extras": [
     { "name": "Child Seat", "count": 1, "price": 15 },
@@ -183,7 +257,12 @@ socket.emit('join_driver_room', driverId);
     "helmet": true,
     "rainCover": false,
     "extraHelmet": false,
-    "baggageCarrier": false
+    "baggageCarrier": false,
+    "safetyGear": {
+      "reflectiveVest": false,
+      "kneePads": false,
+      "elbowPads": false
+    }
   },
   "extras": [
     { "name": "Extra Helmet", "count": 1, "price": 5 },
@@ -236,25 +315,15 @@ socket.emit('join_driver_room', driverId);
   "distanceInMeters": 15000,
   "passengerCount": 0,
   "furnitureDetails": {
-    "sofas": 2,
-    "beds": 1,
-    "tables": 3,
-    "chairs": 8,
-    "wardrobes": 2,
-    "refrigerator": 1,
-    "washingMachine": 1,
-    "boxes": 10,
-    "diningTable": 1,
-    "bookshelf": 1,
-    "piano": 0,
-    "treadmill": 0,
-    "officeDesk": 1,
-    "artwork": 5,
-    "tvStand": 1,
-    "dresser": 1,
-    "mattress": 2,
-    "mirror": 3,
-    "other": "Garden furniture - 2 pieces"
+    "sofa": 2,
+    "bed": 1,
+    "dining_table": 3,
+    "tv": 2,
+    "wardrobe": 2,
+    "fridge": 1,
+    "washing_machine": 1,
+    "ac": 1,
+    "other": 5
   },
   "serviceDetails": {
     "shiftingMovers": {
@@ -274,7 +343,12 @@ socket.emit('join_driver_room', driverId);
         "floor": 0,
         "hasLift": false,
         "accessType": "ground"
-      }
+      },
+      "extras": [
+        { "name": "Packing Material", "count": 5 },
+        { "name": "Extra Helper", "count": 1 },
+        { "name": "Furniture Assembly", "count": 1 }
+      ]
     }
   },
   "itemDetails": [
@@ -303,7 +377,14 @@ socket.emit('join_driver_room', driverId);
     "packingMaterial": true,
     "assembly": false,
     "disassembly": false,
-    "cleaning": false
+    "cleaning": false,
+    "protectiveCovering": true,
+    "specializedHandling": {
+      "fragileItems": false,
+      "antiques": false,
+      "pianos": false,
+      "artwork": false
+    }
   },
   "extras": [
     { "name": "Packing Material", "count": 5, "price": 50 },
@@ -328,7 +409,7 @@ socket.emit('join_driver_room', driverId);
   "vehicleType": "small van",
   "distanceInMeters": 15000,
   "furnitureDetails": {
-    "sofas": 1
+    "sofa": 1
   },
   "serviceDetails": {
     "shiftingMovers": {
@@ -352,11 +433,9 @@ socket.emit('join_driver_room', driverId);
 - `container truck` - Container truck
 
 #### **Furniture Items Available:**
-- `sofas`, `beds`, `tables`, `chairs`, `wardrobes`
-- `refrigerator`, `washingMachine`, `boxes`
-- `diningTable`, `bookshelf`, `piano`, `treadmill`
-- `officeDesk`, `artwork`, `tvStand`, `dresser`
-- `mattress`, `mirror`, `other` (custom items)
+- `sofa`, `bed`, `dining_table`, `wardrobe`
+- `fridge`, `washing_machine`, `tv`, `ac`
+- `other` (custom items)
 
 ### 4. 🔧 Car Recovery Service
 
@@ -392,7 +471,11 @@ socket.emit('join_driver_room', driverId);
       "isLuxury": false,
       "isHeavyDuty": false,
       "hasTrailer": false,
-      "trailerDetails": null
+      "trailerDetails": null,
+      "chassisNumber": "ABC123456789",
+      "registrationExpiryDate": "2025-12-31",
+      "companyName": "Toyota Motors",
+      "vehicleOwnerName": "John Doe"
     }
   },
   "itemDetails": [],
@@ -419,7 +502,15 @@ socket.emit('join_driver_room', driverId);
     "roadsideAssistance": true,
     "fuelDelivery": false,
     "batteryJumpStart": false,
-    "tireChange": false
+    "tireChange": false,
+    "lockoutService": false,
+    "winchingService": false,
+    "specializedRecovery": {
+      "luxuryVehicles": false,
+      "heavyDutyVehicles": false,
+      "motorcycles": false,
+      "boats": false
+    }
   },
   "extras": [
     { "name": "Fuel Delivery", "count": 1, "price": 25 },
@@ -1342,7 +1433,13 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
     "music": false,
     "wifi": false,
     "childSeat": false,
-    "petFriendly": false
+    "petFriendly": false,
+    "wheelchairAccessible": false,
+    "premiumFeatures": {
+      "leatherSeats": false,
+      "climateControl": false,
+      "entertainmentSystem": false
+    }
   },
   "extras": [
     { "name": "Child Seat", "count": 1, "price": 15 },
@@ -1389,7 +1486,12 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
     "helmet": true,
     "rainCover": false,
     "extraHelmet": false,
-    "baggageCarrier": false
+    "baggageCarrier": false,
+    "safetyGear": {
+      "reflectiveVest": false,
+      "kneePads": false,
+      "elbowPads": false
+    }
   },
   "extras": [
     { "name": "Extra Helmet", "count": 1, "price": 5 },
@@ -1416,25 +1518,15 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
   "distanceInMeters": 15000,
   "passengerCount": 0,
   "furnitureDetails": {
-    "sofas": 2,
-    "beds": 1,
-    "tables": 3,
-    "chairs": 8,
-    "wardrobes": 2,
-    "refrigerator": 1,
-    "washingMachine": 1,
-    "boxes": 10,
-    "diningTable": 1,
-    "bookshelf": 1,
-    "piano": 0,
-    "treadmill": 0,
-    "officeDesk": 1,
-    "artwork": 5,
-    "tvStand": 1,
-    "dresser": 1,
-    "mattress": 2,
-    "mirror": 3,
-    "other": "Garden furniture - 2 pieces"
+    "sofa": 2,
+    "bed": 1,
+    "dining_table": 3,
+    "tv": 2,
+    "wardrobe": 2,
+    "fridge": 1,
+    "washing_machine": 1,
+    "ac": 1,
+    "other": 5
   },
   "serviceDetails": {
     "shiftingMovers": {
@@ -1454,7 +1546,12 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
         "floor": 0,
         "hasLift": false,
         "accessType": "ground"
-      }
+      },
+      "extras": [
+        { "name": "Packing Material", "count": 5 },
+        { "name": "Extra Helper", "count": 1 },
+        { "name": "Furniture Assembly", "count": 1 }
+      ]
     }
   },
   "itemDetails": [
@@ -1483,7 +1580,14 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
     "packingMaterial": true,
     "assembly": false,
     "disassembly": false,
-    "cleaning": false
+    "cleaning": false,
+    "protectiveCovering": true,
+    "specializedHandling": {
+      "fragileItems": false,
+      "antiques": false,
+      "pianos": false,
+      "artwork": false
+    }
   },
   "extras": [
     { "name": "Packing Material", "count": 5, "price": 50 },
@@ -1525,7 +1629,11 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
       "isLuxury": false,
       "isHeavyDuty": false,
       "hasTrailer": false,
-      "trailerDetails": null
+      "trailerDetails": null,
+      "chassisNumber": "ABC123456789",
+      "registrationExpiryDate": "2025-12-31",
+      "companyName": "Toyota Motors",
+      "vehicleOwnerName": "John Doe"
     }
   },
   "itemDetails": [],
@@ -1552,7 +1660,15 @@ const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
     "roadsideAssistance": true,
     "fuelDelivery": false,
     "batteryJumpStart": false,
-    "tireChange": false
+    "tireChange": false,
+    "lockoutService": false,
+    "winchingService": false,
+    "specializedRecovery": {
+      "luxuryVehicles": false,
+      "heavyDutyVehicles": false,
+      "motorcycles": false,
+      "boats": false
+    }
   },
   "extras": [
     { "name": "Fuel Delivery", "count": 1, "price": 25 },
@@ -1614,6 +1730,84 @@ socket.emit('user_location_update', {
 ```
 
 ---
+
+
+
+## 📋 **Complete Field Reference**
+
+### **🔧 Service-Specific Fields**
+
+#### **Shifting & Movers Fields:**
+- `selectedServices.loadingUnloading` - Loading/unloading assistance
+- `selectedServices.packing` - Packing service
+- `selectedServices.fixing` - Furniture assembly/disassembly
+- `selectedServices.helpers` - Additional helpers
+- `selectedServices.wheelchairHelper` - Wheelchair accessibility
+- `pickupFloorDetails.floor` - Pickup floor number
+- `pickupFloorDetails.hasLift` - Lift availability at pickup
+- `pickupFloorDetails.accessType` - Access type (ground/stairs/lift)
+- `dropoffFloorDetails.floor` - Dropoff floor number
+- `dropoffFloorDetails.hasLift` - Lift availability at dropoff
+- `dropoffFloorDetails.accessType` - Access type (ground/stairs/lift)
+- `extras` - Additional services array
+
+#### **Car Recovery Fields:**
+- `issueDescription` - Description of the problem
+- `urgencyLevel` - Service urgency (low/medium/high/emergency)
+- `needHelper` - Additional helper required
+- `wheelchairHelper` - Wheelchair accessibility
+- `vehicleMake` - Vehicle manufacturer
+- `vehicleModel` - Vehicle model
+- `vehicleYear` - Vehicle year
+- `licensePlate` - License plate number
+- `vehicleColor` - Vehicle color
+- `vehicleType` - Vehicle type (Sedan/SUV/etc.)
+- `isLuxury` - Luxury vehicle flag
+- `isHeavyDuty` - Heavy duty vehicle flag
+- `hasTrailer` - Trailer attachment flag
+- `trailerDetails` - Trailer information
+- `chassisNumber` - Vehicle chassis number
+- `registrationExpiryDate` - Registration expiry date
+- `companyName` - Company name (if applicable)
+- `vehicleOwnerName` - Vehicle owner name
+
+#### **Appointment Fields:**
+- `appointmentType` - Type of appointment
+- `scheduledDate` - Scheduled date
+- `scheduledTime` - Scheduled time
+- `estimatedDuration` - Estimated service duration
+- `serviceCenter` - Service center details
+- `serviceRequirements` - Required services
+- `vehicleInformation` - Vehicle details
+- `specialInstructions` - Special instructions
+- `confirmationSettings` - Confirmation settings
+
+### **🚗 Vehicle Information Fields:**
+- `vehicleMake` - Vehicle manufacturer
+- `vehicleModel` - Vehicle model
+- `vehicleYear` - Vehicle year
+- `licensePlate` - License plate number
+- `vehicleColor` - Vehicle color
+- `vehicleType` - Vehicle type
+- `chassisNumber` - Chassis number
+- `registrationExpiryDate` - Registration expiry
+- `companyName` - Company name
+- `vehicleOwnerName` - Owner name
+
+### **🔧 Helper Services:**
+- `loadingUnloadingHelper` - Loading/unloading assistance
+- `packingHelper` - Packing assistance
+- `fixingHelper` - Assembly/disassembly assistance
+- `wheelchairHelper` - Wheelchair accessibility
+- `needHelper` - Additional helper required
+
+### **📅 Appointment Services:**
+- `workshop` - Auto repair and maintenance
+- `tyre_shop` - Tire services
+- `key_unlocker` - Key unlocking
+- `other` - Other specialized services
+
+
 
 ## 📚 API Reference
 
