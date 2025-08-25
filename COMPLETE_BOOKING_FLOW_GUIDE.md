@@ -62,6 +62,13 @@
 - **5th Floor Lift:** Change to `"floor": 5, "accessType": "lift"` (+75 AED)
 - **10th Floor Stairs:** Change to `"floor": 10, "accessType": "stairs"` (+1386 AED)
 
+**🚛 Test Different Vehicle Types:**
+- **Mini Pickup:** Change `"vehicleType": "mini pickup"` (40 AED base + 12 AED/km)
+- **Small Van:** Change `"vehicleType": "small van"` (50 AED base + 15 AED/km)
+- **Medium Truck:** Change `"vehicleType": "medium truck"` (80 AED base + 18 AED/km)
+- **Large Truck:** Change `"vehicleType": "large truck"` (150 AED base + 25 AED/km)
+- **Container Truck:** Change `"vehicleType": "container truck"` (200 AED base + 30 AED/km)
+
 **✅ Supported Furniture Items:**
 - `sofa`, `bed`, `dining_table`, `tv`, `wardrobe`
 - `fridge`, `washing_machine`, `ac`, `other`
@@ -422,15 +429,15 @@ socket.emit('join_driver_room', driverId);
 ```
 
 #### **Vehicle Types Available:**
-- `mini pickup` - Small pickup truck
-- `suzuki carry` - Suzuki carry van
-- `small van` - Small moving van
-- `medium truck` - Medium-sized truck
-- `mazda` - Mazda truck
-- `covered van` - Covered moving van
-- `large truck` - Large moving truck
-- `6-wheeler` - 6-wheel truck
-- `container truck` - Container truck
+- `mini pickup` - Small pickup truck (40 AED base + 12 AED/km)
+- `suzuki carry` - Suzuki carry van (45 AED base + 13 AED/km)
+- `small van` - Small moving van (50 AED base + 15 AED/km)
+- `medium truck` - Medium-sized truck (80 AED base + 18 AED/km)
+- `mazda` - Mazda truck (85 AED base + 19 AED/km)
+- `covered van` - Covered moving van (100 AED base + 20 AED/km)
+- `large truck` - Large moving truck (150 AED base + 25 AED/km)
+- `6-wheeler` - 6-wheel truck (180 AED base + 28 AED/km)
+- `container truck` - Container truck (200 AED base + 30 AED/km)
 
 #### **Furniture Items Available:**
 - `sofa`, `bed`, `dining_table`, `wardrobe`

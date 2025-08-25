@@ -3,22 +3,41 @@ import PricingConfig from '../models/pricingModel.js';
 // Calculate fare for shifting/movers service
 const calculateShiftingMoversFare = async (bookingData) => {
   try {
-    const config = await PricingConfig.findOne({ 
-      serviceType: 'shifting_movers', 
-      isActive: true 
-    });
-    
-    if (!config || !config.shiftingMoversConfig) {
-      throw new Error('Shifting/Movers pricing configuration not found');
-    }
-    
-    const pricing = config.shiftingMoversConfig;
     const {
       distance,
       furnitureDetails,
       serviceDetails,
       vehicleType
     } = bookingData;
+    
+    // Get pricing configuration for the specific vehicle type
+    let config = await PricingConfig.findOne({ 
+      serviceType: 'shifting_movers',
+      'shiftingMoversConfig.vehicleType': vehicleType,
+      isActive: true 
+    });
+    
+    if (!config || !config.shiftingMoversConfig) {
+      // If no specific vehicle type config found, try to get default config
+      const defaultConfig = await PricingConfig.findOne({ 
+        serviceType: 'shifting_movers', 
+        isActive: true 
+      });
+      
+      if (!defaultConfig || !defaultConfig.shiftingMoversConfig) {
+        throw new Error(`Shifting/Movers pricing configuration not found for vehicle type: ${vehicleType}`);
+      }
+      
+      console.log(`Using default pricing for vehicle type: ${vehicleType}`);
+      config = defaultConfig;
+    }
+    
+    const pricing = config.shiftingMoversConfig;
+    
+    // Validate that the pricing config matches the requested vehicle type
+    if (pricing.vehicleType !== vehicleType) {
+      console.log(`Warning: Pricing config vehicle type (${pricing.vehicleType}) doesn't match requested vehicle type (${vehicleType})`);
+    }
     
     let fareBreakdown = {
       baseFare: 0,
@@ -40,7 +59,13 @@ const calculateShiftingMoversFare = async (bookingData) => {
         percentage: 0,
         amount: 0
       },
-      totalCalculatedFare: 0
+      totalCalculatedFare: 0,
+      vehicleType: vehicleType,
+      pricingConfig: {
+        vehicleType: pricing.vehicleType,
+        vehicleStartFare: pricing.vehicleStartFare,
+        perKmFare: pricing.perKmFare
+      }
     };
     
     // 1. Calculate base fare (covers 5KM)
@@ -58,7 +83,7 @@ const calculateShiftingMoversFare = async (bookingData) => {
       );
     }
     
-    // 3. Calculate service fees
+    // 4. Calculate service fees
     if (serviceDetails?.shiftingMovers?.selectedServices) {
       const selectedServices = serviceDetails.shiftingMovers.selectedServices;
       
@@ -125,7 +150,7 @@ const calculateShiftingMoversFare = async (bookingData) => {
       }
     }
     
-    // 4. Calculate location charges (stairs/lift)
+    // 5. Calculate location charges (stairs/lift)
     if (serviceDetails?.shiftingMovers) {
       const { pickupFloorDetails, dropoffFloorDetails } = serviceDetails.shiftingMovers;
       
@@ -188,7 +213,7 @@ const calculateShiftingMoversFare = async (bookingData) => {
       }
     }
     
-    // 5. Calculate platform charges
+    // 6. Calculate platform charges
     const subtotal = 
       fareBreakdown.baseFare +
       fareBreakdown.distanceFare +
@@ -205,7 +230,7 @@ const calculateShiftingMoversFare = async (bookingData) => {
       amount: platformAmount
     };
     
-    // 6. Calculate total fare including platform charges
+    // 7. Calculate total fare including platform charges
     fareBreakdown.totalCalculatedFare = subtotal + platformAmount;
     
     return fareBreakdown;
