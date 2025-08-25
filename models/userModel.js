@@ -55,7 +55,6 @@ const userSchema = new mongoose.Schema(
     },
     sponsorId: {
       type: String,
-      unique: true,
       required: true,
       default: function () {
         return `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`;
@@ -143,6 +142,24 @@ userSchema.index({ pendingVehicleData: 1 });
 userSchema.index({ sponsorBy: 1, level: 1 });
 userSchema.index({ level: 1, createdAt: -1 });
 userSchema.index({ kycLevel: 1, role: 1 });
+// New indexes for driver payment tracking
+userSchema.index({ "driverPaymentTracking.isRestricted": 1 });
+userSchema.index({ "driverPaymentTracking.unpaidRidesCount": 1 });
+userSchema.index({ "driverPaymentTracking.totalPendingAmount": 1 });
+userSchema.index({ "wallet.balance": 1 });
+// Indexes for game points
+userSchema.index({ "gamePoints.tgp": 1 });
+userSchema.index({ "gamePoints.pgp": 1 });
+// Indexes for driver location and status
+userSchema.index({ "currentLocation": "2dsphere" });
+userSchema.index({ "isActive": 1 });
+userSchema.index({ "driverStatus": 1 });
+userSchema.index({ "lastActiveAt": 1 });
+userSchema.index({ "role": 1, "isActive": 1, "driverStatus": 1 });
+// Indexes for driver settings
+userSchema.index({ "driverSettings.autoAccept.enabled": 1 });
+userSchema.index({ "driverSettings.ridePreferences.pinkCaptainMode": 1 });
+userSchema.index({ role: 1, "driverSettings.autoAccept.enabled": 1 });
 
 userSchema.pre("save", async function (next) {
   if (this.isModified("password")) {

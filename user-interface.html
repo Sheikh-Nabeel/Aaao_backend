@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>👤 User Interface - Real-Time Booking System</title>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%); min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; color: white; margin-bottom: 30px; }
+        .card { background: white; border-radius: 15px; padding: 25px; margin: 20px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .status-card { background: linear-gradient(45deg, #ff6b6b, #ee5a24); color: white; }
+        .status-card.online { background: linear-gradient(45deg, #00d2d3, #54a0ff); }
+        .input-group { margin: 15px 0; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
+        input, select, textarea { width: 100%; padding: 12px; border: 2px solid #e1e8ed; border-radius: 8px; font-size: 14px; transition: border-color 0.3s; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #74b9ff; }
+        button { padding: 12px 25px; margin: 8px; background: #74b9ff; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.3s; }
+        button:hover { background: #0984e3; transform: translateY(-2px); }
+        button:disabled { background: #cbd5e0; cursor: not-allowed; transform: none; }
+        button.success { background: #00b894; }
+        button.danger { background: #e17055; }
+        button.warning { background: #fdcb6e; color: #2d3436; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .full-width { grid-column: 1 / -1; }
+        .log { background: #f7fafc; border: 2px solid #e2e8f0; padding: 20px; height: 350px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 13px; border-radius: 8px; }
+        .error { color: #e53e3e; font-weight: bold; }
+        .success { color: #38a169; font-weight: bold; }
+        .info { color: #3182ce; }
+        .warning { color: #d69e2e; }
+        .timestamp { color: #718096; font-size: 11px; }
+        .booking-status { background: #fff5f5; border: 2px solid #feb2b2; padding: 15px; margin: 10px 0; border-radius: 8px; }
+        .booking-status.active { background: #f0fff4; border-color: #9ae6b4; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
+        .driver-info { background: #edf2f7; padding: 15px; border-radius: 8px; margin: 10px 0; }
+        .location-input { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0; }
+        .fare-display { background: #e6fffa; border: 2px solid #81e6d9; padding: 15px; border-radius: 8px; text-align: center; font-size: 18px; font-weight: bold; }
+        .ride-progress { background: #fff5f5; border-left: 4px solid #74b9ff; padding: 15px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>👤 User Interface</h1>
+            <p>Real-Time Booking System - User Dashboard</p>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="card status-card" id="statusCard">
+            <h2>🔌 Connection Status</h2>
+            <p id="connectionStatus">Disconnected</p>
+            <div class="input-group">
+                <label for="userToken">User JWT Token:</label>
+                <input type="text" id="userToken" placeholder="Enter user JWT token" value="">
+            </div>
+            <button onclick="connectSocket()">🔌 Connect</button>
+            <button onclick="disconnectSocket()">❌ Disconnect</button>
+        </div>
+
+        <div class="grid">
+            <!-- Location Management -->
+            <div class="card">
+                <h2>📍 Location Management</h2>
+                <div class="location-input">
+                    <div class="input-group">
+                        <label for="pickupLat">Pickup Latitude:</label>
+                        <input type="number" id="pickupLat" step="any" value="24.8607" placeholder="24.8607">
+                    </div>
+                    <div class="input-group">
+                        <label for="pickupLng">Pickup Longitude:</label>
+                        <input type="number" id="pickupLng" step="any" value="67.0011" placeholder="67.0011">
+                    </div>
+                    <div class="input-group">
+                        <label for="dropoffLat">Dropoff Latitude:</label>
+                        <input type="number" id="dropoffLat" step="any" value="24.8615" placeholder="24.8615">
+                    </div>
+                    <div class="input-group">
+                        <label for="dropoffLng">Dropoff Longitude:</label>
+                        <input type="number" id="dropoffLng" step="any" value="67.0025" placeholder="67.0025">
+                    </div>
+                    <button onclick="updateLocation()">📍 Update Location</button>
+                </div>
+            </div>
+
+            <!-- Booking Management -->
+            <div class="card">
+                <h2>🚗 Booking Management</h2>
+                <div class="input-group">
+                    <label for="serviceType">Service Type:</label>
+                    <select id="serviceType">
+                        <option value="bike">🏍️ Bike</option>
+                        <option value="rickshaw">🛺 Rickshaw</option>
+                        <option value="car">🚗 Car</option>
+                        <option value="mini">🚙 Mini</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label for="fareAmount">Fare Amount (PKR):</label>
+                    <input type="number" id="fareAmount" value="150" placeholder="150">
+                </div>
+                <div class="input-group">
+                    <label for="pickupAddress">Pickup Address:</label>
+                    <input type="text" id="pickupAddress" value="Karachi, Pakistan" placeholder="Pickup location">
+                </div>
+                <div class="input-group">
+                    <label for="dropoffAddress">Dropoff Address:</label>
+                    <input type="text" id="dropoffAddress" value="Clifton, Karachi" placeholder="Dropoff location">
+                </div>
+                <button onclick="createBooking()" class="success">🚗 Create Booking</button>
+                <button onclick="cancelBooking()" class="danger">❌ Cancel Booking</button>
+            </div>
+        </div>
+
+        <div class="grid">
+            <!-- Fare Management -->
+            <div class="card">
+                <h2>💰 Fare Management</h2>
+                <div class="input-group">
+                    <label for="newFare">New Fare Amount:</label>
+                    <input type="number" id="newFare" placeholder="200">
+                </div>
+                <button onclick="adjustFare()" class="warning">💰 Adjust Fare</button>
+                <button onclick="acceptFareIncrease()" class="success">✅ Accept Fare Increase</button>
+                
+                <div class="fare-display" id="fareDisplay">
+                    Current Fare: PKR 0
+                </div>
+            </div>
+
+            <!-- Communication -->
+            <div class="card">
+                <h2>💬 Communication</h2>
+                <div class="input-group">
+                    <label for="messageText">Message:</label>
+                    <textarea id="messageText" rows="3" placeholder="Type your message to driver..."></textarea>
+                </div>
+                <button onclick="sendMessage()">💬 Send Message</button>
+            </div>
+        </div>
+
+        <div class="grid">
+            <!-- Rating & Feedback -->
+            <div class="card">
+                <h2>⭐ Rating & Feedback</h2>
+                <div class="input-group">
+                    <label for="ratingValue">Rating (1-5 stars):</label>
+                    <select id="ratingValue">
+                        <option value="5">⭐⭐⭐⭐⭐ (5 stars)</option>
+                        <option value="4">⭐⭐⭐⭐ (4 stars)</option>
+                        <option value="3">⭐⭐⭐ (3 stars)</option>
+                        <option value="2">⭐⭐ (2 stars)</option>
+                        <option value="1">⭐ (1 star)</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label for="reviewText">Review:</label>
+                    <textarea id="reviewText" rows="3" placeholder="Write your review..."></textarea>
+                </div>
+                <button onclick="submitRating()">⭐ Submit Rating</button>
+            </div>
+
+            <!-- Booking Status -->
+            <div class="card">
+                <h2>📊 Booking Status</h2>
+                <div class="booking-status" id="bookingStatus">
+                    <p><strong>Status:</strong> No active booking</p>
+                    <p><strong>Booking ID:</strong> -</p>
+                    <p><strong>Driver:</strong> -</p>
+                    <p><strong>Fare:</strong> PKR 0</p>
+                </div>
+                
+                <div class="driver-info" id="driverInfo" style="display: none;">
+                    <h4>👨‍✈️ Driver Information</h4>
+                    <p><strong>Name:</strong> <span id="driverName">-</span></p>
+                    <p><strong>Phone:</strong> <span id="driverPhone">-</span></p>
+                    <p><strong>Vehicle:</strong> <span id="driverVehicle">-</span></p>
+                    <p><strong>Rating:</strong> <span id="driverRating">-</span></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Real-time Event Log -->
+        <div class="card full-width">
+            <h2>📋 Real-time Event Log</h2>
+            <div class="log" id="eventLog"></div>
+            <button onclick="clearLog()">🗑️ Clear Log</button>
+        </div>
+    </div>

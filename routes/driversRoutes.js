@@ -7,6 +7,11 @@ import {
   getCurrentUser,
   getUserById,
   getVehicleSelectFlow,
+  getPendingRequests,
+  acceptBookingRequest,
+  rejectBookingRequest,
+  getDriverBookings,
+  offerFare,
 } from "../controllers/driversController.js";
 import authHandler from "../middlewares/authMIddleware.js";
 
@@ -56,5 +61,12 @@ router.get("/user-vehicle-info", authHandler, getUserVehicleInfo);
 router.get("/get-current-user", authHandler, getCurrentUser);
 router.get("/get-user-by-id", authHandler, getUserById);
 router.get("/vehicle-select-flow", getVehicleSelectFlow);
+
+// Driver booking request endpoints
+router.get("/pending-requests", authHandler, getPendingRequests);
+router.post("/accept-booking/:bookingId", authHandler, acceptBookingRequest);
+router.post("/reject-booking/:bookingId", authHandler, rejectBookingRequest);
+router.post("/offer-fare/:bookingId", authHandler, offerFare);
+router.get("/my-bookings", authHandler, getDriverBookings);
 
 export default router;

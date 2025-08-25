@@ -1,9 +1,11 @@
 import Vehicle from "../models/vehicleModel.js";
 import User from "../models/userModel.js";
+import Booking from "../models/bookingModel.js";
 import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import asyncHandler from "express-async-handler";
+import { io } from "../index.js";
 
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
@@ -755,6 +757,412 @@ const getUserById = asyncHandler(async (req, res) => {
   });
 });
 
+// Get pending booking requests for driver
+const getPendingRequests = asyncHandler(async (req, res) => {
+  const driverId = req.user._id;
+
+  // Get driver's vehicle information
+  const driver = await User.findById(driverId).populate('pendingVehicleData');
+  if (!driver || !driver.pendingVehicleData) {
+    return res.status(400).json({
+      success: false,
+      message: "Driver has no registered vehicles"
+    });
+  }
+
+  const driverVehicle = driver.pendingVehicleData;
+
+  // Find pending bookings that are specifically available to this driver
+  // In the new one-request-at-a-time system, we need to check which bookings
+  // this driver is eligible for using the same logic as findNearbyDrivers
+  const { findNearbyDrivers } = await import('../utils/socketHandlers.js');
+  
+  // Get all pending bookings that match driver's vehicle type and service
+  const allPendingBookings = await Booking.find({
+    status: 'pending',
+    serviceType: driverVehicle.serviceType,
+    vehicleType: driverVehicle.vehicleType,
+    serviceCategory: driverVehicle.serviceCategory,
+    // Exclude bookings where this driver has already been rejected
+    'rejectedDrivers.driver': { $ne: driverId }
+  })
+  .populate('user', 'firstName lastName email phoneNumber selfieImage gender kycLevel kycStatus role verificationStatus')
+  .sort({ createdAt: -1 });
+  
+  // Get Socket.IO instance
+  const io = req.app.get('io');
+  
+  // Filter bookings to only show those where this driver would be selected
+  const availableBookings = [];
+  for (const booking of allPendingBookings) {
+    const selectedDrivers = await findNearbyDrivers(booking, io);
+    // Check if this driver is the selected one for this booking
+    if (selectedDrivers.length > 0 && selectedDrivers[0]._id.toString() === driverId.toString()) {
+      availableBookings.push(booking);
+    }
+  }
+  
+  const pendingBookings = availableBookings.slice(0, 20); // Limit to 20
+
+  const formattedRequests = pendingBookings.map(booking => ({
+    requestId: booking._id,
+    fare: booking.fare,
+    raisedFare: booking.raisedFare,
+    distance: booking.distance,
+    distanceInMeters: booking.distanceInMeters,
+    serviceType: booking.serviceType,
+    vehicleType: booking.vehicleType,
+    serviceCategory: booking.serviceCategory,
+    routeType: booking.routeType,
+    driverPreference: booking.driverPreference,
+    pinkCaptainOptions: booking.pinkCaptainOptions,
+    furnitureDetails: booking.furnitureDetails,
+    user: {
+      id: booking.user._id,
+      firstName: booking.user.firstName,
+      lastName: booking.user.lastName,
+      email: booking.user.email,
+      phoneNumber: booking.user.phoneNumber,
+      gender: booking.user.gender,
+      kycLevel: booking.user.kycLevel,
+      kycStatus: booking.user.kycStatus,
+      role: booking.user.role,
+      verificationStatus: booking.user.verificationStatus,
+      profileImage: booking.user.selfieImage
+    },
+    from: booking.from,
+    to: booking.to,
+    createdAt: booking.createdAt,
+    updatedAt: booking.updatedAt
+  }));
+
+  res.status(200).json({
+    success: true,
+    message: "Pending requests retrieved successfully",
+    requests: formattedRequests,
+    count: formattedRequests.length
+  });
+});
+
+// Accept a booking request
+const acceptBookingRequest = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const driverId = req.user._id;
+
+  // Find the booking
+  const booking = await Booking.findById(bookingId)
+    .populate('user', 'firstName lastName email phoneNumber selfieImage gender kycLevel kycStatus role verificationStatus');
+
+  if (!booking) {
+    return res.status(404).json({
+      success: false,
+      message: "Booking not found"
+    });
+  }
+
+  if (booking.status !== 'pending') {
+    return res.status(400).json({
+      success: false,
+      message: "Booking is no longer available"
+    });
+  }
+
+  // Update booking with driver and status
+  booking.driver = driverId;
+  booking.status = 'accepted';
+  booking.acceptedAt = new Date();
+  await booking.save();
+
+  // Get driver information
+  const driver = await User.findById(driverId)
+    .populate('vehicles')
+    .select('firstName lastName email phoneNumber selfieImage gender kycLevel kycStatus role verificationStatus vehicles');
+
+  // Emit Socket.IO event to user
+  io.emit('booking_accepted', {
+    requestId: booking._id,
+    status: 'accepted',
+    driver: {
+      id: driver._id,
+      firstName: driver.firstName,
+      lastName: driver.lastName,
+      email: driver.email,
+      phoneNumber: driver.phoneNumber,
+      gender: driver.gender,
+      kycLevel: driver.kycLevel,
+      kycStatus: driver.kycStatus,
+      role: driver.role,
+      verificationStatus: driver.verificationStatus,
+      profileImage: driver.selfieImage,
+      vehicle: driver.vehicles[0]
+    },
+    acceptedAt: booking.acceptedAt
+  });
+
+  res.status(200).json({
+    success: true,
+    message: "Booking accepted successfully",
+    booking: {
+      requestId: booking._id,
+      status: booking.status,
+      fare: booking.fare,
+      raisedFare: booking.raisedFare,
+      distance: booking.distance,
+      serviceType: booking.serviceType,
+      vehicleType: booking.vehicleType,
+      serviceCategory: booking.serviceCategory,
+      user: {
+        id: booking.user._id,
+        firstName: booking.user.firstName,
+        lastName: booking.user.lastName,
+        email: booking.user.email,
+        phoneNumber: booking.user.phoneNumber,
+        profileImage: booking.user.selfieImage
+      },
+      from: booking.from,
+      to: booking.to,
+      acceptedAt: booking.acceptedAt
+    }
+  });
+});
+
+// Reject a booking request
+const rejectBookingRequest = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const driverId = req.user._id;
+  const { reason } = req.body;
+
+  // Find the booking
+  const booking = await Booking.findById(bookingId);
+
+  if (!booking) {
+    return res.status(404).json({
+      success: false,
+      message: "Booking not found"
+    });
+  }
+
+  if (booking.status !== 'pending') {
+    return res.status(400).json({
+      success: false,
+      message: "Booking is no longer available"
+    });
+  }
+
+  // Add driver to rejected drivers list (to avoid showing same request again)
+  if (!booking.rejectedDrivers) {
+    booking.rejectedDrivers = [];
+  }
+  booking.rejectedDrivers.push({
+    driver: driverId,
+    reason: reason || 'No reason provided',
+    rejectedAt: new Date()
+  });
+  await booking.save();
+
+  // Emit Socket.IO event to notify about rejection (for admin/monitoring)
+  io.emit('booking_rejected', {
+    requestId: booking._id,
+    driverId: driverId,
+    reason: reason || 'No reason provided',
+    rejectedAt: new Date()
+  });
+
+  res.status(200).json({
+    success: true,
+    message: "Booking rejected successfully",
+    requestId: booking._id
+  });
+});
+
+// Get driver's accepted bookings
+const getDriverBookings = asyncHandler(async (req, res) => {
+  const driverId = req.user._id;
+  const { status, page = 1, limit = 10 } = req.query;
+
+  const query = { driver: driverId };
+  if (status) {
+    query.status = status;
+  }
+
+  const bookings = await Booking.find(query)
+    .populate('user', 'firstName lastName email phoneNumber selfieImage gender kycLevel kycStatus role verificationStatus')
+    .sort({ createdAt: -1 })
+    .limit(limit * 1)
+    .skip((page - 1) * limit);
+
+  const totalBookings = await Booking.countDocuments(query);
+
+  const formattedBookings = bookings.map(booking => ({
+    requestId: booking._id,
+    status: booking.status,
+    fare: booking.fare,
+    raisedFare: booking.raisedFare,
+    distance: booking.distance,
+    serviceType: booking.serviceType,
+    vehicleType: booking.vehicleType,
+    serviceCategory: booking.serviceCategory,
+    user: {
+      id: booking.user._id,
+      firstName: booking.user.firstName,
+      lastName: booking.user.lastName,
+      email: booking.user.email,
+      phoneNumber: booking.user.phoneNumber,
+      profileImage: booking.user.selfieImage
+    },
+    from: booking.from,
+    to: booking.to,
+    createdAt: booking.createdAt,
+    acceptedAt: booking.acceptedAt,
+    completedAt: booking.completedAt
+  }));
+
+  res.status(200).json({
+    success: true,
+    message: "Driver bookings retrieved successfully",
+    bookings: formattedBookings,
+    pagination: {
+      currentPage: parseInt(page),
+      totalPages: Math.ceil(totalBookings / limit),
+      totalBookings,
+      hasNextPage: page < Math.ceil(totalBookings / limit),
+      hasPrevPage: page > 1
+    }
+  });
+});
+
+// Driver fare offer function
+const offerFare = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const { fareAmount } = req.body;
+  const driverId = req.user._id;
+
+  // Validate required fields
+  if (!fareAmount) {
+    return res.status(400).json({
+      success: false,
+      message: "Fare amount is required",
+    });
+  }
+
+  // Find the booking
+  const booking = await Booking.findById(bookingId)
+    .populate('user', 'name email phone')
+    .populate('driver', 'name email phone');
+
+  if (!booking) {
+    return res.status(404).json({
+      success: false,
+      message: "Booking not found",
+    });
+  }
+
+  // Check if booking is in pending status
+  if (booking.status !== 'pending') {
+    return res.status(400).json({
+      success: false,
+      message: "Can only offer fare for pending bookings",
+    });
+  }
+
+  // Check if driver has already been rejected for this booking
+  const isRejectedDriver = booking.rejectedDrivers.some(
+    rejected => rejected.driver.toString() === driverId.toString()
+  );
+
+  if (isRejectedDriver) {
+    return res.status(403).json({
+      success: false,
+      message: "Cannot offer fare for a booking you have been rejected from",
+    });
+  }
+
+  // Validate fare amount (±3% of original fare)
+  const originalFare = booking.raisedFare || booking.offeredFare;
+  const minFare = originalFare * 0.97; // 3% decrease
+  const maxFare = originalFare * 1.03; // 3% increase
+
+  if (fareAmount < minFare || fareAmount > maxFare) {
+    return res.status(400).json({
+      success: false,
+      message: `Fare amount must be between ${minFare.toFixed(2)} AED and ${maxFare.toFixed(2)} AED (±3% of original fare)`,
+    });
+  }
+
+  // Check if driver already has a pending fare offer
+  const existingOffer = booking.driverOffers.find(
+    offer => offer.offeredBy.toString() === driverId.toString() && offer.status === 'pending'
+  );
+  
+  if (existingOffer) {
+    return res.status(400).json({
+      success: false,
+      message: "You already have a pending fare offer for this booking",
+    });
+  }
+
+  // Get driver details for the offer
+  const driver = await User.findById(driverId).populate('pendingVehicleData');
+  
+  // Add new driver offer to the array
+  const newOffer = {
+    amount: fareAmount,
+    offeredBy: driverId,
+    offeredAt: new Date(),
+    status: 'pending',
+    driverName: `${driver.firstName} ${driver.lastName}`,
+    driverRating: driver.rating || 4.5,
+    vehicleInfo: {
+      type: driver.pendingVehicleData?.vehicleType,
+      model: driver.pendingVehicleData?.vehicleModel,
+      plateNumber: driver.pendingVehicleData?.plateNumber,
+      color: driver.pendingVehicleData?.vehicleColor
+    },
+    estimatedArrival: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes from now
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes from now
+  };
+  
+  booking.driverOffers.push(newOffer);
+
+  // Add to fare negotiation history
+  booking.fareNegotiationHistory.push({
+    offeredBy: driverId,
+    amount: fareAmount,
+    offeredAt: new Date(),
+    status: 'pending'
+  });
+
+  await booking.save();
+
+  // Emit real-time notification to user with all pending offers
+  const io = req.app.get('io');
+  const pendingOffers = booking.driverOffers.filter(offer => offer.status === 'pending');
+  
+  io.to(`user_${booking.user._id}`).emit('driver_offers_updated', {
+    bookingId: booking._id,
+    offers: pendingOffers.map(offer => ({
+      driverId: offer.offeredBy,
+      driverName: offer.driverName,
+      driverRating: offer.driverRating,
+      vehicleInfo: offer.vehicleInfo,
+      proposedFare: offer.amount,
+      estimatedArrival: offer.estimatedArrival,
+      expiresAt: offer.expiresAt,
+      offeredAt: offer.offeredAt
+    })),
+    totalOffers: pendingOffers.length,
+    originalFare: originalFare,
+    message: `${driver.firstName} ${driver.lastName} has offered a fare of ${fareAmount} AED for your booking`
+  });
+
+  res.status(200).json({
+    success: true,
+    message: "Fare offer submitted successfully",
+    driverOffer: newOffer,
+    totalPendingOffers: booking.driverOffers.filter(offer => offer.status === 'pending').length
+  });
+});
+
 export {
   uploadLicense,
   registerVehicle,
@@ -763,4 +1171,9 @@ export {
   getCurrentUser,
   getUserById,
   getVehicleSelectFlow,
+  getPendingRequests,
+  acceptBookingRequest,
+  rejectBookingRequest,
+  getDriverBookings,
+  offerFare,
 };
