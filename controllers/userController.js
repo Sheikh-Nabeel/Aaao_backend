@@ -1200,6 +1200,230 @@ const getUserByUsername = asyncHandler(async (req, res) => {
   });
 });
 
+const setVehicleOwnership = asyncHandler(async (req, res) => {
+  const { hasVehicle } = req.body;
+  const userId = req.user._id;
+
+  if (hasVehicle === undefined) {
+    res.status(400);
+    throw new Error("hasVehicle field is required");
+  }
+
+  if (!["yes", "no"].includes(hasVehicle)) {
+    res.status(400);
+    throw new Error("hasVehicle must be either 'yes' or 'no'");
+  }
+
+  const user = await User.findByIdAndUpdate(
+    userId,
+    { hasVehicle },
+    { new: true, runValidators: true }
+  );
+
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Vehicle ownership status updated successfully",
+    hasVehicle: user.hasVehicle,
+  });
+});
+
+// Pinned and Favorite Drivers Management
+const addPinnedDriver = asyncHandler(async (req, res) => {
+  const { driverId } = req.body;
+  const userId = req.user._id;
+
+  if (!driverId) {
+    res.status(400);
+    throw new Error("Driver ID is required");
+  }
+
+  // Check if driver exists
+  const driver = await User.findById(driverId);
+  if (!driver || driver.role !== "driver") {
+    res.status(404);
+    throw new Error("Driver not found");
+  }
+
+  // Add to pinned drivers if not already pinned
+  const user = await User.findById(userId);
+  if (!user.pinnedDrivers) {
+    user.pinnedDrivers = [];
+  }
+
+  if (!user.pinnedDrivers.includes(driverId)) {
+    user.pinnedDrivers.push(driverId);
+    await user.save();
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Driver added to pinned drivers successfully",
+    pinnedDrivers: user.pinnedDrivers,
+  });
+});
+
+const removePinnedDriver = asyncHandler(async (req, res) => {
+  const { driverId } = req.params;
+  const userId = req.user._id;
+
+  const user = await User.findById(userId);
+  if (!user.pinnedDrivers) {
+    user.pinnedDrivers = [];
+  }
+
+  user.pinnedDrivers = user.pinnedDrivers.filter(
+    (id) => id.toString() !== driverId
+  );
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: "Driver removed from pinned drivers successfully",
+    pinnedDrivers: user.pinnedDrivers,
+  });
+});
+
+const getPinnedDrivers = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  const user = await User.findById(userId).populate("pinnedDrivers", "firstName lastName phoneNumber vehicleDetails");
+  
+  res.status(200).json({
+    success: true,
+    message: "Pinned drivers retrieved successfully",
+    pinnedDrivers: user.pinnedDrivers || [],
+  });
+});
+
+const addFavoriteDriver = asyncHandler(async (req, res) => {
+  const { driverId } = req.body;
+  const userId = req.user._id;
+
+  if (!driverId) {
+    res.status(400);
+    throw new Error("Driver ID is required");
+  }
+
+  // Check if driver exists
+  const driver = await User.findById(driverId);
+  if (!driver || driver.role !== "driver") {
+    res.status(404);
+    throw new Error("Driver not found");
+  }
+
+  // Add to favorite drivers if not already favorited
+  const user = await User.findById(userId);
+  if (!user.favoriteDrivers) {
+    user.favoriteDrivers = [];
+  }
+
+  if (!user.favoriteDrivers.includes(driverId)) {
+    user.favoriteDrivers.push(driverId);
+    await user.save();
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Driver added to favorite drivers successfully",
+    favoriteDrivers: user.favoriteDrivers,
+  });
+});
+
+const removeFavoriteDriver = asyncHandler(async (req, res) => {
+  const { driverId } = req.params;
+  const userId = req.user._id;
+
+  const user = await User.findById(userId);
+  if (!user.favoriteDrivers) {
+    user.favoriteDrivers = [];
+  }
+
+  user.favoriteDrivers = user.favoriteDrivers.filter(
+    (id) => id.toString() !== driverId
+  );
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: "Driver removed from favorite drivers successfully",
+    favoriteDrivers: user.favoriteDrivers,
+  });
+});
+
+const getFavoriteDrivers = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  const user = await User.findById(userId).populate("favoriteDrivers", "firstName lastName phoneNumber vehicleDetails");
+  
+  res.status(200).json({
+    success: true,
+    message: "Favorite drivers retrieved successfully",
+    favoriteDrivers: user.favoriteDrivers || [],
+  });
+});
+
+const getNearbyDriversForUser = asyncHandler(async (req, res) => {
+  const { latitude, longitude, radius = 10, serviceType } = req.query;
+  const userId = req.user._id;
+
+  if (!latitude || !longitude) {
+    res.status(400);
+    throw new Error("Latitude and longitude are required");
+  }
+
+  // Get user's pinned and favorite drivers
+  const user = await User.findById(userId);
+  const pinnedDrivers = user.pinnedDrivers || [];
+  const favoriteDrivers = user.favoriteDrivers || [];
+
+  // Find nearby drivers
+  const nearbyDrivers = await User.find({
+    role: "driver",
+    isOnline: true,
+    "location.coordinates": {
+      $near: {
+        $geometry: {
+          type: "Point",
+          coordinates: [parseFloat(longitude), parseFloat(latitude)],
+        },
+        $maxDistance: radius * 1000, // Convert km to meters
+      },
+    },
+  }).populate("vehicleDetails");
+
+  // Filter by service type if specified
+  let filteredDrivers = nearbyDrivers;
+  if (serviceType) {
+    filteredDrivers = nearbyDrivers.filter(driver => 
+      driver.vehicleDetails && 
+      driver.vehicleDetails.some(vehicle => 
+        vehicle.serviceType === serviceType
+      )
+    );
+  }
+
+  // Prioritize pinned and favorite drivers
+  const prioritizedDrivers = filteredDrivers.map(driver => ({
+    ...driver.toObject(),
+    isPinned: pinnedDrivers.includes(driver._id.toString()),
+    isFavorite: favoriteDrivers.includes(driver._id.toString()),
+    priority: pinnedDrivers.includes(driver._id.toString()) ? 1 : 
+              favoriteDrivers.includes(driver._id.toString()) ? 2 : 3
+  })).sort((a, b) => a.priority - b.priority);
+
+  res.status(200).json({
+    success: true,
+    message: "Nearby drivers retrieved successfully",
+    drivers: prioritizedDrivers,
+    total: prioritizedDrivers.length,
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -1217,4 +1441,12 @@ export {
   rejectKYC,
   getPendingKYCs,
   getUserByUsername,
+  setVehicleOwnership,
+  addPinnedDriver,
+  removePinnedDriver,
+  getPinnedDrivers,
+  addFavoriteDriver,
+  removeFavoriteDriver,
+  getFavoriteDrivers,
+  getNearbyDriversForUser,
 };

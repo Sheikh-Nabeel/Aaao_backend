@@ -13,7 +13,7 @@ import driversRoutes from "./routes/driversRoutes.js";
 import vehiclesRoutes from "./routes/vehiclesRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js"; // Added booking routes
 import mlmRoutes from "./routes/mlmRoutes.js"; // Added MLM routes
-import vehicleHiriing from "./routes/vehicleHiringRoutes.js"; // Added MLM routes
+import vehicleHiringRoutes from "./routes/vehicleHiringRoutes.js"; // Added vehicle hiring routes
 
 import adminPricingRoutes from "./routes/adminPricingRoutes.js"; // Added admin pricing routes
 import adminComprehensivePricingRoutes from "./routes/adminComprehensivePricingRoutes.js"; // Added comprehensive pricing routes

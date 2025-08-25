@@ -118,6 +118,16 @@ const userSchema = new mongoose.Schema(
     type: String,
     default: "No",
   },
+    pinnedDrivers: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "User",
+      default: [],
+    },
+    favoriteDrivers: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "User",
+      default: [],
+    },
   },
   { timestamps: true }
 );
