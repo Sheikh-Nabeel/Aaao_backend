@@ -51,6 +51,13 @@ const calculateShiftingMoversFare = async (bookingData) => {
       fareBreakdown.distanceFare = (distance - 5) * pricing.perKmFare;
     }
     
+    // 3. Calculate item charges if furniture details provided
+    if (furnitureDetails) {
+      fareBreakdown.itemCharges = calculateItemBasedFare(
+        furnitureDetails, pricing.itemPricing, 'loadingUnloadingFare'
+      );
+    }
+    
     // 3. Calculate service fees
     if (serviceDetails?.shiftingMovers?.selectedServices) {
       const selectedServices = serviceDetails.shiftingMovers.selectedServices;
@@ -181,13 +188,25 @@ const calculateShiftingMoversFare = async (bookingData) => {
       }
     }
     
-    // 5. Calculate total fare
-    fareBreakdown.totalCalculatedFare = 
+    // 5. Calculate platform charges
+    const subtotal = 
       fareBreakdown.baseFare +
       fareBreakdown.distanceFare +
       Object.values(fareBreakdown.serviceFees).reduce((sum, fee) => sum + fee, 0) +
       Object.values(fareBreakdown.locationCharges).reduce((sum, charge) => sum + charge, 0) +
       fareBreakdown.itemCharges;
+    
+    // Apply platform charges (default 10% if not specified)
+    const platformPercentage = pricing.platformCharges?.percentage || 10;
+    const platformAmount = (subtotal * platformPercentage) / 100;
+    
+    fareBreakdown.platformCharges = {
+      percentage: platformPercentage,
+      amount: platformAmount
+    };
+    
+    // 6. Calculate total fare including platform charges
+    fareBreakdown.totalCalculatedFare = subtotal + platformAmount;
     
     return fareBreakdown;
   } catch (error) {

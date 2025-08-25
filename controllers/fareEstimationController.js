@@ -138,25 +138,26 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     let fareResult;
     let estimatedFare;
     
-    // Calculate fare based on service type
-    if (serviceType === "shifting & movers") {
-      const fareData = await calculateShiftingMoversFare({
-        vehicleType,
-        distance: distanceInMeters / 1000,
-        routeType,
-        serviceDetails,
-        itemDetails,
-        serviceOptions
-      });
-      estimatedFare = fareData?.totalFare || fareData;
-      fareResult = fareData;
+         // Calculate fare based on service type
+     if (serviceType === "shifting & movers") {
+       const fareData = await calculateShiftingMoversFare({
+         vehicleType,
+         distance: distanceInMeters / 1000,
+         routeType,
+         serviceDetails,
+         furnitureDetails: req.body.furnitureDetails || {},
+         itemDetails,
+         serviceOptions
+       });
+       estimatedFare = fareData?.totalCalculatedFare || fareData?.totalFare || 0;
+       fareResult = fareData;
     } else if (serviceType === "car recovery") {
       const fareData = await calculateCarRecoveryFare({
         serviceCategory: serviceCategory || vehicleType,
         distance: distanceInMeters / 1000,
         serviceDetails
       });
-      estimatedFare = fareData?.totalFare || fareData;
+      estimatedFare = fareData?.totalCalculatedFare || fareData?.totalFare || 0;
       fareResult = fareData;
     } else {
       // Use comprehensive fare calculation for car cab, bike, and car recovery
@@ -184,10 +185,10 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     const minFare = estimatedFare * (1 - adjustmentPercentage / 100);
     const maxFare = estimatedFare * (1 + adjustmentPercentage / 100);
 
-    // Prepare response data
-    const responseData = {
-      estimatedFare: Math.round(estimatedFare * 100) / 100,
-      currency: fareResult.currency || "AED",
+         // Prepare response data
+     const responseData = {
+       estimatedFare: Math.round(estimatedFare * 100) / 100,
+       currency: fareResult.currency || "AED",
       adjustmentSettings: {
         allowedPercentage: adjustmentPercentage,
         minFare: Math.round(minFare * 100) / 100,

@@ -67,10 +67,12 @@ socket.emit('join_driver_room', driverId);
 ## 🎯 Service Types & Request Data
 
 ### 1. 🚕 Car Cab Service
-```javascript
+
+#### **Complete Request Body:**
+```json
 {
   "pickupLocation": {
-    "coordinates": [55.2708, 25.2048], // [longitude, latitude]
+    "coordinates": [55.2708, 25.2048],
     "address": "Dubai Mall, Dubai, UAE"
   },
   "dropoffLocation": {
@@ -79,13 +81,13 @@ socket.emit('join_driver_room', driverId);
   },
   "serviceType": "car cab",
   "serviceCategory": "transport",
-  "vehicleType": "economy", // economy, premium, xl, family, luxury
-  "routeType": "one_way", // one_way, round_trip
+  "vehicleType": "economy",
+  "routeType": "one_way",
   "distanceInMeters": 2500,
   "passengerCount": 2,
   "wheelchairAccessible": false,
-  "driverPreference": "nearby", // nearby, pink_captain, pinned
-  "pinnedDriverId": "driver_id_here", // if driverPreference is "pinned"
+  "driverPreference": "nearby",
+  "pinnedDriverId": null,
   "pinkCaptainOptions": {
     "femalePassengersOnly": false,
     "familyRides": false,
@@ -94,8 +96,8 @@ socket.emit('join_driver_room', driverId);
     "maleWithoutFemale": false,
     "noMaleCompanion": false
   },
-  "paymentMethod": "cash", // cash, card, wallet
-  "scheduledTime": null, // for immediate booking, or ISO date string for scheduled
+  "paymentMethod": "cash",
+  "scheduledTime": null,
   "driverFilters": {
     "vehicleModel": null,
     "specificDriverId": null,
@@ -104,14 +106,47 @@ socket.emit('join_driver_room', driverId);
   "serviceOptions": {
     "airConditioning": true,
     "music": false,
-    "wifi": false
+    "wifi": false,
+    "childSeat": false,
+    "petFriendly": false
   },
-  "extras": []
+  "extras": [
+    { "name": "Child Seat", "count": 1, "price": 15 },
+    { "name": "Pet Carrier", "count": 1, "price": 10 }
+  ]
 }
 ```
 
+#### **Minimal Request Body:**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Dubai Mall, Dubai, UAE"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Burj Khalifa, Dubai, UAE"
+  },
+  "serviceType": "car cab",
+  "vehicleType": "economy",
+  "distanceInMeters": 2500,
+  "passengerCount": 2,
+  "paymentMethod": "cash"
+}
+```
+
+#### **Vehicle Types Available:**
+- `economy` - Standard sedan
+- `premium` - Luxury sedan
+- `xl` - Large vehicle (6-7 passengers)
+- `family` - Family vehicle with child seats
+- `luxury` - High-end luxury vehicle
+
 ### 2. 🏍️ Bike Service
-```javascript
+
+#### **Complete Request Body:**
+```json
 {
   "pickupLocation": {
     "coordinates": [55.2708, 25.2048],
@@ -128,6 +163,7 @@ socket.emit('join_driver_room', driverId);
   "distanceInMeters": 1500,
   "passengerCount": 1,
   "driverPreference": "nearby",
+  "pinnedDriverId": null,
   "pinkCaptainOptions": {
     "femalePassengersOnly": false,
     "familyRides": false,
@@ -145,14 +181,45 @@ socket.emit('join_driver_room', driverId);
   },
   "serviceOptions": {
     "helmet": true,
-    "rainCover": false
+    "rainCover": false,
+    "extraHelmet": false,
+    "baggageCarrier": false
   },
-  "extras": []
+  "extras": [
+    { "name": "Extra Helmet", "count": 1, "price": 5 },
+    { "name": "Baggage Carrier", "count": 1, "price": 8 }
+  ]
 }
 ```
 
+#### **Minimal Request Body:**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Dubai Mall, Dubai, UAE"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Burj Khalifa, Dubai, UAE"
+  },
+  "serviceType": "bike",
+  "vehicleType": "bike",
+  "distanceInMeters": 1500,
+  "passengerCount": 1,
+  "paymentMethod": "cash"
+}
+```
+
+#### **Bike Types Available:**
+- `bike` - Standard motorcycle
+- `scooter` - Electric scooter
+- `bicycle` - Manual bicycle
+
 ### 3. 🚛 Shifting & Movers Service
-```javascript
+
+#### **Complete Request Body:**
+```json
 {
   "pickupLocation": {
     "coordinates": [55.2708, 25.2048],
@@ -164,7 +231,7 @@ socket.emit('join_driver_room', driverId);
   },
   "serviceType": "shifting & movers",
   "serviceCategory": "logistics",
-  "vehicleType": "small van", // mini pickup, suzuki carry, small van, medium truck, mazda, covered van, large truck, 6-wheeler, container truck
+  "vehicleType": "small van",
   "routeType": "one_way",
   "distanceInMeters": 15000,
   "passengerCount": 0,
@@ -215,6 +282,7 @@ socket.emit('join_driver_room', driverId);
     { "name": "Bed Frame", "count": 1, "weight": 30, "dimensions": "1.8x1.5x0.3m" }
   ],
   "driverPreference": "nearby",
+  "pinnedDriverId": null,
   "pinkCaptainOptions": {
     "femalePassengersOnly": false,
     "familyRides": false,
@@ -233,17 +301,67 @@ socket.emit('join_driver_room', driverId);
   "serviceOptions": {
     "insurance": true,
     "packingMaterial": true,
-    "assembly": false
+    "assembly": false,
+    "disassembly": false,
+    "cleaning": false
   },
   "extras": [
     { "name": "Packing Material", "count": 5, "price": 50 },
-    { "name": "Extra Helper", "count": 1, "price": 100 }
+    { "name": "Extra Helper", "count": 1, "price": 100 },
+    { "name": "Furniture Assembly", "count": 1, "price": 75 }
   ]
 }
 ```
 
+#### **Minimal Request Body:**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Apartment 123, Building A, Dubai"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Villa 456, Palm Jumeirah, Dubai"
+  },
+  "serviceType": "shifting & movers",
+  "vehicleType": "small van",
+  "distanceInMeters": 15000,
+  "furnitureDetails": {
+    "sofas": 1
+  },
+  "serviceDetails": {
+    "shiftingMovers": {
+      "selectedServices": {
+        "loadingUnloading": true
+      }
+    }
+  }
+}
+```
+
+#### **Vehicle Types Available:**
+- `mini pickup` - Small pickup truck
+- `suzuki carry` - Suzuki carry van
+- `small van` - Small moving van
+- `medium truck` - Medium-sized truck
+- `mazda` - Mazda truck
+- `covered van` - Covered moving van
+- `large truck` - Large moving truck
+- `6-wheeler` - 6-wheel truck
+- `container truck` - Container truck
+
+#### **Furniture Items Available:**
+- `sofas`, `beds`, `tables`, `chairs`, `wardrobes`
+- `refrigerator`, `washingMachine`, `boxes`
+- `diningTable`, `bookshelf`, `piano`, `treadmill`
+- `officeDesk`, `artwork`, `tvStand`, `dresser`
+- `mattress`, `mirror`, `other` (custom items)
+
 ### 4. 🔧 Car Recovery Service
-```javascript
+
+#### **Complete Request Body:**
+```json
 {
   "pickupLocation": {
     "coordinates": [55.2708, 25.2048],
@@ -255,24 +373,31 @@ socket.emit('join_driver_room', driverId);
   },
   "serviceType": "car recovery",
   "serviceCategory": "emergency",
-  "vehicleType": "flatbed towing", // flatbed towing, wheel lift towing, on-road winching, off-road winching, battery jump start, fuel delivery, luxury & exotic car recovery, heavy-duty vehicle recovery
+  "vehicleType": "flatbed towing",
   "routeType": "one_way",
   "distanceInMeters": 8000,
   "passengerCount": 0,
   "serviceDetails": {
     "carRecovery": {
       "issueDescription": "Engine won't start, battery seems dead",
-      "urgencyLevel": "high", // low, medium, high, emergency
+      "urgencyLevel": "high",
       "needHelper": false,
       "wheelchairHelper": false,
       "vehicleMake": "Toyota",
       "vehicleModel": "Camry",
       "vehicleYear": "2020",
-      "licensePlate": "ABC-1234"
+      "licensePlate": "ABC-1234",
+      "vehicleColor": "White",
+      "vehicleType": "Sedan",
+      "isLuxury": false,
+      "isHeavyDuty": false,
+      "hasTrailer": false,
+      "trailerDetails": null
     }
   },
   "itemDetails": [],
   "driverPreference": "nearby",
+  "pinnedDriverId": null,
   "pinkCaptainOptions": {
     "femalePassengersOnly": false,
     "familyRides": false,
@@ -291,11 +416,59 @@ socket.emit('join_driver_room', driverId);
   "serviceOptions": {
     "emergencyService": true,
     "insurance": true,
-    "roadsideAssistance": true
+    "roadsideAssistance": true,
+    "fuelDelivery": false,
+    "batteryJumpStart": false,
+    "tireChange": false
   },
-  "extras": []
+  "extras": [
+    { "name": "Fuel Delivery", "count": 1, "price": 25 },
+    { "name": "Battery Jump Start", "count": 1, "price": 30 },
+    { "name": "Tire Change", "count": 1, "price": 40 }
+  ]
 }
 ```
+
+#### **Minimal Request Body:**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Sheikh Zayed Road, Dubai"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Dubai Auto Service Center"
+  },
+  "serviceType": "car recovery",
+  "vehicleType": "flatbed towing",
+  "distanceInMeters": 8000,
+  "serviceDetails": {
+    "carRecovery": {
+      "issueDescription": "Engine won't start",
+      "urgencyLevel": "high",
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Camry"
+    }
+  }
+}
+```
+
+#### **Vehicle Types Available:**
+- `flatbed towing` - Flatbed tow truck
+- `wheel lift towing` - Wheel lift tow truck
+- `on-road winching` - On-road winching service
+- `off-road winching` - Off-road winching service
+- `battery jump start` - Battery jump start service
+- `fuel delivery` - Fuel delivery service
+- `luxury & exotic car recovery` - Luxury car recovery
+- `heavy-duty vehicle recovery` - Heavy vehicle recovery
+
+#### **Urgency Levels:**
+- `low` - Non-urgent service
+- `medium` - Moderate urgency
+- `high` - High urgency
+- `emergency` - Emergency service
 
 ---
 
@@ -1123,6 +1296,270 @@ class EmergencyHandler {
 // Usage
 const userEmergencyHandler = new EmergencyHandler(userSocket, 'user');
 const driverEmergencyHandler = new EmergencyHandler(driverSocket, 'driver');
+```
+
+---
+
+## 📋 **Complete Request Bodies Reference**
+
+### **🚕 Car Cab Service Request**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Dubai Mall, Dubai, UAE"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Burj Khalifa, Dubai, UAE"
+  },
+  "serviceType": "car cab",
+  "serviceCategory": "transport",
+  "vehicleType": "economy",
+  "routeType": "one_way",
+  "distanceInMeters": 2500,
+  "passengerCount": 2,
+  "wheelchairAccessible": false,
+  "driverPreference": "nearby",
+  "pinnedDriverId": null,
+  "pinkCaptainOptions": {
+    "femalePassengersOnly": false,
+    "familyRides": false,
+    "safeZoneRides": false,
+    "familyWithGuardianMale": false,
+    "maleWithoutFemale": false,
+    "noMaleCompanion": false
+  },
+  "paymentMethod": "cash",
+  "scheduledTime": null,
+  "driverFilters": {
+    "vehicleModel": null,
+    "specificDriverId": null,
+    "searchRadius": 10
+  },
+  "serviceOptions": {
+    "airConditioning": true,
+    "music": false,
+    "wifi": false,
+    "childSeat": false,
+    "petFriendly": false
+  },
+  "extras": [
+    { "name": "Child Seat", "count": 1, "price": 15 },
+    { "name": "Pet Carrier", "count": 1, "price": 10 }
+  ]
+}
+```
+
+### **🏍️ Bike Service Request**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Dubai Mall, Dubai, UAE"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Burj Khalifa, Dubai, UAE"
+  },
+  "serviceType": "bike",
+  "serviceCategory": "transport",
+  "vehicleType": "bike",
+  "routeType": "one_way",
+  "distanceInMeters": 1500,
+  "passengerCount": 1,
+  "driverPreference": "nearby",
+  "pinnedDriverId": null,
+  "pinkCaptainOptions": {
+    "femalePassengersOnly": false,
+    "familyRides": false,
+    "safeZoneRides": false,
+    "familyWithGuardianMale": false,
+    "maleWithoutFemale": false,
+    "noMaleCompanion": false
+  },
+  "paymentMethod": "cash",
+  "scheduledTime": null,
+  "driverFilters": {
+    "vehicleModel": null,
+    "specificDriverId": null,
+    "searchRadius": 10
+  },
+  "serviceOptions": {
+    "helmet": true,
+    "rainCover": false,
+    "extraHelmet": false,
+    "baggageCarrier": false
+  },
+  "extras": [
+    { "name": "Extra Helmet", "count": 1, "price": 5 },
+    { "name": "Baggage Carrier", "count": 1, "price": 8 }
+  ]
+}
+```
+
+### **🚛 Shifting & Movers Service Request**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Apartment 123, Building A, Dubai"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Villa 456, Palm Jumeirah, Dubai"
+  },
+  "serviceType": "shifting & movers",
+  "serviceCategory": "logistics",
+  "vehicleType": "small van",
+  "routeType": "one_way",
+  "distanceInMeters": 15000,
+  "passengerCount": 0,
+  "furnitureDetails": {
+    "sofas": 2,
+    "beds": 1,
+    "tables": 3,
+    "chairs": 8,
+    "wardrobes": 2,
+    "refrigerator": 1,
+    "washingMachine": 1,
+    "boxes": 10,
+    "diningTable": 1,
+    "bookshelf": 1,
+    "piano": 0,
+    "treadmill": 0,
+    "officeDesk": 1,
+    "artwork": 5,
+    "tvStand": 1,
+    "dresser": 1,
+    "mattress": 2,
+    "mirror": 3,
+    "other": "Garden furniture - 2 pieces"
+  },
+  "serviceDetails": {
+    "shiftingMovers": {
+      "selectedServices": {
+        "loadingUnloading": true,
+        "packing": false,
+        "fixing": true,
+        "helpers": true,
+        "wheelchairHelper": false
+      },
+      "pickupFloorDetails": {
+        "floor": 5,
+        "hasLift": true,
+        "accessType": "lift"
+      },
+      "dropoffFloorDetails": {
+        "floor": 0,
+        "hasLift": false,
+        "accessType": "ground"
+      }
+    }
+  },
+  "itemDetails": [
+    { "name": "Sofa", "count": 2, "weight": 50, "dimensions": "2x1x0.8m" },
+    { "name": "Bed Frame", "count": 1, "weight": 30, "dimensions": "1.8x1.5x0.3m" }
+  ],
+  "driverPreference": "nearby",
+  "pinnedDriverId": null,
+  "pinkCaptainOptions": {
+    "femalePassengersOnly": false,
+    "familyRides": false,
+    "safeZoneRides": false,
+    "familyWithGuardianMale": false,
+    "maleWithoutFemale": false,
+    "noMaleCompanion": false
+  },
+  "paymentMethod": "card",
+  "scheduledTime": null,
+  "driverFilters": {
+    "vehicleModel": null,
+    "specificDriverId": null,
+    "searchRadius": 15
+  },
+  "serviceOptions": {
+    "insurance": true,
+    "packingMaterial": true,
+    "assembly": false,
+    "disassembly": false,
+    "cleaning": false
+  },
+  "extras": [
+    { "name": "Packing Material", "count": 5, "price": 50 },
+    { "name": "Extra Helper", "count": 1, "price": 100 },
+    { "name": "Furniture Assembly", "count": 1, "price": 75 }
+  ]
+}
+```
+
+### **🔧 Car Recovery Service Request**
+```json
+{
+  "pickupLocation": {
+    "coordinates": [55.2708, 25.2048],
+    "address": "Sheikh Zayed Road, Dubai"
+  },
+  "dropoffLocation": {
+    "coordinates": [55.2744, 25.1972],
+    "address": "Dubai Auto Service Center"
+  },
+  "serviceType": "car recovery",
+  "serviceCategory": "emergency",
+  "vehicleType": "flatbed towing",
+  "routeType": "one_way",
+  "distanceInMeters": 8000,
+  "passengerCount": 0,
+  "serviceDetails": {
+    "carRecovery": {
+      "issueDescription": "Engine won't start, battery seems dead",
+      "urgencyLevel": "high",
+      "needHelper": false,
+      "wheelchairHelper": false,
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Camry",
+      "vehicleYear": "2020",
+      "licensePlate": "ABC-1234",
+      "vehicleColor": "White",
+      "vehicleType": "Sedan",
+      "isLuxury": false,
+      "isHeavyDuty": false,
+      "hasTrailer": false,
+      "trailerDetails": null
+    }
+  },
+  "itemDetails": [],
+  "driverPreference": "nearby",
+  "pinnedDriverId": null,
+  "pinkCaptainOptions": {
+    "femalePassengersOnly": false,
+    "familyRides": false,
+    "safeZoneRides": false,
+    "familyWithGuardianMale": false,
+    "maleWithoutFemale": false,
+    "noMaleCompanion": false
+  },
+  "paymentMethod": "cash",
+  "scheduledTime": null,
+  "driverFilters": {
+    "vehicleModel": null,
+    "specificDriverId": null,
+    "searchRadius": 20
+  },
+  "serviceOptions": {
+    "emergencyService": true,
+    "insurance": true,
+    "roadsideAssistance": true,
+    "fuelDelivery": false,
+    "batteryJumpStart": false,
+    "tireChange": false
+  },
+  "extras": [
+    { "name": "Fuel Delivery", "count": 1, "price": 25 },
+    { "name": "Battery Jump Start", "count": 1, "price": 30 },
+    { "name": "Tire Change", "count": 1, "price": 40 }
+  ]
+}
 ```
 
 ---
