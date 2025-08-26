@@ -227,18 +227,44 @@ const driverHiringSchema = new mongoose.Schema(
     },
     maintenanceResponsibilities: {
       minor: {
-        dailyFuel: { type: Boolean, default: false },
-        carWash: { type: Boolean, default: false },
-        oilChange: { type: Boolean, default: false },
-        tyrePressureCheck: { type: Boolean, default: false },
+        dailyFuel: {
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
+        carWash: {
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
+        oilChange: {
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
+        tyrePressureCheck: {
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
       },
       major: {
-        engineRepairs: { type: Boolean, default: false },
-        transmissionSystem: { type: Boolean, default: false },
-        acSystem: { type: Boolean, default: false },
+        engineRepairs: {
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
+        transmissionSystem: {
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
+        acSystem: {
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
       },
-      ownerResponsible: { type: Boolean, default: false },
-      driverResponsible: { type: Boolean, default: false },
+      custom: [
+        {
+          name: { type: String, required: true },
+          driver: { type: Boolean, default: false },
+          owner: { type: Boolean, default: false },
+        },
+      ],
     },
     workSchedule: {
       type: String,
