@@ -24,6 +24,8 @@ import {
   removeFavoriteDriver,
   getFavoriteDrivers,
   getNearbyDriversForUser,
+  getQualificationStats,
+  getQualificationTransactions,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -109,5 +111,8 @@ router.post("/allowed-sections", superadminAuth, manageAllowedSections);
 router.get("/allowed-sections", superadminAuth, getAllowedSections);
 router.get("/by-username", getUserByUsername);
 
+// Qualification stats routes
+router.get("/qualification-stats/:userId", authHandler, getQualificationStats);
+router.get("/qualification-transactions/:userId", authHandler, getQualificationTransactions);
 
 export default router;

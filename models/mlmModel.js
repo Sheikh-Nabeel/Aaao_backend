@@ -114,6 +114,19 @@ const mlmSchema = new mongoose.Schema({
       shareholder2: { type: Number, default: 0 },
       shareholder3: { type: Number, default: 0 }
     },
+    // Qualification Points
+    qualificationPoints: {
+      tgp: { type: Number, default: 0 }, // Team Growth Points
+      pgp: { type: Number, default: 0 }  // Personal Growth Points
+    },
+    
+    // Ride Type
+    rideType: {
+      type: String,
+      enum: ['personal', 'team'],
+      required: true
+    },
+    
     timestamp: {
       type: Date,
       default: Date.now
@@ -178,6 +191,200 @@ const mlmSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  
+  // Motivational Quotes for DDR/CRR Dashboards
+  motivationalQuotes: {
+    ddr: {
+      type: [String],
+      default: [
+        "Build your network, build your wealth - every connection counts!",
+        "Your downline success is your success - support and grow together!",
+        "Consistency in building relationships leads to consistent DDR income!"
+      ]
+    },
+    crr: {
+      type: [String],
+      default: [
+        "Champions are made through consistent qualification point growth!",
+        "Your rank reflects your commitment - keep climbing!",
+        "Every TGP and PGP point brings you closer to championship status!"
+      ]
+    }
+  },
+  
+  // Rank Qualification Thresholds
+  rankThresholds: {
+    Bronze: {
+      min: { type: Number, default: 0 },
+      max: { type: Number, default: 999 }
+    },
+    Silver: {
+      min: { type: Number, default: 1000 },
+      max: { type: Number, default: 2499 }
+    },
+    Gold: {
+      min: { type: Number, default: 2500 },
+      max: { type: Number, default: 4999 }
+    },
+    Platinum: {
+      min: { type: Number, default: 5000 },
+      max: { type: Number, default: 9999 }
+    },
+    Diamond: {
+      min: { type: Number, default: 10000 },
+      max: { type: Number, default: null }
+    }
+  },
+
+  // BBR (Bonus Booster Rewards) Campaign Management
+  bbrCampaigns: {
+    current: {
+      name: { type: String, default: "Weekly Turbo Booster" },
+      requirement: { type: Number, default: 100 }, // rides count
+      duration: { type: Number, default: 7 }, // days
+      startDate: { type: Date, default: Date.now },
+      endDate: { type: Date },
+      type: { 
+        type: String, 
+        enum: ['solo', 'team', 'solo_or_team'], 
+        default: 'solo_or_team' 
+      },
+      newbieRidesOnly: { type: Boolean, default: true },
+      reward: {
+        amount: { type: Number, default: 550 }, // AED
+        perks: { 
+          type: [String], 
+          default: ['Priority Rides (1 Week)'] 
+        }
+      },
+      isActive: { type: Boolean, default: true },
+      participants: [{
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        soloRides: { type: Number, default: 0 },
+        teamRides: { type: Number, default: 0 },
+        totalRides: { type: Number, default: 0 },
+        achieved: { type: Boolean, default: false },
+        rewardClaimed: { type: Boolean, default: false },
+        joinedAt: { type: Date, default: Date.now }
+      }]
+    },
+    past: [{
+      name: { type: String, required: true },
+      requirement: { type: Number, required: true },
+      duration: { type: Number, required: true },
+      startDate: { type: Date, required: true },
+      endDate: { type: Date, required: true },
+      type: { 
+        type: String, 
+        enum: ['solo', 'team', 'solo_or_team'], 
+        required: true 
+      },
+      newbieRidesOnly: { type: Boolean, default: true },
+      reward: {
+        amount: { type: Number, required: true },
+        perks: { type: [String], default: [] }
+      },
+      winners: [{
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        soloRides: { type: Number, default: 0 },
+        teamRides: { type: Number, default: 0 },
+        totalRides: { type: Number, default: 0 },
+        rewardAmount: { type: Number, default: 0 },
+        achievedAt: { type: Date, default: Date.now }
+      }],
+      totalParticipants: { type: Number, default: 0 },
+      totalWinners: { type: Number, default: 0 },
+      totalRewardDistributed: { type: Number, default: 0 }
+    }]
+  },
+
+  // BBR Tips and Motivational Content
+  bbrTips: {
+    type: [String],
+    default: [
+      "Focus on peak hours to get more rides",
+      "Encourage newbie team to stay active",
+      "Consistency is key to winning campaigns",
+      "Team collaboration increases your chances"
+    ]
+  },
+
+  // HLR (HonorPay Loyalty Rewards) Configuration
+  hlrConfig: {
+    retirementAge: { type: Number, default: 55 },
+    requirements: {
+      pgp: { type: Number, default: 200000 },
+      tgp: { type: Number, default: 6000000 }
+    },
+    rewardAmount: { type: Number, default: 60000 }, // AED
+    qualifiedMembers: [{
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      qualifiedAt: { type: Date, default: Date.now },
+      pgpAtQualification: { type: Number, required: true },
+      tgpAtQualification: { type: Number, required: true },
+      country: { type: String, required: true },
+      rewardClaimed: { type: Boolean, default: false },
+      claimedAt: { type: Date },
+      claimReason: { 
+        type: String, 
+        enum: ['retirement', 'deceased'], 
+        default: 'retirement' 
+      }
+    }],
+    tips: {
+      type: [String],
+      default: [
+        "Boost your TGP by mentoring active leaders in your team",
+        "Consistent PGP growth ensures qualification",
+        "Help your team members achieve their goals"
+      ]
+    }
+  },
+
+  // Regional Ambassador Configuration
+  regionalAmbassadorConfig: {
+    ranks: {
+      type: Map,
+      of: {
+        level: { type: Number, required: true },
+        minProgress: { type: Number, required: true }
+      },
+      default: {
+        Challenger: { level: 1, minProgress: 0 },
+        Warrior: { level: 2, minProgress: 25 },
+        Tycoon: { level: 3, minProgress: 50 },
+        Champion: { level: 4, minProgress: 75 },
+        Boss: { level: 5, minProgress: 90 }
+      }
+    },
+    ambassadors: [{
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      country: { type: String, required: true },
+      rank: { 
+        type: String, 
+        enum: ['Challenger', 'Warrior', 'Tycoon', 'Champion', 'Boss'],
+        default: 'Challenger' 
+      },
+      progress: { type: Number, default: 0 }, // percentage
+      totalEarnings: { type: Number, default: 0 },
+      achievedAt: { type: Date, default: Date.now },
+      isActive: { type: Boolean, default: true }
+    }],
+    countryUpdateRequests: [{
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      currentCountry: { type: String, required: true },
+      requestedCountry: { type: String, required: true },
+      reason: { type: String },
+      status: { 
+        type: String, 
+        enum: ['pending', 'approved', 'rejected'], 
+        default: 'pending' 
+      },
+      requestedAt: { type: Date, default: Date.now },
+      processedAt: { type: Date },
+      processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    }]
   },
   
   // Timestamps
@@ -461,4 +668,4 @@ mlmSchema.methods.autoAdjustSubDistributions = function() {
   }
 };
 
-export default mongoose.model("MLM", mlmSchema); 
+export default mongoose.model("MLM", mlmSchema);

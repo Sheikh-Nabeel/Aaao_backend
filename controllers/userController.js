@@ -371,21 +371,7 @@ const loginUser = asyncHandler(async (req, res) => {
       })),
       sponsoredUsers: sponsoredUsers || "No sponsored users",
       sponsorName: sponsorName,
-      user: {
-        username: user.username,
-        firstName: user.firstName,
-        lastName: user.lastName || "",
-        email: user.email,
-        phoneNumber: user.phoneNumber,
-        sponsorBy: user.sponsorBy,
-        country: user.country,
-        kycLevel: user.kycLevel,
-        kycStatus: user.kycStatus,
-        hasVehicle: user.hasVehicle,
-        pendingVehicleData: user.pendingVehicleData,
-        gender: user.gender,
-        role: user.role,
-      },
+      user:user,
     });
 });
 
@@ -1424,6 +1410,68 @@ const getNearbyDriversForUser = asyncHandler(async (req, res) => {
   });
 });
 
+// Get user qualification stats (TGP/PGP)
+const getQualificationStats = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  
+  if (!userId) {
+    res.status(400);
+    throw new Error("User ID is required");
+  }
+  
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+  
+  // Check and reset monthly points if needed
+  await user.checkAndResetMonthlyQualificationPoints();
+  
+  const stats = user.getQualificationPointsStats();
+  
+  res.status(200).json({
+    success: true,
+    stats: {
+      monthlyPGP: stats.pgp.monthly,
+      monthlyTGP: stats.tgp.monthly,
+      accumulatedPGP: stats.pgp.accumulated,
+      accumulatedTGP: stats.tgp.accumulated,
+      totalPoints: stats.total.accumulated,
+      monthlyTotal: stats.total.monthly,
+      lastResetDate: {
+        pgp: stats.pgp.lastResetDate,
+        tgp: stats.tgp.lastResetDate
+      }
+    }
+  });
+});
+
+// Get user qualification transactions
+const getQualificationTransactions = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const { limit = 50 } = req.query;
+  
+  if (!userId) {
+    res.status(400);
+    throw new Error("User ID is required");
+  }
+  
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+  
+  const transactions = user.getQualificationPointsTransactions(parseInt(limit));
+  
+  res.status(200).json({
+    success: true,
+    transactions,
+    total: user.qualificationPoints.transactions.length
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -1449,4 +1497,6 @@ export {
   removeFavoriteDriver,
   getFavoriteDrivers,
   getNearbyDriversForUser,
+  getQualificationStats,
+  getQualificationTransactions,
 };

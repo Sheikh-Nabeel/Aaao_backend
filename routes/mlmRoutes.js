@@ -7,8 +7,53 @@ import {
   addMoneyToMLM,
   getUserMLMInfo,
   getMLMStats,
-  getMLMFields
+  getMLMFields,
+  distributeDualTreeMLMEarnings,
+  getUserMLMEarningsSummary,
+  getMLMEarningsStats,
+  deleteMLM,
+  resetMLMData,
+  distributeRideMLM,
+  getAdminMLMDashboard,
+  getUserDDRTree,
+  getUserDDREarnings,
+  getDDRTransactionHistory,
+  getDDRLeaderboard,
+  getUserCRREarnings,
+  getCRRTransactionHistory,
+  getCRRLeaderboard,
+  getMotivationalQuotes,
+  updateMotivationalQuotes,
+  getRankThresholds,
+  updateRankThresholds,
+  getDDRCRRStats,
+  // BBR Controller Functions
+  getCurrentBBRCampaign,
+  getUserBBRProgress,
+  getBBRLeaderboard,
+  getPastBBRWins,
+  getBBRTips,
+  createBBRCampaign,
+  updateBBRTips,
+  // HLR Controller Functions
+  getUserHLRProgress,
+  getHLRQualifiedMembers,
+  processHLRReward,
+  getHLRTips,
+  updateHLRConfig,
+  // Regional Ambassador Controller Functions
+  getUserRegionalProgress,
+  getRegionalLeaderboard,
+  getGlobalAmbassadors,
+  handleCountryUpdateRequest,
+  processCountryUpdateRequest,
+  updateRegionalAmbassadorConfig,
+  // Admin MLM Initialization Functions
+  initializeCompleteMLMSystem,
+  getMLMSystemStatus,
+  resetAndReinitializeMLM
 } from "../controllers/mlmController.js";
+import adminHandler from '../middlewares/adminMiddleware.js';
 
 const router = express.Router();
 
@@ -36,4 +81,134 @@ router.get("/stats", getMLMStats);
 // Get specific MLM fields
 router.get("/fields", getMLMFields);
 
-export default router; 
+// Dual-Tree MLM Routes
+// Distribute MLM earnings after ride completion (Dual-Tree System)
+router.post("/distribute-dual-tree", distributeDualTreeMLMEarnings);
+
+// Admin delete and reset functions
+router.delete("/delete", adminHandler, deleteMLM);
+router.post("/reset-data", adminHandler, resetMLMData);
+
+// Ride completion MLM distribution
+router.post("/distribute-ride", distributeRideMLM);
+
+// Admin dashboard - all payments from all users
+router.get("/admin-dashboard", adminHandler, getAdminMLMDashboard);
+
+// User DDR tree view
+router.get("/user-tree/:userId", getUserDDRTree);
+
+// Get user's MLM earnings summary (Dual-Tree System)
+router.get("/user-earnings/:userId", getUserMLMEarningsSummary);
+
+// Get MLM earnings statistics for admin (Dual-Tree System)
+router.get("/earnings-stats", getMLMEarningsStats);
+
+// DDR Dashboard Routes
+// Get user DDR earnings by level
+router.get("/ddr/earnings/:userId", getUserDDREarnings);
+
+// Get DDR transaction history with pagination
+router.get("/ddr/transactions/:userId", getDDRTransactionHistory);
+
+// Get DDR leaderboard
+router.get("/ddr/leaderboard", getDDRLeaderboard);
+
+// CRR Dashboard Routes
+// Get user CRR earnings and qualification status
+router.get("/crr/earnings/:userId", getUserCRREarnings);
+
+// Get CRR transaction history
+router.get("/crr/transactions/:userId", getCRRTransactionHistory);
+
+// Get CRR leaderboard with rank-based grouping
+router.get("/crr/leaderboard", getCRRLeaderboard);
+
+// Admin Management Routes
+// Get motivational quotes for DDR/CRR dashboards
+router.get("/admin/quotes", adminHandler, getMotivationalQuotes);
+
+// Update motivational quotes
+router.put("/admin/quotes", adminHandler, updateMotivationalQuotes);
+
+// Get rank qualification thresholds
+router.get("/admin/rank-thresholds", adminHandler, getRankThresholds);
+
+// Update rank qualification thresholds
+router.put("/admin/rank-thresholds", adminHandler, updateRankThresholds);
+
+// Get DDR/CRR system statistics for admin
+router.get("/admin/ddr-crr-stats", adminHandler, getDDRCRRStats);
+
+// BBR (Bonus Booster Rewards) Routes
+// Get current BBR campaign details
+router.get("/bbr/current-campaign", getCurrentBBRCampaign);
+
+// Get user's BBR progress for current campaign
+router.get("/bbr/progress/:userId", getUserBBRProgress);
+
+// Get BBR leaderboard for current campaign
+router.get("/bbr/leaderboard", getBBRLeaderboard);
+
+// Get user's past BBR wins history
+router.get("/bbr/past-wins/:userId", getPastBBRWins);
+
+// Get BBR tips and motivational content
+router.get("/bbr/tips", getBBRTips);
+
+// Admin BBR Routes
+// Create new BBR campaign (Admin only)
+router.post("/admin/bbr/campaign", adminHandler, createBBRCampaign);
+
+// Update BBR tips (Admin only)
+router.put("/admin/bbr/tips", adminHandler, updateBBRTips);
+
+// HLR (HonorPay Loyalty Rewards) Routes
+// Get user's HLR progress and qualification status
+router.get("/hlr/progress/:userId", getUserHLRProgress);
+
+// Get HLR qualified members leaderboard
+router.get("/hlr/qualified-members", getHLRQualifiedMembers);
+
+// Process HLR reward claim (retirement/death)
+router.post("/hlr/process-reward", processHLRReward);
+
+// Get HLR tips and motivational content
+router.get("/hlr/tips", getHLRTips);
+
+// Admin HLR Routes
+// Update HLR configuration (Admin only)
+router.put("/admin/hlr/config", adminHandler, updateHLRConfig);
+
+// Regional Ambassador Routes
+// Get user's regional ambassador progress
+router.get("/regional/progress/:userId", getUserRegionalProgress);
+
+// Get regional leaderboard by country
+router.get("/regional/leaderboard", getRegionalLeaderboard);
+
+// Get global ambassadors list
+router.get("/regional/global-ambassadors", getGlobalAmbassadors);
+
+// Handle country update request from user
+router.post("/regional/country-update-request", handleCountryUpdateRequest);
+
+// Admin Regional Ambassador Routes
+// Process country update requests (Admin only)
+router.put("/admin/regional/country-update", adminHandler, processCountryUpdateRequest);
+
+// Update regional ambassador configuration (Admin only)
+router.put("/admin/regional/config", adminHandler, updateRegionalAmbassadorConfig);
+
+// ==================== ADMIN MLM INITIALIZATION ROUTES ====================
+
+// Initialize complete MLM system with all configurations (Admin only)
+router.post("/admin/initialize-system", adminHandler, initializeCompleteMLMSystem);
+
+// Get complete MLM system status and statistics (Admin only)
+router.get("/admin/system-status", adminHandler, getMLMSystemStatus);
+
+// Reset and reinitialize entire MLM system (Admin only)
+router.post("/admin/reset-reinitialize", adminHandler, resetAndReinitializeMLM);
+
+export default router;

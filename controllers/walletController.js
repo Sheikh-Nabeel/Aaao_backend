@@ -17,9 +17,7 @@ const getUserWallet = asyncHandler(async (req, res) => {
     }
     
     const walletData = {
-      balance: user.wallet.balance,
-      totalEarnings: user.wallet.totalEarnings,
-      lastUpdated: user.wallet.lastUpdated
+      balance: user.wallet.balance
     };
     
     // Add driver-specific payment tracking if user is a driver
@@ -345,10 +343,125 @@ const recordDriverPayment = asyncHandler(async (req, res) => {
   }
 });
 
+// Add money to user wallet (admin only)
+const addToWallet = asyncHandler(async (req, res) => {
+  const { userId, amount, description = 'Admin credit' } = req.body;
+  
+  try {
+    // Only admin can add money to wallet
+    if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admins can add money to wallet'
+      });
+    }
+    
+    if (!amount || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than 0'
+      });
+    }
+    
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    const previousBalance = user.wallet.balance;
+    await user.addToWallet(amount);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Money added to wallet successfully',
+      data: {
+        userId: user._id,
+        previousBalance,
+        amountAdded: amount,
+        newBalance: user.wallet.balance,
+        description
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error adding money to wallet',
+      error: error.message
+    });
+  }
+});
+
+// Deduct money from user wallet (admin only)
+const deductFromWallet = asyncHandler(async (req, res) => {
+  const { userId, amount, description = 'Admin debit' } = req.body;
+  
+  try {
+    // Only admin can deduct money from wallet
+    if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admins can deduct money from wallet'
+      });
+    }
+    
+    if (!amount || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than 0'
+      });
+    }
+    
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    if (!user.hasWalletBalance(amount)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Insufficient wallet balance'
+      });
+    }
+    
+    const previousBalance = user.wallet.balance;
+    await user.deductFromWallet(amount);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Money deducted from wallet successfully',
+      data: {
+        userId: user._id,
+        previousBalance,
+        amountDeducted: amount,
+        newBalance: user.wallet.balance,
+        description
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error deducting money from wallet',
+      error: error.message
+    });
+  }
+});
+
 export {
   getUserWallet,
   getWalletTransactions,
   getDriverPaymentHistory,
   getPendingCashPayments,
-  recordDriverPayment
+  recordDriverPayment,
+  addToWallet,
+  deductFromWallet
 };

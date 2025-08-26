@@ -4,7 +4,9 @@ import {
   getWalletTransactions,
   getDriverPaymentHistory,
   getPendingCashPayments,
-  recordDriverPayment
+  recordDriverPayment,
+  addToWallet,
+  deductFromWallet
 } from "../controllers/walletController.js";
 import authHandler from "../middlewares/authMIddleware.js";
 
@@ -25,5 +27,7 @@ router.get("/driver/pending-payments", getPendingCashPayments);
 
 // Admin-only routes
 router.post("/driver/record-payment", recordDriverPayment);
+router.post("/add", addToWallet);
+router.post("/deduct", deductFromWallet);
 
 export default router;

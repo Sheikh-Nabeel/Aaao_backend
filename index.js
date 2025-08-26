@@ -43,7 +43,7 @@ cloudinary.config({
   api_key: process.env.API_Key,
   api_secret: process.env.API_Secret,
 });
-const allowedOrigins = ["https://aaago-frontend.vercel.app","https://aaaogo.com","http://localhost:5173","http://localhost:5174","http://localhost:3001","http://127.0.0.1"];
+const allowedOrigins = ["https://aaago-frontend.vercel.app","https://aaaogo.com","http://localhost:5173","http://localhost:5174","http://localhost:3001","http://127.0.0.1","https://aaaogo.com"];
 
 const app = express();
 const server = createServer(app);
@@ -144,6 +144,12 @@ io.on('connection', (socket) => {
 
   // Join user to their personal room (using authenticated user ID)
   socket.on('join_user_room', (userId) => {
+    // Check if userId is provided
+    if (!userId) {
+      socket.emit('error', { message: 'User ID is required to join room' });
+      return;
+    }
+    
     // Verify the userId matches the authenticated user
     if (socket.user._id.toString() !== userId.toString()) {
       socket.emit('error', { message: 'Unauthorized: Cannot join room for different user' });
@@ -157,6 +163,12 @@ io.on('connection', (socket) => {
 
   // Join driver to their personal room (using authenticated user ID)
   socket.on('join_driver_room', (driverId) => {
+    // Check if driverId is provided
+    if (!driverId) {
+      socket.emit('error', { message: 'Driver ID is required to join room' });
+      return;
+    }
+    
     // Verify the driverId matches the authenticated user and user is a driver
     if (socket.user._id.toString() !== driverId.toString()) {
       socket.emit('error', { message: 'Unauthorized: Cannot join room for different driver' });
@@ -187,7 +199,7 @@ app.set('io', io);
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () =>
-  console.log(`🚀 Server started on port: ${PORT}`.cyan.bold)
+  console.log(`🚀 Server started successfully on port: ${PORT}`.cyan.bold)
 );
 
 // Export io for use in other modules

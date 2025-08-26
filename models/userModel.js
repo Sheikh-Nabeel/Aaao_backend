@@ -128,6 +128,236 @@ const userSchema = new mongoose.Schema(
       ref: "User",
       default: [],
     },
+    mlmBalance: {
+      total: {
+        type: Number,
+        default: 0,
+      },
+      userTree: {
+        type: Number,
+        default: 0,
+      },
+      driverTree: {
+        type: Number,
+        default: 0,
+      },
+      transactions: [
+        {
+          amount: {
+            type: Number,
+            required: true,
+          },
+          rideId: {
+            type: String,
+            required: true,
+          },
+          level: {
+            type: Number,
+            required: true,
+            min: 1,
+            max: 4,
+          },
+          treeType: {
+            type: String,
+            enum: ["user", "driver"],
+            required: true,
+          },
+          timestamp: {
+            type: Date,
+            default: Date.now,
+          },
+          type: {
+            type: String,
+            enum: ["earning", "withdrawal"],
+            default: "earning",
+          },
+        },
+      ],
+    },
+    
+    // Qualification Points tracking (TGP/PGP for MLM level eligibility)
+    qualificationPoints: {
+      // Personal Qualification Points (from own rides)
+      pgp: {
+        monthly: {
+          type: Number,
+          default: 0,
+        },
+        accumulated: {
+          type: Number,
+          default: 0,
+        },
+        lastResetDate: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+      // Team Qualification Points (from team rides)
+      tgp: {
+        monthly: {
+          type: Number,
+          default: 0,
+        },
+        accumulated: {
+          type: Number,
+          default: 0,
+        },
+        lastResetDate: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+      // Transaction history for TGP/PGP
+      transactions: [
+        {
+          points: {
+            type: Number,
+            required: true,
+          },
+          rideId: {
+            type: String,
+            required: true,
+          },
+          type: {
+            type: String,
+            enum: ["pgp", "tgp"],
+            required: true,
+          },
+          rideType: {
+            type: String,
+            enum: ["personal", "team"],
+            required: true,
+          },
+          rideFare: {
+            type: Number,
+            required: true,
+          },
+          timestamp: {
+            type: Date,
+            default: Date.now,
+          },
+          month: {
+            type: Number,
+            required: true,
+          },
+          year: {
+            type: Number,
+            required: true,
+          },
+        },
+      ],
+    },
+    
+    // CRR Rank System
+    crrRank: {
+      current: {
+        type: String,
+        enum: ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond'],
+        default: 'Bronze'
+      },
+      history: [{
+        rank: {
+          type: String,
+          enum: ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond'],
+          required: true
+        },
+        achievedAt: {
+          type: Date,
+          default: Date.now
+        },
+        qualificationPoints: {
+          type: Number,
+          required: true
+        }
+      }],
+      lastUpdated: {
+        type: Date,
+        default: Date.now
+      }
+    },
+
+    // BBR (Bonus Booster Rewards) Participation
+    bbrParticipation: {
+      currentCampaign: {
+        campaignId: { type: mongoose.Schema.Types.ObjectId },
+        soloRides: { type: Number, default: 0 },
+        teamRides: { type: Number, default: 0 },
+        totalRides: { type: Number, default: 0 },
+        achieved: { type: Boolean, default: false },
+        rewardClaimed: { type: Boolean, default: false },
+        joinedAt: { type: Date }
+      },
+      history: [{
+        campaignId: { type: mongoose.Schema.Types.ObjectId },
+        campaignName: { type: String, required: true },
+        soloRides: { type: Number, default: 0 },
+        teamRides: { type: Number, default: 0 },
+        totalRides: { type: Number, default: 0 },
+        requirement: { type: Number, required: true },
+        achieved: { type: Boolean, default: false },
+        rewardAmount: { type: Number, default: 0 },
+        rewardClaimed: { type: Boolean, default: false },
+        achievedAt: { type: Date },
+        claimedAt: { type: Date }
+      }],
+      totalWins: { type: Number, default: 0 },
+      totalRewardsEarned: { type: Number, default: 0 }
+    },
+
+    // HLR (HonorPay Loyalty Rewards) Qualification
+    hlrQualification: {
+      isQualified: { type: Boolean, default: false },
+      qualifiedAt: { type: Date },
+      pgpAtQualification: { type: Number },
+      tgpAtQualification: { type: Number },
+      rewardClaimed: { type: Boolean, default: false },
+      claimedAt: { type: Date },
+      claimReason: { 
+        type: String, 
+        enum: ['retirement', 'deceased'] 
+      },
+      age: { type: Number },
+      retirementEligible: { type: Boolean, default: false },
+      progress: {
+        pgpProgress: { type: Number, default: 0 }, // percentage
+        tgpProgress: { type: Number, default: 0 }, // percentage
+        overallProgress: { type: Number, default: 0 } // percentage
+      }
+    },
+
+    // Regional Ambassador System
+    regionalAmbassador: {
+      isAmbassador: { type: Boolean, default: false },
+      rank: { 
+        type: String, 
+        enum: ['Challenger', 'Warrior', 'Tycoon', 'Champion', 'Boss'],
+        default: 'Challenger' 
+      },
+      progress: { type: Number, default: 0 }, // percentage towards next rank
+      totalEarnings: { type: Number, default: 0 },
+      achievedAt: { type: Date },
+      rankHistory: [{
+        rank: { 
+          type: String, 
+          enum: ['Challenger', 'Warrior', 'Tycoon', 'Champion', 'Boss'],
+          required: true 
+        },
+        achievedAt: { type: Date, default: Date.now },
+        progress: { type: Number, required: true },
+        earnings: { type: Number, default: 0 }
+      }],
+      countryRank: { type: Number }, // rank within country
+      globalRank: { type: Number }, // global rank
+      isActive: { type: Boolean, default: true }
+    },
+    
+    // User Wallet for payments
+    wallet: {
+      balance: {
+        type: Number,
+        default: 0,
+      },
+    },
   },
   { timestamps: true }
 );
@@ -170,6 +400,48 @@ userSchema.index({ "role": 1, "isActive": 1, "driverStatus": 1 });
 userSchema.index({ "driverSettings.autoAccept.enabled": 1 });
 userSchema.index({ "driverSettings.ridePreferences.pinkCaptainMode": 1 });
 userSchema.index({ role: 1, "driverSettings.autoAccept.enabled": 1 });
+userSchema.index({ "mlmBalance.total": 1 });
+userSchema.index({ "mlmBalance.userTree": 1 });
+userSchema.index({ "mlmBalance.driverTree": 1 });
+userSchema.index({ "mlmBalance.transactions.rideId": 1 });
+userSchema.index({ "mlmBalance.transactions.timestamp": -1 });
+// Indexes for TGP and PGP tracking
+userSchema.index({ "qualificationPoints.pgp.monthly": 1 });
+userSchema.index({ "qualificationPoints.pgp.accumulated": 1 });
+userSchema.index({ "qualificationPoints.tgp.monthly": 1 });
+userSchema.index({ "qualificationPoints.tgp.accumulated": 1 });
+userSchema.index({ "qualificationPoints.pgp.lastResetDate": 1 });
+userSchema.index({ "qualificationPoints.tgp.lastResetDate": 1 });
+userSchema.index({ "qualificationPoints.transactions.rideId": 1 });
+userSchema.index({ "qualificationPoints.transactions.timestamp": -1 });
+userSchema.index({ "qualificationPoints.transactions.type": 1 });
+userSchema.index({ "qualificationPoints.transactions.month": 1, "qualificationPoints.transactions.year": 1 });
+// Indexes for CRR rank tracking
+userSchema.index({ "crrRank.current": 1 });
+userSchema.index({ "crrRank.lastUpdated": -1 });
+userSchema.index({ "crrRank.history.rank": 1 });
+userSchema.index({ "crrRank.history.achievedAt": -1 });
+// Indexes for BBR participation
+userSchema.index({ "bbrParticipation.currentCampaign.campaignId": 1 });
+userSchema.index({ "bbrParticipation.currentCampaign.totalRides": 1 });
+userSchema.index({ "bbrParticipation.currentCampaign.achieved": 1 });
+userSchema.index({ "bbrParticipation.totalWins": 1 });
+userSchema.index({ "bbrParticipation.totalRewardsEarned": 1 });
+// Indexes for HLR qualification
+userSchema.index({ "hlrQualification.isQualified": 1 });
+userSchema.index({ "hlrQualification.qualifiedAt": -1 });
+userSchema.index({ "hlrQualification.rewardClaimed": 1 });
+userSchema.index({ "hlrQualification.retirementEligible": 1 });
+userSchema.index({ "hlrQualification.progress.overallProgress": 1 });
+// Indexes for Regional Ambassador
+userSchema.index({ "regionalAmbassador.isAmbassador": 1 });
+userSchema.index({ "regionalAmbassador.rank": 1 });
+userSchema.index({ "regionalAmbassador.progress": 1 });
+userSchema.index({ "regionalAmbassador.totalEarnings": 1 });
+userSchema.index({ "regionalAmbassador.countryRank": 1 });
+userSchema.index({ "regionalAmbassador.globalRank": 1 });
+userSchema.index({ "regionalAmbassador.isActive": 1 });
+userSchema.index({ "country": 1, "regionalAmbassador.rank": 1 });
 
 userSchema.pre("save", async function (next) {
   if (this.isModified("password")) {
@@ -208,6 +480,221 @@ userSchema.methods.canLevelUp = function () {
 
 userSchema.methods.getReferralLink = function () {
   return `${process.env.APP_URL}/signup?ref=${this.username}`;
+};
+
+// Helper methods for TGP and PGP qualification points management
+userSchema.methods.addQualificationPoints = function(data) {
+  const { points, rideId, type, rideType, rideFare } = data;
+  const currentDate = new Date();
+  const month = currentDate.getMonth() + 1;
+  const year = currentDate.getFullYear();
+  
+  // Add transaction
+  this.qualificationPoints.transactions.push({
+    points,
+    rideId,
+    type,
+    rideType,
+    rideFare,
+    timestamp: currentDate,
+    month,
+    year
+  });
+  
+  // Update monthly and accumulated totals
+  if (type === 'pgp') {
+    this.qualificationPoints.pgp.monthly += points;
+    this.qualificationPoints.pgp.accumulated += points;
+  } else if (type === 'tgp') {
+    this.qualificationPoints.tgp.monthly += points;
+    this.qualificationPoints.tgp.accumulated += points;
+  }
+  
+  return this.save();
+};
+
+userSchema.methods.checkAndResetMonthlyQualificationPoints = function() {
+  const currentDate = new Date();
+  const currentMonth = currentDate.getMonth() + 1;
+  const currentYear = currentDate.getFullYear();
+  
+  const lastResetPGP = new Date(this.qualificationPoints.pgp.lastResetDate);
+  const lastResetTGP = new Date(this.qualificationPoints.tgp.lastResetDate);
+  
+  let needsReset = false;
+  
+  // Check if PGP needs reset
+  if (lastResetPGP.getMonth() + 1 !== currentMonth || lastResetPGP.getFullYear() !== currentYear) {
+    this.qualificationPoints.pgp.monthly = 0;
+    this.qualificationPoints.pgp.lastResetDate = currentDate;
+    needsReset = true;
+  }
+  
+  // Check if TGP needs reset
+  if (lastResetTGP.getMonth() + 1 !== currentMonth || lastResetTGP.getFullYear() !== currentYear) {
+    this.qualificationPoints.tgp.monthly = 0;
+    this.qualificationPoints.tgp.lastResetDate = currentDate;
+    needsReset = true;
+  }
+  
+  if (needsReset) {
+    return this.save();
+  }
+  
+  return Promise.resolve(this);
+};
+
+userSchema.methods.getQualificationPointsStats = function() {
+  return {
+    pgp: {
+      monthly: this.qualificationPoints.pgp.monthly,
+      accumulated: this.qualificationPoints.pgp.accumulated,
+      lastResetDate: this.qualificationPoints.pgp.lastResetDate
+    },
+    tgp: {
+      monthly: this.qualificationPoints.tgp.monthly,
+      accumulated: this.qualificationPoints.tgp.accumulated,
+      lastResetDate: this.qualificationPoints.tgp.lastResetDate
+    },
+    total: {
+      monthly: this.qualificationPoints.pgp.monthly + this.qualificationPoints.tgp.monthly,
+      accumulated: this.qualificationPoints.pgp.accumulated + this.qualificationPoints.tgp.accumulated
+    }
+  };
+};
+
+userSchema.methods.getQualificationPointsTransactions = function(limit = 50) {
+  return this.qualificationPoints.transactions
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, limit);
+};
+
+// Method to check MLM level qualification based on TGP/PGP points
+userSchema.methods.checkMLMQualification = function() {
+  const stats = this.getQualificationPointsStats();
+  
+  // Placeholder for qualification logic - will be updated when conditions are provided
+  const qualifications = {
+    crr: false,
+    bbr: false,
+    hlr: false,
+    regionalAmbassador: false
+  };
+  
+  // TODO: Implement qualification logic based on TGP/PGP thresholds
+  // This will be updated when user provides the qualification conditions
+  
+  return qualifications;
+};
+
+// CRR Rank Management Methods
+userSchema.methods.updateCRRRank = function(rankThresholds) {
+  const stats = this.getQualificationPointsStats();
+  const totalPoints = stats.total.accumulated;
+  
+  let newRank = 'Bronze';
+  
+  // Determine rank based on total qualification points
+  if (totalPoints >= rankThresholds.Diamond.min) {
+    newRank = 'Diamond';
+  } else if (totalPoints >= rankThresholds.Platinum.min) {
+    newRank = 'Platinum';
+  } else if (totalPoints >= rankThresholds.Gold.min) {
+    newRank = 'Gold';
+  } else if (totalPoints >= rankThresholds.Silver.min) {
+    newRank = 'Silver';
+  }
+  
+  // Update rank if it has changed
+  if (this.crrRank.current !== newRank) {
+    // Add to history
+    this.crrRank.history.push({
+      rank: newRank,
+      achievedAt: new Date(),
+      qualificationPoints: totalPoints
+    });
+    
+    this.crrRank.current = newRank;
+    this.crrRank.lastUpdated = new Date();
+    
+    return this.save();
+  }
+  
+  return Promise.resolve(this);
+};
+
+userSchema.methods.getCRRRankProgress = function(rankThresholds) {
+  const stats = this.getQualificationPointsStats();
+  const totalPoints = stats.total.accumulated;
+  const currentRank = this.crrRank.current;
+  
+  let nextRank = null;
+  let pointsToNext = 0;
+  let progressPercentage = 0;
+  
+  // Determine next rank and progress
+  switch (currentRank) {
+    case 'Bronze':
+      nextRank = 'Silver';
+      pointsToNext = rankThresholds.Silver.min - totalPoints;
+      progressPercentage = (totalPoints / rankThresholds.Silver.min) * 100;
+      break;
+    case 'Silver':
+      nextRank = 'Gold';
+      pointsToNext = rankThresholds.Gold.min - totalPoints;
+      progressPercentage = ((totalPoints - rankThresholds.Silver.min) / (rankThresholds.Gold.min - rankThresholds.Silver.min)) * 100;
+      break;
+    case 'Gold':
+      nextRank = 'Platinum';
+      pointsToNext = rankThresholds.Platinum.min - totalPoints;
+      progressPercentage = ((totalPoints - rankThresholds.Gold.min) / (rankThresholds.Platinum.min - rankThresholds.Gold.min)) * 100;
+      break;
+    case 'Platinum':
+      nextRank = 'Diamond';
+      pointsToNext = rankThresholds.Diamond.min - totalPoints;
+      progressPercentage = ((totalPoints - rankThresholds.Platinum.min) / (rankThresholds.Diamond.min - rankThresholds.Platinum.min)) * 100;
+      break;
+    case 'Diamond':
+      nextRank = null;
+      pointsToNext = 0;
+      progressPercentage = 100;
+      break;
+  }
+  
+  return {
+    currentRank,
+    nextRank,
+    currentPoints: totalPoints,
+    pointsToNext: Math.max(0, pointsToNext),
+    progressPercentage: Math.min(100, Math.max(0, progressPercentage)),
+    rankHistory: this.crrRank.history.sort((a, b) => new Date(b.achievedAt) - new Date(a.achievedAt))
+  };
+};
+
+userSchema.methods.getCRRRankHistory = function() {
+  return this.crrRank.history.sort((a, b) => new Date(b.achievedAt) - new Date(a.achievedAt));
+};
+
+// Wallet management methods
+userSchema.methods.addToWallet = function(amount) {
+  this.wallet.balance += amount;
+  return this.save();
+};
+
+userSchema.methods.deductFromWallet = function(amount) {
+  if (this.wallet.balance >= amount) {
+    this.wallet.balance -= amount;
+    return this.save();
+  }
+  throw new Error('Insufficient wallet balance');
+};
+
+userSchema.methods.getWalletBalance = function() {
+  return this.wallet.balance;
+};
+
+userSchema.methods.hasWalletBalance = function(amount) {
+  return this.wallet.balance >= amount;
 };
 
 export default mongoose.model("User", userSchema);
