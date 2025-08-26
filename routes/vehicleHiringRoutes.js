@@ -1,19 +1,25 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
-
 import authHandler from "../middlewares/authMIddleware.js";
+import adminMiddleware from "../middlewares/adminMiddleware.js";
 import { 
   getVehicleAndDriverHiring, 
   registerVehicle, 
   setDriverDecision, 
   submitDriverHiring,
   deleteVehicle,
-  deleteDriverHiring 
+  deleteDriverHiring,
+  getPendingDriverHirings,
+  acceptDriverHiring,
+  rejectDriverHiring,
+  applyForDriverHiring,
+  getDriverApplications,
+  acceptDriverApplication
 } from "../controllers/vehicleHiringController.js";
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
+  destination: (req, file, cb) => cb(null, "Uploads/"),
   filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname)),
 });
 const upload = multer({ storage });
@@ -52,10 +58,28 @@ router.post(
 // API 4: Get Vehicle and Driver Hiring Data
 router.get("/data", authHandler, getVehicleAndDriverHiring);
 
-// API 5: Delete Vehicle Registration
-router.delete("/vehicle/:userId/:vehicleId",  deleteVehicle);
+// API 5: Delete Vehicle
+router.delete("/vehicle/:userId/:vehicleId", authHandler, deleteVehicle);
 
-// API 6: Delete Driver Hiring Post
-router.delete("/driver-hiring/:userId/:driverHiringId",  deleteDriverHiring);
+// API 6: Delete Driver Hiring
+router.delete("/driver-hiring/:userId/:driverHiringId", authHandler, deleteDriverHiring);
+
+// API 7: Get Pending Driver Hirings (Admin Only)
+router.get("/pending-driver-hirings", authHandler, adminMiddleware, getPendingDriverHirings);
+
+// API 8: Accept Driver Hiring (Admin Only)
+router.post("/accept-driver-hiring/:driverHiringId", authHandler, adminMiddleware, acceptDriverHiring);
+
+// API 9: Reject Driver Hiring (Admin Only)
+router.post("/reject-driver-hiring/:driverHiringId", authHandler, adminMiddleware, rejectDriverHiring);
+
+// API 10: Apply for Driver Hiring
+router.post("/apply-driver-hiring", authHandler, applyForDriverHiring);
+
+// API 11: Get Driver Applications for a Hiring Post
+router.get("/driver-applications/:driverHiringId", authHandler, getDriverApplications);
+
+// API 12: Accept Driver Application
+router.post("/accept-driver-application/:driverHiringId/:driverId", authHandler, acceptDriverApplication);
 
 export default router;

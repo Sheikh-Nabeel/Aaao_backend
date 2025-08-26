@@ -128,6 +128,11 @@ const userSchema = new mongoose.Schema(
       ref: "User",
       default: [],
     },
+    assignedVehicles: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "VehicleRegistration",
+      default: [],
+    },
   },
   { timestamps: true }
 );
