@@ -1902,9 +1902,11 @@ const completeRide = asyncHandler(async (req, res) => {
       
       // Process MLM distribution for non-cash payments
       try {
-        const mlmResult = await addMoneyToMLM(booking.user._id.toString(), mlmCommission, booking._id.toString());
+        const mlmResult = await addMoneyToMLM(booking.user._id.toString(), mlmCommission, booking._id.toString(), booking.fare);
         if (!mlmResult.success) {
           console.error('MLM distribution failed:', mlmResult.error);
+        } else {
+          console.log('MLM distribution completed with progress updates:', mlmResult.progressUpdates);
         }
       } catch (mlmError) {
         console.error('Error processing MLM distribution:', mlmError.message);

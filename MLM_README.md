@@ -1,7 +1,60 @@
 # MLM System Documentation
 
 ## Overview
-The MLM (Multi-Level Marketing) system is designed to distribute 15% of each ride fare across various pools and levels. The system automatically calculates distributions based on configured percentages and tracks all transactions.
+The MLM (Multi-Level Marketing) system is designed to distribute 15% of each ride fare across various pools and levels. The system supports two distribution methods:
+
+1. **Traditional MLM System**: Distributes 15% across predefined pools and categories
+2. **Dual-Tree MLM System**: Splits 15% into 7.5% for user referral tree and 7.5% for driver referral tree
+
+## Dual-Tree MLM System (New Implementation)
+
+### Distribution Logic (Upward Distribution)
+When a ride is completed, 15% of the total fare is distributed **upward** to sponsors as follows:
+- **7.5%** goes to the **User Referral Tree** (passenger's upline sponsors)
+- **7.5%** goes to the **Driver Referral Tree** (driver's upline sponsors)
+
+### Level-based Earnings Distribution (Upward to Sponsors)
+Each tree (user and driver) distributes the 7.5% **upward** across 4 sponsor levels:
+- **Level 1 (Direct Sponsor)**: 14% of the 7.5% = 1.05% of total fare
+- **Level 2 (Level 2 Sponsor)**: 6% of the 7.5% = 0.45% of total fare
+- **Level 3 (Level 3 Sponsor)**: 3.6% of the 7.5% = 0.27% of total fare
+- **Level 4 (Level 4 Sponsor)**: 1% of the 7.5% = 0.075% of total fare
+
+### How It Works
+1. When a ride is completed, the system identifies both the user (passenger) and driver
+2. For each person, it traverses their referral tree **upward** to find their sponsors up to 4 levels
+3. Earnings are distributed to the **sponsors** at each level (you receive from your downline's activities)
+4. Each user accumulates earnings from both trees when their downline members take rides
+5. All transactions are logged with ride ID, level, tree type, and timestamp
+
+### User MLM Balance Structure
+Each user has an `mlmBalance` object containing:
+```javascript
+{
+  total: Number,           // Total earnings from both trees
+  userTree: Number,        // Earnings from user referral tree
+  driverTree: Number,      // Earnings from driver referral tree
+  transactions: [          // Array of all MLM transactions
+    {
+      amount: Number,
+      rideId: String,
+      level: Number,       // 1-4
+      treeType: String,    // 'user' or 'driver'
+      timestamp: Date,
+      type: String         // 'earning' or 'withdrawal'
+    }
+  ]
+}
+```
+
+### API Endpoints for Dual-Tree MLM
+- `POST /api/mlm/distribute-dual-tree` - Distribute earnings after ride completion
+- `GET /api/mlm/user-earnings/:userId` - Get user's MLM earnings summary
+- `GET /api/mlm/earnings-stats` - Get admin statistics for dual-tree earnings
+
+---
+
+## Traditional MLM System
 
 ## Percentage Distribution
 
@@ -110,6 +163,20 @@ if (result.success) {
 }
 ```
 
+### Dual-Tree MLM Distribution Example
+```javascript
+// Example: Distribute MLM earnings after ride completion
+const totalFare = 2000; // $20.00 in cents
+const mlmAmount = totalFare * 0.15; // Calculate 15% for MLM
+
+const result = await distributeDualTreeMLMEarnings({
+  userId: "user123",
+  driverId: "driver456", 
+  mlmAmount: mlmAmount, // Pass 15% amount directly (300 cents = $3.00)
+  rideId: "ride789"
+});
+```
+
 ### Getting MLM Distribution
 ```javascript
 import { getMLMDistribution } from './utils/mlmHelper.js';
@@ -154,4 +221,4 @@ Admins can:
 
 - Admin-only endpoints should be protected with proper middleware
 - User data access should be restricted to own information
-- All transactions are logged for audit purposes 
+- All transactions are logged for audit purposes

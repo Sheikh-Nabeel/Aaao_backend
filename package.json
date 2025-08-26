@@ -4,9 +4,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "server": "nodemon ./index.js",
-    "test": "node ./test/booking-system-test.js",
-    "test:booking": "node ./test/booking-system-test.js"
+    "server": "nodemon ./index.js"
   },
   "author": "",
   "license": "ISC",
