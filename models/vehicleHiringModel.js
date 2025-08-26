@@ -258,12 +258,47 @@ const driverHiringSchema = new mongoose.Schema(
     mutualApproval: { type: Boolean, default: false },
     termsAgreed: { type: Boolean, default: false },
     digitalSignature: { type: String, required: true },
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected", null],
+      default: "pending",
+      required: true,
+    },
+    adminComments: {
+      type: String,
+      required: false,
+      default: null,
+    },
+    driverApplications: [
+      {
+        driverId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        proposal: { type: String, required: true },
+        applicationStatus: {
+          type: String,
+          enum: ["pending", "accepted", "rejected"],
+          default: "pending",
+        },
+        appliedAt: { type: Date, default: Date.now },
+      },
+    ],
+    selectedDriverId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
   { timestamps: true }
 );
 
 vehicleRegistrationSchema.index({ userId: 1 });
-driverHiringSchema.index({ userId: 1, vehicleId: 1 });
+driverHiringSchema.index({ userId: 1, vehicleId: 1, approvalStatus: 1 });
+driverHiringSchema.index({ "driverApplications.driverId": 1 });
+driverHiringSchema.index({ "driverApplications.applicationStatus": 1 });
+driverHiringSchema.index({ selectedDriverId: 1 });
 
 export const VehicleRegistration =
   mongoose.models.VehicleRegistration ||
