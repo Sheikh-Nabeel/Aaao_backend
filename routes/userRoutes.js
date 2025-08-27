@@ -129,7 +129,7 @@ router.post('/services', authHandler, upload.fields([
   { name: 'uploadedPriceList', maxCount: 1 },
   { name: 'uploadedPortfolio', maxCount: 1 }
 ]), createService);
-router.get('/services', authHandler, getAllServices);
+router.get('/services',  getAllServices);
 router.get('/user-services', authHandler, getUserServices);
 router.delete('/services/:serviceId', authHandler, deleteService);
 router.get('/available-services', authHandler, getAvailableServices); // New endpoint
