@@ -6,81 +6,9 @@ import User from "../models/userModel.js";
 import asyncHandler from "express-async-handler";
 import jwt from "jsonwebtoken";
 import path from "path";
-import nodemailer from "nodemailer";
+import { sendemailverification, sendDriverApprovalEmail, sendDriverRejectionEmail } from "../middleware/email.js";
 
-// Nodemailer configuration
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: "chyousafawais667@gmail.com",
-    pass: "mfhequkvepgtwusf",
-  },
-});
-
-transporter.verify((error) => {
-  if (error) {
-    console.error("Nodemailer verification failed:", error.message);
-  } else {
-    console.log("Nodemailer is ready to send emails");
-  }
-});
-
-// Embedded email template function for AAAO GO
-const generateEmailTemplate = ({
-  subject,
-  greeting,
-  message,
-  ctaText,
-  ctaUrl,
-}) => {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${subject}</title>
-      <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
-        .container { max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; }
-        .header { background: linear-gradient(135deg, #013220 0%, #0a4a2a 100%); padding: 20px; text-align: center; }
-        .header img { max-width: 150px; }
-        .content { padding: 20px; color: #333333; }
-        .content h2 { color: #013220; }
-        .content p { font-size: 16px; line-height: 1.5; }
-        .cta-button { display: inline-block; padding: 12px 24px; background-color: #FFD700; color: #013220; text-decoration: none; border-radius: 5px; font-weight: bold; margin: 20px 0; }
-        .footer { background-color: #013220; color: #FFD700; text-align: center; padding: 10px; font-size: 14px; }
-        @media (max-width: 600px) {
-          .container { margin: 10px; }
-          .header img { max-width: 120px; }
-          .content { padding: 15px; }
-          .cta-button { padding: 10px 20px; font-size: 14px; }
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <img src="https://via.placeholder.com/150x50?text=AAAO+GO+Logo" alt="AAAO GO Logo" />
-        </div>
-        <div class="content">
-          <h2>${greeting}</h2>
-          <p>${message}</p>
-          ${
-            ctaUrl
-              ? `<a href="${ctaUrl}" class="cta-button">${ctaText}</a>`
-              : ""
-          }
-        </div>
-        <div class="footer">
-          <p>&copy; ${new Date().getFullYear()} AAAO GO. All rights reserved.</p>
-          <p>Questions? Contact us at <a href="mailto:support@aaaogo.com" style="color: #FFD700;">support@aaaogo.com</a></p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-};
+// Email service is now handled by centralized email middleware
 
 const uploadToLocal = (file) =>
   file ? path.join("Uploads", file.filename).replace(/\\/g, "/") : null;
@@ -622,20 +550,7 @@ const acceptDriverHiring = asyncHandler(async (req, res) => {
 
   const user = driverHiring.userId;
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: user.email,
-      subject: "Driver Hiring Submission Approved",
-      html: generateEmailTemplate({
-        subject: "Driver Hiring Submission Approved",
-        greeting: `Hello ${user.firstName}${
-          user.lastName ? " " + user.lastName : ""
-        },`,
-        message: `Your driver hiring submission for vehicle plate ${driverHiring.vehiclePlateNumber} has been approved. You can now proceed with driver hiring in the AAAO GO application.`,
-        ctaText: "View Driver Hiring",
-        ctaUrl: `${process.env.APP_URL}/driver-hiring`,
-      }),
-    });
+    await sendDriverApprovalEmail(user.email, `${user.firstName} ${user.lastName || ''}`.trim());
     console.log(`Driver hiring approval email sent to ${user.email}`);
   } catch (error) {
     console.error(
@@ -704,24 +619,7 @@ const rejectDriverHiring = asyncHandler(async (req, res) => {
 
   const user = driverHiring.userId;
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: user.email,
-      subject: "Driver Hiring Submission Rejected",
-      html: generateEmailTemplate({
-        subject: "Driver Hiring Submission Rejected",
-        greeting: `Hello ${user.firstName}${
-          user.lastName ? " " + user.lastName : ""
-        },`,
-        message: `Your driver hiring submission for vehicle plate ${
-          driverHiring.vehiclePlateNumber
-        } has been rejected. <strong>Reason:</strong> ${
-          reason || "No reason provided"
-        }. Please resubmit with corrected information.`,
-        ctaText: "Resubmit Driver Hiring",
-        ctaUrl: `${process.env.APP_URL}/submit-driver-hiring`,
-      }),
-    });
+    await sendDriverRejectionEmail(user.email, `${user.firstName} ${user.lastName || ''}`.trim(), reason || "No reason provided");
     console.log(`Driver hiring rejection email sent to ${user.email}`);
   } catch (error) {
     console.error(
@@ -975,20 +873,7 @@ const acceptDriverApplication = asyncHandler(async (req, res) => {
   }
 
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: driver.email,
-      subject: "Driver Application Accepted",
-      html: generateEmailTemplate({
-        subject: "Driver Application Accepted",
-        greeting: `Hello ${driver.firstName}${
-          driver.lastName ? " " + driver.lastName : ""
-        },`,
-        message: `Your application for the driver hiring post (vehicle plate ${driverHiring.vehiclePlateNumber}) has been accepted by the vehicle owner. The vehicle has been assigned to your profile, pending admin approval.`,
-        ctaText: "View Your Profile",
-        ctaUrl: `${process.env.APP_URL}/profile`,
-      }),
-    });
+    await sendDriverApprovalEmail(driver.email, `${driver.firstName} ${driver.lastName || ''}`.trim());
     console.log(`Driver application acceptance email sent to ${driver.email}`);
   } catch (error) {
     console.error(
@@ -1012,20 +897,7 @@ const acceptDriverApplication = asyncHandler(async (req, res) => {
     const rejectedDriver = await User.findById(app.driverId);
     if (rejectedDriver) {
       try {
-        await transporter.sendMail({
-          from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-          to: rejectedDriver.email,
-          subject: "Driver Application Rejected",
-          html: generateEmailTemplate({
-            subject: "Driver Application Rejected",
-            greeting: `Hello ${rejectedDriver.firstName}${
-              rejectedDriver.lastName ? " " + rejectedDriver.lastName : ""
-            },`,
-            message: `Your application for the driver hiring post (vehicle plate ${driverHiring.vehiclePlateNumber}) was not selected by the vehicle owner. You can apply for other available posts.`,
-            ctaText: "View Other Posts",
-            ctaUrl: `${process.env.APP_URL}/driver-hiring-posts`,
-          }),
-        });
+        await sendDriverRejectionEmail(rejectedDriver.email, `${rejectedDriver.firstName} ${rejectedDriver.lastName || ''}`.trim(), "Another driver was selected for this position");
         console.log(
           `Driver application rejection email sent to ${rejectedDriver.email}`
         );

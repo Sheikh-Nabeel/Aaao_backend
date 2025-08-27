@@ -1,86 +1,14 @@
 import User from "../models/userModel.js";
 import Vehicle from "../models/vehicleModel.js";
 import asyncHandler from "express-async-handler";
-import nodemailer from "nodemailer";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import mongoose from "mongoose";
 import path from "path";
 import fs from "fs";
+import { generateOTP, sendOTPEmail, sendPasswordResetOTP, sendKYCApprovalEmail, sendKYCRejectionEmail } from "../middleware/email.js";
 
-// Nodemailer configuration with hardcoded credentials
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: "codesvistaaitzaz@gmail.com",
-    pass: "bbmnmmjkdmsiwdaw",
-  },
-});
-
-transporter.verify((error) => {
-  if (error) {
-    console.error("Nodemailer verification failed:", error.message);
-  } else {
-    console.log("Nodemailer is ready to send emails");
-  }
-});
-
-// Embedded email template function for AAAO GO
-const generateEmailTemplate = ({
-  subject,
-  greeting,
-  message,
-  ctaText,
-  ctaUrl,
-}) => {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${subject}</title>
-      <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }
-        .container { max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; }
-        .header { background: linear-gradient(135deg, #013220 0%, #0a4a2a 100%); padding: 20px; text-align: center; }
-        .header img { max-width: 150px; }
-        .content { padding: 20px; color: #333333; }
-        .content h2 { color: #013220; }
-        .content p { font-size: 16px; line-height: 1.5; }
-        .cta-button { display: inline-block; padding: 12px 24px; background-color: #FFD700; color: #013220; text-decoration: none; border-radius: 5px; font-weight: bold; margin: 20px 0; }
-        .footer { background-color: #013220; color: #FFD700; text-align: center; padding: 10px; font-size: 14px; }
-        @media (max-width: 600px) {
-          .container { margin: 10px; }
-          .header img { max-width: 120px; }
-          .content { padding: 15px; }
-          .cta-button { padding: 10px 20px; font-size: 14px; }
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <img src="https://via.placeholder.com/150x50?text=AAAO+GO+Logo" alt="AAAO GO Logo" />
-        </div>
-        <div class="content">
-          <h2>${greeting}</h2>
-          <p>${message}</p>
-          ${
-            ctaUrl
-              ? `<a href="${ctaUrl}" class="cta-button">${ctaText}</a>`
-              : ""
-          }
-        </div>
-        <div class="footer">
-          <p>&copy; ${new Date().getFullYear()} AAAO GO. All rights reserved.</p>
-          <p>Questions? Contact us at <a href="mailto:support@aaaogo.com" style="color: #FFD700;">support@aaaogo.com</a></p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-};
+// Email templates and functions are now imported from email.js
 
 // Ensure uploads folder exists
 const uploadsDir = path.join(process.cwd(), "Uploads");
@@ -88,8 +16,7 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(UploadsDir, { recursive: true });
 }
 
-const generateOTP = () =>
-  Math.floor(100000 + Math.random() * 900000).toString();
+// OTP generation is now imported from email.js
 
 const signupUser = asyncHandler(async (req, res) => {
   const {
@@ -203,18 +130,7 @@ const signupUser = asyncHandler(async (req, res) => {
   }
 
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: normalizedEmail,
-      subject: "Your OTP for AAAO GO Account Verification",
-      html: generateEmailTemplate({
-        subject: "Your OTP for AAAO GO Account Verification",
-        greeting: `Hello ${firstName}${lastName ? " " + lastName : ""},`,
-        message: `Your OTP for account verification is: <strong>${otp}</strong>. Please enter this OTP to verify within 10 minutes.`,
-        ctaText: "Verify Now",
-        ctaUrl: `${process.env.APP_URL}/verify-otp`,
-      }),
-    });
+    await sendOTPEmail(normalizedEmail, otp, "account verification");
     console.log(`Email sent to ${normalizedEmail} with OTP: ${otp}`);
   } catch (error) {
     console.error(`Failed to send email to ${normalizedEmail}:`, error.message);
@@ -407,20 +323,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
     )}`
   );
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: email,
-      subject: "Your OTP for AAAO GO Password Reset",
-      html: generateEmailTemplate({
-        subject: "Your OTP for AAAO GO Password Reset",
-        greeting: `Hello ${user.firstName}${
-          user.lastName ? " " + user.lastName : ""
-        },`,
-        message: `Your OTP for password reset is: <strong>${resetOtp}</strong>. Please use this OTP within 10 minutes.`,
-        ctaText: "Reset Password",
-        ctaUrl: `${process.env.APP_URL}/reset-password`,
-      }),
-    });
+    await sendPasswordResetOTP(email, resetOtp);
     console.log(`Reset OTP email sent to ${email} with OTP: ${resetOtp}`);
   } catch (error) {
     console.error(`Failed to send reset OTP email to ${email}:`, error.message);
@@ -586,20 +489,7 @@ const resendOtp = asyncHandler(async (req, res) => {
   user.otpExpires = otpExpires;
   await user.save();
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: email,
-      subject: "Your New OTP for AAAO GO Account Verification",
-      html: generateEmailTemplate({
-        subject: "Your New OTP for AAAO GO Account Verification",
-        greeting: `Hello ${user.firstName}${
-          user.lastName ? " " + user.lastName : ""
-        },`,
-        message: `Your new OTP for account verification is: <strong>${newOtp}</strong>. Please enter this OTP to verify within 10 minutes.`,
-        ctaText: "Verify Now",
-        ctaUrl: `${process.env.APP_URL}/verify-otp`,
-      }),
-    });
+    await sendOTPEmail(email, newOtp, "account verification");
     console.log(`Resend OTP email sent to ${email}`);
   } catch (error) {
     console.error(
@@ -1029,20 +919,7 @@ const approveKYC = asyncHandler(async (req, res) => {
     throw new Error("Failed to update KYC status.");
   }
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: updatedUser.email,
-      subject: `KYC Level ${kycLevelToApprove} Approved`,
-      html: generateEmailTemplate({
-        subject: `KYC Level ${kycLevelToApprove} Approved`,
-        greeting: `Hello ${updatedUser.firstName}${
-          updatedUser.lastName ? " " + updatedUser.lastName : ""
-        },`,
-        message: `Your KYC Level ${kycLevelToApprove} submission has been approved. You can now proceed with the next steps in the AAAO GO application.`,
-        ctaText: "Log In to Continue",
-        ctaUrl: `${process.env.APP_URL}/login`,
-      }),
-    });
+    await sendKYCApprovalEmail(updatedUser.email, kycLevelToApprove, `${updatedUser.firstName} ${updatedUser.lastName || ''}`.trim());
     console.log(`KYC approval email sent to ${updatedUser.email}`);
   } catch (error) {
     console.error(
@@ -1078,22 +955,7 @@ const rejectKYC = asyncHandler(async (req, res) => {
   user.kycStatus = "rejected";
   await user.save();
   try {
-    await transporter.sendMail({
-      from: `"AAAO GO" <chyousafawais667@gmail.com>`,
-      to: user.email,
-      subject: "KYC Submission Rejected",
-      html: generateEmailTemplate({
-        subject: "KYC Submission Rejected",
-        greeting: `Hello ${user.firstName}${
-          user.lastName ? " " + user.lastName : ""
-        },`,
-        message: `Your KYC submission has been rejected. <strong>Reason:</strong> ${
-          reason || "No reason provided"
-        }. Please resubmit with corrected information.`,
-        ctaText: "Resubmit KYC",
-        ctaUrl: `${process.env.APP_URL}/submit-kyc`,
-      }),
-    });
+    await sendKYCRejectionEmail(user.email, reason, `${user.firstName} ${user.lastName || ''}`.trim());
     console.log(`KYC rejection email sent to ${user.email}`);
   } catch (error) {
     console.error(
