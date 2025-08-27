@@ -8,9 +8,10 @@ import mongoose from "mongoose";
  * @param {number} amount - Amount to add (already calculated as 15% of ride fare)
  * @param {string} rideId - Unique ride identifier
  * @param {number} rideFare - Original ride fare for progress calculations
+ * @param {string} rideType - Type of ride ('personal' or 'team')
  * @returns {Object} Distribution breakdown
  */
-export const addMoneyToMLM = async (userId, amount, rideId, rideFare = null) => {
+export const addMoneyToMLM = async (userId, amount, rideId, rideFare = null, rideType = 'personal') => {
   try {
     // Get MLM system
     const mlm = await MLM.findOne();
@@ -19,7 +20,20 @@ export const addMoneyToMLM = async (userId, amount, rideId, rideFare = null) => 
     }
 
     // Get user for progress tracking
-    const user = await User.findById(userId);
+    // Handle both ObjectId and username/sponsorId
+    const searchConditions = [
+      { username: userId },
+      { sponsorId: userId }
+    ];
+    
+    // Only add _id condition if userId is a valid ObjectId
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      searchConditions.push({ _id: userId });
+    }
+    
+    const user = await User.findOne({ 
+      $or: searchConditions
+    });
     if (!user) {
       throw new Error("User not found");
     }
@@ -48,6 +62,7 @@ export const addMoneyToMLM = async (userId, amount, rideId, rideFare = null) => 
       userId,
       amount,
       rideId,
+      rideType,
       distribution,
       progressUpdates,
       timestamp: new Date()
@@ -189,7 +204,20 @@ export const distributeDualTreeMLM = async (userId, driverId, mlmAmount, rideId)
  */
 const distributeInTree = async (personId, treeAmount, levelPercentages, rideId, treeType) => {
   try {
-    const person = await User.findById(personId);
+    // Handle both ObjectId and username/sponsorId
+    const searchConditions = [
+      { username: personId },
+      { sponsorId: personId }
+    ];
+    
+    // Only add _id condition if personId is a valid ObjectId
+    if (mongoose.Types.ObjectId.isValid(personId)) {
+      searchConditions.push({ _id: personId });
+    }
+    
+    const person = await User.findOne({ 
+      $or: searchConditions
+    });
     if (!person) {
       throw new Error(`${treeType} not found`);
     }
@@ -298,32 +326,94 @@ const distributeInTree = async (personId, treeAmount, levelPercentages, rideId, 
 export const getUplineMembers = async (userId, levels = 4) => {
   try {
     const upline = {};
-    let currentUser = await User.findById(userId);
+    // Handle both ObjectId and username/sponsorId
+    const searchConditions = [
+      { username: userId },
+      { sponsorId: userId }
+    ];
+    
+    // Only add _id condition if userId is a valid ObjectId
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      searchConditions.push({ _id: userId });
+    }
+    
+    let currentUser = await User.findOne({ 
+      $or: searchConditions
+    });
     
     if (!currentUser || !currentUser.sponsorBy) {
       return upline; // No sponsor, return empty upline
     }
     
     // Level 1 - Direct sponsor
-    const level1Sponsor = await User.findOne({ sponsorId: currentUser.sponsorBy });
+    // sponsorBy can contain either a sponsorId, user _id, or username, so we check all three
+    const level1SearchConditions = [
+      { sponsorId: currentUser.sponsorBy },
+      { username: currentUser.sponsorBy }
+    ];
+    
+    // Only add _id condition if sponsorBy is a valid ObjectId
+    if (mongoose.Types.ObjectId.isValid(currentUser.sponsorBy)) {
+      level1SearchConditions.push({ _id: currentUser.sponsorBy });
+    }
+    
+    const level1Sponsor = await User.findOne({ 
+      $or: level1SearchConditions
+    });
     if (level1Sponsor && levels >= 1) {
       upline.level1 = level1Sponsor;
       
       // Level 2 - Sponsor's sponsor
       if (level1Sponsor.sponsorBy && levels >= 2) {
-        const level2Sponsor = await User.findOne({ sponsorId: level1Sponsor.sponsorBy });
+        const level2SearchConditions = [
+          { sponsorId: level1Sponsor.sponsorBy },
+          { username: level1Sponsor.sponsorBy }
+        ];
+        
+        // Only add _id condition if sponsorBy is a valid ObjectId
+        if (mongoose.Types.ObjectId.isValid(level1Sponsor.sponsorBy)) {
+          level2SearchConditions.push({ _id: level1Sponsor.sponsorBy });
+        }
+        
+        const level2Sponsor = await User.findOne({ 
+          $or: level2SearchConditions
+        });
         if (level2Sponsor) {
           upline.level2 = level2Sponsor;
           
           // Level 3 - Level 2's sponsor
           if (level2Sponsor.sponsorBy && levels >= 3) {
-            const level3Sponsor = await User.findOne({ sponsorId: level2Sponsor.sponsorBy });
+            const level3SearchConditions = [
+              { sponsorId: level2Sponsor.sponsorBy },
+              { username: level2Sponsor.sponsorBy }
+            ];
+            
+            // Only add _id condition if sponsorBy is a valid ObjectId
+            if (mongoose.Types.ObjectId.isValid(level2Sponsor.sponsorBy)) {
+              level3SearchConditions.push({ _id: level2Sponsor.sponsorBy });
+            }
+            
+            const level3Sponsor = await User.findOne({ 
+              $or: level3SearchConditions
+            });
             if (level3Sponsor) {
               upline.level3 = level3Sponsor;
               
               // Level 4 - Level 3's sponsor
               if (level3Sponsor.sponsorBy && levels >= 4) {
-                const level4Sponsor = await User.findOne({ sponsorId: level3Sponsor.sponsorBy });
+                const level4SearchConditions = [
+                  { sponsorId: level3Sponsor.sponsorBy },
+                  { username: level3Sponsor.sponsorBy }
+                ];
+                
+                // Only add _id condition if sponsorBy is a valid ObjectId
+                if (mongoose.Types.ObjectId.isValid(level3Sponsor.sponsorBy)) {
+                  level4SearchConditions.push({ _id: level3Sponsor.sponsorBy });
+                }
+                
+                const level4Sponsor = await User.findOne({ 
+                  $or: level4SearchConditions
+                });
                 if (level4Sponsor) {
                   upline.level4 = level4Sponsor;
                 }
@@ -352,7 +442,20 @@ export const getUplineMembers = async (userId, levels = 4) => {
  */
 const addToUserMLMBalance = async (userId, amount, rideId, level, treeType) => {
   try {
-    const user = await User.findById(userId);
+    // Handle both ObjectId and username/sponsorId
+    const searchConditions = [
+      { username: userId },
+      { sponsorId: userId }
+    ];
+    
+    // Only add _id condition if userId is a valid ObjectId
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      searchConditions.push({ _id: userId });
+    }
+    
+    const user = await User.findOne({ 
+      $or: searchConditions
+    });
     if (!user) {
       throw new Error('User not found');
     }
@@ -380,10 +483,8 @@ const addToUserMLMBalance = async (userId, amount, rideId, level, treeType) => {
     user.mlmBalance.transactions.push({
       amount,
       rideId,
-      level,
-      treeType,
       timestamp: new Date(),
-      type: 'earning'
+      type: treeType === 'user' ? 'userTree' : 'driverTree'
     });
     
     await user.save();
@@ -443,34 +544,50 @@ const updateUserProgress = async (user, rideFare, distribution, mlm) => {
     // Update HLR progress
     if (!user.hlrQualification) {
       user.hlrQualification = {
+        isQualified: false,
+        qualifiedAt: null,
+        rewardClaimed: false,
+        progress: {
+          pgpPoints: 0,
+          tgpPoints: 0,
+          overallProgress: 0
+        }
+      };
+    }
+    
+    // Ensure progress object exists
+    if (!user.hlrQualification.progress) {
+      user.hlrQualification.progress = {
         pgpPoints: 0,
         tgpPoints: 0,
-        isQualified: false,
-        qualificationDate: null,
-        lastUpdated: new Date()
+        overallProgress: 0
       };
     }
     
     // Add PGP points for personal ride (assuming 50 PGP per ride >= ₹100)
     if (rideFare >= 100) {
-      user.hlrQualification.pgpPoints += 50;
-      user.hlrQualification.lastUpdated = new Date();
+      user.hlrQualification.progress.pgpPoints += 50;
       
       // Check if user qualifies for HLR
       const hlrConfig = mlm.hlrConfig;
-      if (user.hlrQualification.pgpPoints >= hlrConfig.pgpRequirement && 
-          user.hlrQualification.tgpPoints >= hlrConfig.tgpRequirement && 
+      if (user.hlrQualification.progress.pgpPoints >= hlrConfig.requiredPGP && 
+          user.hlrQualification.progress.tgpPoints >= hlrConfig.requiredTGP && 
           !user.hlrQualification.isQualified) {
         user.hlrQualification.isQualified = true;
-        user.hlrQualification.qualificationDate = new Date();
+        user.hlrQualification.qualifiedAt = new Date();
       }
       
+      // Calculate overall progress
+      const pgpProgress = Math.min((user.hlrQualification.progress.pgpPoints / hlrConfig.requiredPGP) * 100, 100);
+      const tgpProgress = Math.min((user.hlrQualification.progress.tgpPoints / hlrConfig.requiredTGP) * 100, 100);
+      user.hlrQualification.progress.overallProgress = Math.min(((pgpProgress + tgpProgress) / 2), 100);
+      
       updates.hlr = {
-        pgpPoints: user.hlrQualification.pgpPoints,
-        tgpPoints: user.hlrQualification.tgpPoints,
+        pgpPoints: user.hlrQualification.progress.pgpPoints,
+        tgpPoints: user.hlrQualification.progress.tgpPoints,
         isQualified: user.hlrQualification.isQualified,
-        pgpRequirement: hlrConfig.pgpRequirement,
-        tgpRequirement: hlrConfig.tgpRequirement
+        requiredPGP: hlrConfig.requiredPGP,
+        requiredTGP: hlrConfig.requiredTGP
       };
     }
 
@@ -518,7 +635,20 @@ const updateUserProgress = async (user, rideFare, distribution, mlm) => {
  */
 export const getUserMLMEarnings = async (userId) => {
   try {
-    const user = await User.findById(userId);
+    // Handle both ObjectId and username/sponsorId
+    const searchConditions = [
+      { username: userId },
+      { sponsorId: userId }
+    ];
+    
+    // Only add _id condition if userId is a valid ObjectId
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      searchConditions.push({ _id: userId });
+    }
+    
+    const user = await User.findOne({ 
+      $or: searchConditions
+    });
     if (!user) {
       throw new Error('User not found');
     }

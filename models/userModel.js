@@ -135,11 +135,6 @@ const userSchema = new mongoose.Schema(
       ref: "User",
       default: [],
     },
-    assignedVehicles: {
-      type: [mongoose.Schema.Types.ObjectId],
-      ref: "VehicleRegistration",
-      default: [],
-    },
   },
   { timestamps: true }
 );
@@ -383,82 +378,77 @@ userSchema.methods.checkMLMQualification = function () {
 };
 
 // CRR Rank Management Methods
-userSchema.methods.updateCRRRank = function (rankThresholds) {
+userSchema.methods.updateCRRRank = function(rankThresholds) {
   const stats = this.getQualificationPointsStats();
+  const tgpPoints = stats.tgp.accumulated;
+  const pgpPoints = stats.pgp.accumulated;
   const totalPoints = stats.total.accumulated;
-
-  let newRank = "Bronze";
-
+  
+  let newRank = 'Bronze';
+  
   // Determine rank based on total qualification points
   if (totalPoints >= rankThresholds.Diamond.min) {
-    newRank = "Diamond";
+    newRank = 'Diamond';
   } else if (totalPoints >= rankThresholds.Platinum.min) {
-    newRank = "Platinum";
+    newRank = 'Platinum';
   } else if (totalPoints >= rankThresholds.Gold.min) {
-    newRank = "Gold";
+    newRank = 'Gold';
   } else if (totalPoints >= rankThresholds.Silver.min) {
-    newRank = "Silver";
+    newRank = 'Silver';
   }
-
+  
   // Update rank if it has changed
   if (this.crrRank.current !== newRank) {
     // Add to history
     this.crrRank.history.push({
       rank: newRank,
       achievedAt: new Date(),
-      qualificationPoints: totalPoints,
+      qualificationPoints: totalPoints
     });
-
+    
     this.crrRank.current = newRank;
     this.crrRank.lastUpdated = new Date();
-
+    
     return this.save();
   }
 
   return Promise.resolve(this);
 };
 
-userSchema.methods.getCRRRankProgress = function (rankThresholds) {
+userSchema.methods.getCRRRankProgress = function(rankThresholds) {
   const stats = this.getQualificationPointsStats();
+  const tgpPoints = stats.tgp.accumulated;
+  const pgpPoints = stats.pgp.accumulated;
   const totalPoints = stats.total.accumulated;
   const currentRank = this.crrRank.current;
-
+  
   let nextRank = null;
   let pointsToNext = 0;
   let progressPercentage = 0;
-
+  
   // Determine next rank and progress
   switch (currentRank) {
-    case "Bronze":
-      nextRank = "Silver";
+    case 'Bronze':
+      nextRank = 'Silver';
       pointsToNext = rankThresholds.Silver.min - totalPoints;
       progressPercentage = (totalPoints / rankThresholds.Silver.min) * 100;
       break;
-    case "Silver":
-      nextRank = "Gold";
+    case 'Silver':
+      nextRank = 'Gold';
       pointsToNext = rankThresholds.Gold.min - totalPoints;
-      progressPercentage =
-        ((totalPoints - rankThresholds.Silver.min) /
-          (rankThresholds.Gold.min - rankThresholds.Silver.min)) *
-        100;
+      progressPercentage = ((totalPoints - rankThresholds.Silver.min) / (rankThresholds.Gold.min - rankThresholds.Silver.min)) * 100;
       break;
-    case "Gold":
-      nextRank = "Platinum";
+    case 'Gold':
+      nextRank = 'Platinum';
       pointsToNext = rankThresholds.Platinum.min - totalPoints;
-      progressPercentage =
-        ((totalPoints - rankThresholds.Gold.min) /
-          (rankThresholds.Platinum.min - rankThresholds.Gold.min)) *
-        100;
+      progressPercentage = ((totalPoints - rankThresholds.Gold.min) / (rankThresholds.Platinum.min - rankThresholds.Gold.min)) * 100;
       break;
-    case "Platinum":
-      nextRank = "Diamond";
+    case 'Platinum':
+      nextRank = 'Diamond';
       pointsToNext = rankThresholds.Diamond.min - totalPoints;
-      progressPercentage =
-        ((totalPoints - rankThresholds.Platinum.min) /
-          (rankThresholds.Diamond.min - rankThresholds.Platinum.min)) *
-        100;
+      progressPercentage = ((totalPoints - rankThresholds.Platinum.min) / (rankThresholds.Diamond.min - rankThresholds.Platinum.min)) * 100;
       break;
-    case "Diamond":
+    case 'Diamond':
       nextRank = null;
       pointsToNext = 0;
       progressPercentage = 100;
@@ -467,13 +457,11 @@ userSchema.methods.getCRRRankProgress = function (rankThresholds) {
 
   return {
     currentRank,
-    nextRank,
-    currentPoints: totalPoints,
-    pointsToNext: Math.max(0, pointsToNext),
+    nextRank: threshold.next,
+    currentPoints: { total: totalPoints, tgp: tgpPoints, pgp: pgpPoints },
+    pointsToNext: { tgp: tgpPointsToNext, pgp: pgpPointsToNext },
     progressPercentage: Math.min(100, Math.max(0, progressPercentage)),
-    rankHistory: this.crrRank.history.sort(
-      (a, b) => new Date(b.achievedAt) - new Date(a.achievedAt)
-    ),
+    rankHistory: this.crrRank.history.sort((a, b) => new Date(b.achievedAt) - new Date(a.achievedAt))
   };
 };
 

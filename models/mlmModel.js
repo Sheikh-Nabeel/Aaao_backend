@@ -442,7 +442,7 @@ mlmSchema.pre('save', function(next) {
 });
 
 // Method to add money to MLM system
-mlmSchema.methods.addMoney = function(userId, amount, rideId) {
+mlmSchema.methods.addMoney = function(userId, amount, rideId, rideType = 'personal') {
   // Calculate main distribution amounts
   const distribution = {
     ddr: (amount * this.ddr) / 100,
@@ -510,6 +510,7 @@ mlmSchema.methods.addMoney = function(userId, amount, rideId) {
     userId,
     amount,
     rideId,
+    rideType,
     distribution: {
       // Main distribution
       ddr: distribution.ddr,
