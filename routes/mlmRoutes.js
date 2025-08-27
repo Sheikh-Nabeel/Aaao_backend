@@ -48,10 +48,17 @@ import {
   handleCountryUpdateRequest,
   processCountryUpdateRequest,
   updateRegionalAmbassadorConfig,
+  // Comprehensive Earnings Controller
+  getUserComprehensiveEarnings,
   // Admin MLM Initialization Functions
   initializeCompleteMLMSystem,
   getMLMSystemStatus,
-  resetAndReinitializeMLM
+  resetAndReinitializeMLM,
+  // CRR Admin Functions
+   getAdminCRROverview,
+   getCRRRankAnalysis,
+   getCRRRankConfig,
+   testCRRRankSystem
 } from "../controllers/mlmController.js";
 import adminHandler from '../middlewares/adminMiddleware.js';
 
@@ -93,7 +100,7 @@ router.post("/reset-data", adminHandler, resetMLMData);
 router.post("/distribute-ride", distributeRideMLM);
 
 // Admin dashboard - all payments from all users
-router.get("/admin-dashboard", adminHandler, getAdminMLMDashboard);
+router.get("/admin-dashboard", getAdminMLMDashboard);
 
 // User DDR tree view
 router.get("/user-tree/:userId", getUserDDRTree);
@@ -190,6 +197,10 @@ router.get("/regional/leaderboard", getRegionalLeaderboard);
 // Get global ambassadors list
 router.get("/regional/global-ambassadors", getGlobalAmbassadors);
 
+// Comprehensive Earnings Route
+// Get user's comprehensive earnings and progress from all MLM programs
+router.get("/comprehensive-earnings/:userId", getUserComprehensiveEarnings);
+
 // Handle country update request from user
 router.post("/regional/country-update-request", handleCountryUpdateRequest);
 
@@ -210,5 +221,18 @@ router.get("/admin/system-status", adminHandler, getMLMSystemStatus);
 
 // Reset and reinitialize entire MLM system (Admin only)
 router.post("/admin/reset-reinitialize", adminHandler, resetAndReinitializeMLM);
+
+// CRR Admin Routes
+// Get CRR overview for admin dashboard
+router.get("/admin/crr/overview", adminHandler, getAdminCRROverview);
+
+// Get CRR rank analysis for specific rank
+router.get("/admin/crr/rank/:rank", adminHandler, getCRRRankAnalysis);
+
+// Get CRR rank configuration
+router.get("/admin/crr/config", adminHandler, getCRRRankConfig);
+
+// Test CRR rank system
+router.post("/admin/crr/test", adminHandler, testCRRRankSystem);
 
 export default router;

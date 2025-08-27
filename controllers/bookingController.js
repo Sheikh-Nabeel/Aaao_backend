@@ -1900,41 +1900,41 @@ const completeRide = asyncHandler(async (req, res) => {
       driver.wallet.lastUpdated = new Date();
       await driver.save();
       
-      // Process MLM distribution for non-cash payments
+      // Process MLM distribution and TGP/PGP for non-cash payments
       try {
-        const mlmResult = await addMoneyToMLM(booking.user._id.toString(), mlmCommission, booking._id.toString(), booking.fare);
-        if (!mlmResult.success) {
-          console.error('MLM distribution failed:', mlmResult.error);
-        } else {
-          console.log('MLM distribution completed with progress updates:', mlmResult.progressUpdates);
-        }
+        // Import the distributeRideMLM function
+        const { distributeRideMLM } = await import('../controllers/mlmController.js');
+        
+        // Create a mock request/response for the MLM distribution
+        const mockReq = {
+          body: {
+            userId: booking.user._id.toString(),
+            driverId: booking.driver._id.toString(),
+            rideId: booking._id.toString(),
+            totalFare: booking.fare,
+            rideType: 'personal'
+          }
+        };
+        
+        const mockRes = {
+          status: (code) => ({
+            json: (data) => {
+              if (code === 200 && data.success) {
+                console.log('MLM distribution and TGP/PGP allocation completed successfully');
+                console.log('Qualification points distributed:', data.data?.qualificationPointsDistribution);
+              } else {
+                console.error('MLM distribution failed:', data.message);
+              }
+              return data;
+            }
+          })
+        };
+        
+        // Call the MLM distribution function
+        await distributeRideMLM(mockReq, mockRes);
+        
       } catch (mlmError) {
-        console.error('Error processing MLM distribution:', mlmError.message);
-      }
-    }
-    
-    // PGP Distribution for rides ≥₹100
-    if (booking.fare >= 100) {
-      try {
-        // Award 50 PGP to user
-        const user = await User.findById(booking.user._id);
-        if (user) {
-          user.gamePoints.pgp += 50;
-          user.gamePoints.lastUpdated = new Date();
-          await user.save();
-        }
-        
-        // Award 50 PGP to driver
-        const driver = await User.findById(booking.driver._id);
-        if (driver) {
-          driver.gamePoints.pgp += 50;
-          driver.gamePoints.lastUpdated = new Date();
-          await driver.save();
-        }
-        
-        console.log(`PGP distributed: 50 to user ${booking.user._id}, 50 to driver ${booking.driver._id}`);
-      } catch (pgpError) {
-        console.error('Error distributing PGP:', pgpError.message);
+        console.error('Error processing MLM distribution and TGP/PGP:', mlmError.message);
       }
     }
     
