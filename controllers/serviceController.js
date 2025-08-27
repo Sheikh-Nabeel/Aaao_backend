@@ -1,0 +1,155 @@
+import Service from "../models/serviceModel.js";
+import User from "../models/userModel.js";
+import asyncHandler from "express-async-handler";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/services/");
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
+const upload = multer({ storage });
+
+const createService = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const {
+    businessCompanyName, tradeLicenseNumber, companyType,
+    businessPhoneNumber, alternativePhoneNumber, managerOwnerReceptionName,
+    contactPersonMobile, businessAddress, ownerIdentification,
+    serviceType, openingTime, closingTime, numberOfStaff,
+    listOfServices, serviceArea, agreeToTermsConditions,
+    backgroundChecks, digitalOrTypedSignature
+  } = req.body;
+
+  // Validate required fields
+  if (!userId || !businessCompanyName || !tradeLicenseNumber || !companyType ||
+      !businessPhoneNumber || !managerOwnerReceptionName || !contactPersonMobile ||
+      !businessAddress || !ownerIdentification || !serviceType || !openingTime ||
+      !closingTime || !numberOfStaff || !listOfServices || !serviceArea ||
+      agreeToTermsConditions === undefined || backgroundChecks === undefined ||
+      !digitalOrTypedSignature) {
+    res.status(400);
+    throw new Error("All required fields must be provided");
+  }
+
+  // Handle file uploads
+  const tradeLicenseCopy = req.files?.tradeLicenseCopy?.[0]?.path || '';
+  const shopImages = req.files?.shopImages?.map(file => file.path) || [];
+  const passportCopy = req.files?.passportCopy?.map(file => file.path) || [];
+  const uploadedPriceList = req.files?.uploadedPriceList?.[0]?.path || '';
+  const uploadedPortfolio = req.files?.uploadedPortfolio?.[0]?.path || '';
+
+  if (!tradeLicenseCopy) {
+    res.status(400);
+    throw new Error("Trade license copy is required");
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  // Update available services
+  const existingServices = await Service.find();
+  let allAvailableServices = [...new Set(existingServices.map(s => s.serviceType))];
+  if (!allAvailableServices.includes(serviceType)) {
+    allAvailableServices.push(serviceType);
+  }
+
+  const service = await Service.create({
+    userId,
+    businessCompanyName,
+    tradeLicenseNumber,
+    tradeLicenseCopy,
+    companyType,
+    businessPhoneNumber,
+    alternativePhoneNumber,
+    managerOwnerReceptionName,
+    contactPersonMobile,
+    businessAddress,
+    shopImages,
+    ownerIdentification,
+    passportCopy,
+    serviceType,
+    openingTime,
+    closingTime,
+    numberOfStaff,
+    availableServices: allAvailableServices,
+    listOfServices,
+    serviceArea,
+    uploadedPriceList,
+    uploadedPortfolio,
+    agreeToTermsConditions,
+    backgroundChecks,
+    digitalOrTypedSignature
+  });
+
+  user.services.push(service._id);
+  await user.save();
+
+  res.status(201).json({
+    message: "Service created successfully",
+    serviceId: service._id
+  });
+});
+
+const getAllServices = asyncHandler(async (req, res) => {
+  const services = await Service.find().populate('userId', 'username firstName lastName role');
+  res.status(200).json({
+    message: "All services retrieved successfully",
+    services,
+    total: services.length
+  });
+});
+
+const getUserServices = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+  const services = await Service.find({ userId }).populate('userId', 'username firstName lastName role');
+  res.status(200).json({
+    message: "User services retrieved successfully",
+    services,
+    total: services.length
+  });
+});
+
+const deleteService = asyncHandler(async (req, res) => {
+  const { serviceId } = req.params;
+  const userId = req.user._id;
+
+  const service = await Service.findOne({ _id: serviceId, userId });
+  if (!service) {
+    res.status(404);
+    throw new Error("Service not found or unauthorized");
+  }
+
+  await Service.deleteOne({ _id: serviceId });
+  await User.findByIdAndUpdate(userId, { $pull: { services: serviceId } });
+
+  res.status(200).json({
+    message: "Service deleted successfully"
+  });
+});
+
+// New function to get available services for dropdown
+const getAvailableServices = asyncHandler(async (req, res) => {
+  const existingServices = await Service.find();
+  const availableServices = [...new Set(existingServices.map(s => s.serviceType))];
+  res.status(200).json({
+    message: "Available services retrieved successfully",
+    availableServices
+  });
+});
+
+export {
+  createService,
+  getAllServices,
+  getUserServices,
+  deleteService,
+  getAvailableServices
+};

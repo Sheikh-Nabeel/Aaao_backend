@@ -31,6 +31,13 @@ import {
   manageAllowedSections,
   getAllowedSections,
 } from "../controllers/allowedSectionsController.js";
+import {
+  createService,
+  getAllServices,
+  getUserServices,
+  deleteService,
+  getAvailableServices
+} from "../controllers/serviceController.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
@@ -114,5 +121,17 @@ router.get("/by-username", getUserByUsername);
 // Qualification stats routes
 router.get("/qualification-stats/:userId", authHandler, getQualificationStats);
 router.get("/qualification-transactions/:userId", authHandler, getQualificationTransactions);
+
+router.post('/services', authHandler, upload.fields([
+  { name: 'tradeLicenseCopy', maxCount: 1 },
+  { name: 'shopImages', maxCount: 10 },
+  { name: 'passportCopy', maxCount: 2 },
+  { name: 'uploadedPriceList', maxCount: 1 },
+  { name: 'uploadedPortfolio', maxCount: 1 }
+]), createService);
+router.get('/services', authHandler, getAllServices);
+router.get('/user-services', authHandler, getUserServices);
+router.delete('/services/:serviceId', authHandler, deleteService);
+router.get('/available-services', authHandler, getAvailableServices); // New endpoint
 
 export default router;
