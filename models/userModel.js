@@ -106,8 +106,8 @@ const userSchema = new mongoose.Schema(
     assignedVehicles: {
       type: [mongoose.Schema.Types.ObjectId],
       ref: "VehicleRegistration",
-      default: [],
-    },
+      default:[],
+},
     hasVehicle: { type: String, enum: ["yes", "no", null], default: null },
     otp: { type: String, default: null },
     otpExpires: { type: Date, default: null },
