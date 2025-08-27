@@ -345,22 +345,48 @@ const submitDriverHiring = asyncHandler(async (req, res) => {
       agreementDuration === "Custom" ? Number(customDurationAmount) : null,
     maintenanceResponsibilities: {
       minor: {
-        dailyFuel: maintenanceResponsibilities?.minor?.dailyFuel || false,
-        carWash: maintenanceResponsibilities?.minor?.carWash || false,
-        oilChange: maintenanceResponsibilities?.minor?.oilChange || false,
-        tyrePressureCheck:
-          maintenanceResponsibilities?.minor?.tyrePressureCheck || false,
+        dailyFuel: {
+          owner: maintenanceResponsibilities?.minor?.dailyFuel?.owner || false,
+          driver: maintenanceResponsibilities?.minor?.dailyFuel?.driver || false,
+        },
+        carWash: {
+          owner: maintenanceResponsibilities?.minor?.carWash?.owner || false,
+          driver: maintenanceResponsibilities?.minor?.carWash?.driver || false,
+        },
+        oilChange: {
+          owner: maintenanceResponsibilities?.minor?.oilChange?.owner || false,
+          driver: maintenanceResponsibilities?.minor?.oilChange?.driver || false,
+        },
+        tyrePressureCheck: {
+          owner:
+            maintenanceResponsibilities?.minor?.tyrePressureCheck?.owner ||
+            false,
+          driver:
+            maintenanceResponsibilities?.minor?.tyrePressureCheck?.driver ||
+            false,
+        },
       },
       major: {
-        engineRepairs:
-          maintenanceResponsibilities?.major?.engineRepairs || false,
-        transmissionSystem:
-          maintenanceResponsibilities?.major?.transmissionSystem || false,
-        acSystem: maintenanceResponsibilities?.major?.acSystem || false,
+        engineRepairs: {
+          owner:
+            maintenanceResponsibilities?.major?.engineRepairs?.owner || false,
+          driver:
+            maintenanceResponsibilities?.major?.engineRepairs?.driver || false,
+        },
+        transmissionSystem: {
+          owner:
+            maintenanceResponsibilities?.major?.transmissionSystem?.owner ||
+            false,
+          driver:
+            maintenanceResponsibilities?.major?.transmissionSystem?.driver ||
+            false,
+        },
+        acSystem: {
+          owner: maintenanceResponsibilities?.major?.acSystem?.owner || false,
+          driver: maintenanceResponsibilities?.major?.acSystem?.driver || false,
+        },
       },
-      ownerResponsible: maintenanceResponsibilities?.ownerResponsible || false,
-      driverResponsible:
-        maintenanceResponsibilities?.driverResponsible || false,
+      custom: maintenanceResponsibilities?.custom || [],
     },
     workSchedule,
     shiftTimingOrDutyHours,
