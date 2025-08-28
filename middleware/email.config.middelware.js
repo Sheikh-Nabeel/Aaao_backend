@@ -31,8 +31,8 @@ export const transporter = nodemailer.createTransport({
 // Verify transporter connection
 transporter.verify(function(error, success) {
   if (error) {
-    console.error('Email transporter verification failed:', error.red);
+    console.error('❌ Email transporter verification failed:', error.red);
   } else {
-    console.log('Email server is ready to send messages'.green);
+    console.log('✉️ Email server is ready to send messages'.green);
   }
 });
