@@ -2538,6 +2538,9 @@ export const addMoneyToMLM = asyncHandler(async (req, res) => {
     const distribution = mlm.addMoney(userId, amount, rideId, rideType);
     await mlm.save();
 
+    // Distribute Regional Ambassador earnings automatically
+    await distributeRegionalAmbassadorEarnings(amount, rideId);
+
     res.status(200).json({
       success: true,
       message: "Money added to MLM system successfully",
@@ -3884,6 +3887,71 @@ function getCountryFlag(country) {
   return flagMap[country] || '🌍';
 }
 
+// Distribute Regional Ambassador earnings automatically
+async function distributeRegionalAmbassadorEarnings(totalAmount, rideId) {
+  try {
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      console.error("MLM system not found for Regional Ambassador distribution");
+      return;
+    }
+
+    // Calculate Regional Ambassador share (0.4% of total amount)
+    const regionalAmbassadorShare = totalAmount * (mlm.regionalAmbassador / 100);
+    
+    if (regionalAmbassadorShare <= 0) {
+      return; // No Regional Ambassador earnings to distribute
+    }
+
+    // Get all current Regional Ambassadors (highest CRR rank in each country)
+    const ambassadors = await getGlobalAmbassadorsList();
+    
+    if (ambassadors.length === 0) {
+      console.log("No Regional Ambassadors found for distribution");
+      return;
+    }
+
+    // Distribute earnings equally among all ambassadors
+    const earningsPerAmbassador = regionalAmbassadorShare / ambassadors.length;
+
+    console.log(`Distributing Regional Ambassador earnings: ${regionalAmbassadorShare} AED among ${ambassadors.length} ambassadors (${earningsPerAmbassador} AED each)`);
+
+    // Update each ambassador's wallet
+    for (const ambassador of ambassadors) {
+      try {
+        const user = await User.findById(ambassador.userId);
+        if (user) {
+          // Initialize wallet if it doesn't exist
+          if (!user.wallet) {
+            user.wallet = {
+              balance: 0,
+              transactions: []
+            };
+          }
+
+          // Add earnings to wallet
+          user.wallet.balance += earningsPerAmbassador;
+          user.wallet.transactions.push({
+            amount: earningsPerAmbassador,
+            type: 'credit',
+            description: `Regional Ambassador Earnings - Ride ${rideId}`,
+            timestamp: new Date()
+          });
+
+          await user.save();
+          console.log(`Added ${earningsPerAmbassador} AED to ${user.firstName} ${user.lastName} (${user.country}) wallet`);
+        }
+      } catch (error) {
+        console.error(`Error updating ambassador ${ambassador.userId} wallet:`, error);
+      }
+    }
+
+    console.log(`Regional Ambassador earnings distribution completed for ride ${rideId}`);
+  } catch (error) {
+    console.error("Error distributing Regional Ambassador earnings:", error);
+  }
+}
+
 // Admin: Update HLR configuration
 export const updateHLRConfig = asyncHandler(async (req, res) => {
   try {
@@ -4369,68 +4437,59 @@ export const getUserRegionalProgress = asyncHandler(async (req, res) => {
     }
 
     const regionalConfig = mlm.regionalAmbassadorConfig;
-    const userRegional = user.regionalAmbassador;
     
-    // Convert Map to Array for easier processing
-    const ranksArray = Array.from(regionalConfig.ranks.entries()).map(([name, details]) => ({
-      name,
-      level: details.level,
-      minProgress: details.minProgress
-    })).sort((a, b) => a.level - b.level);
+    // Get user's CRR rank
+    const currentCRRRank = user.crrRank?.current || 'None';
+    const rankLevel = getCRRRankLevel(currentCRRRank);
     
-    // Find current rank details
-    const currentRankDetails = ranksArray.find(rank => rank.name === userRegional.rank) || ranksArray[0];
-    const nextRankDetails = ranksArray.find(rank => rank.level === (currentRankDetails.level + 1));
-    
-    // Calculate progress to next rank
-    let progressPercentage = 0;
-    if (nextRankDetails) {
-      progressPercentage = Math.min((userRegional.progress / nextRankDetails.minProgress) * 100, 100);
-    } else {
-      progressPercentage = 100; // Already at highest rank
-    }
-    
-    // Get current title holder for user's country
-    const titleHolder = regionalConfig.ambassadors.find(amb => amb.country === user.country && amb.isActive);
-    
-    // Check if user is a victory rank holder (Boss rank + CRR-based)
-    const isVictoryRank = userRegional.rank === 'Boss' && userRegional.crrRankBased;
-    
-    // Get achievement details
-    const achievements = {
-      isAmbassador: userRegional.isAmbassador,
-      isPermanent: userRegional.isPermanent,
-      isVictoryRank: isVictoryRank,
-      crrRankBased: userRegional.crrRankBased,
-      achievedAt: userRegional.achievedAt,
-      diamondAchievedAt: userRegional.diamondAchievedAt
-    };
+    // Calculate progress based on CRR rank
+    const progress = calculateRegionalProgress(currentCRRRank, regionalConfig);
+
+    // Get user's position in country leaderboard
+    const userPosition = await getUserCountryPosition(userId, user.country);
+
+    // Get current country ambassador (highest CRR rank in country)
+    const currentAmbassador = await getCurrentCountryAmbassador(user.country);
+
+    // Check if user is the current ambassador for their country
+    const isCurrentAmbassador = currentAmbassador && currentAmbassador._id && currentAmbassador._id.toString() === userId;
+
+    // Get total regional earnings
+    const totalEarnings = await calculateRegionalEarnings(userId);
 
     res.status(200).json({
       success: true,
       data: {
-        totalEarnings: userRegional.totalEarnings || 0,
-        progress: userRegional.progress || 0,
-        titleHolder: titleHolder || null,
-        currentRank: {
-          name: userRegional.rank || 'Challenger',
-          level: currentRankDetails.level,
+        user: {
+          id: user._id,
+          name: `${user.firstName} ${user.lastName}`,
+          username: user.username,
           country: user.country,
-          countryRank: userRegional.countryRank,
-          globalRank: userRegional.globalRank
+          profilePicture: user.profilePicture
         },
-        nextRank: nextRankDetails ? {
-          name: nextRankDetails.name,
-          level: nextRankDetails.level,
-          minProgress: nextRankDetails.minProgress
+        totalEarnings: totalEarnings,
+        titleHolder: currentAmbassador ? {
+          name: `${currentAmbassador.firstName} ${currentAmbassador.lastName}`,
+          country: currentAmbassador.country,
+          flag: getCountryFlag(currentAmbassador.country),
+          rank: currentAmbassador.crrRank?.current || 'None',
+          totalEarnings: currentAmbassador.totalEarnings || 0
         } : null,
-        progressToNext: {
-          percentage: progressPercentage,
-          progressNeeded: nextRankDetails ? Math.max(0, nextRankDetails.minProgress - userRegional.progress) : 0
+        currentRank: {
+          rank: currentCRRRank,
+          level: rankLevel,
+          icon: getCRRRankIcon(currentCRRRank)
         },
-        achievements: achievements,
-        allRanks: ranksArray,
-        isActive: userRegional.isActive
+        victoryRank: currentCRRRank === 'BOSS' ? 'Tycoon' : null,
+        progress: {
+          percentage: progress
+        },
+        position: {
+          rank: userPosition,
+          country: user.country
+        },
+        isCurrentAmbassador: isCurrentAmbassador,
+        isPermanentAmbassador: currentAmbassador?.isPermanent || false
       }
     });
   } catch (error) {
@@ -4448,15 +4507,8 @@ export const getRegionalLeaderboard = asyncHandler(async (req, res) => {
   try {
     const { country, userId } = req.query;
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-
-    if (!country) {
-      return res.status(400).json({
-        success: false,
-        message: "Country parameter is required"
-      });
-    }
 
     const mlm = await MLM.findOne();
     if (!mlm) {
@@ -4468,42 +4520,45 @@ export const getRegionalLeaderboard = asyncHandler(async (req, res) => {
 
     const regionalConfig = mlm.regionalAmbassadorConfig;
     
-    // Convert ranks Map to object for aggregation
-    const ranksObj = Object.fromEntries(regionalConfig.ranks);
-    
-    // Get leaderboard for specific country
+    // Build match criteria
+    const matchCriteria = {};
+    if (country) {
+      matchCriteria.country = country;
+    }
+
+    // Get users with CRR ranks (Regional Race)
     const leaderboard = await User.aggregate([
       {
-        $match: {
-          country: country,
-          $or: [
-            { "regionalAmbassador.totalEarnings": { $gt: 0 } },
-            { "regionalAmbassador.progress": { $gt: 0 } },
-            { "regionalAmbassador.rank": { $ne: null } }
-          ]
-        }
+        $match: matchCriteria
       },
       {
         $addFields: {
           rankLevel: {
             $switch: {
               branches: [
-                { case: { $eq: ["$regionalAmbassador.rank", "Challenger"] }, then: 1 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Warrior"] }, then: 2 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Tycoon"] }, then: 3 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Champion"] }, then: 4 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Boss"] }, then: 5 }
+                { case: { $eq: ["$crrRank.current", "None"] }, then: 0 },
+                { case: { $eq: ["$crrRank.current", "Challenger"] }, then: 1 },
+                { case: { $eq: ["$crrRank.current", "Warrior"] }, then: 2 },
+                { case: { $eq: ["$crrRank.current", "Tycoon"] }, then: 3 },
+                { case: { $eq: ["$crrRank.current", "CHAMPION"] }, then: 4 },
+                { case: { $eq: ["$crrRank.current", "BOSS"] }, then: 5 }
               ],
-              default: 1
+              default: 0
             }
+          },
+          totalPoints: {
+            $add: [
+              { $ifNull: ["$qualificationPoints.pgp.accumulated", 0] },
+              { $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }
+            ]
           }
         }
       },
       {
-        $sort: {
+        $sort: { 
           rankLevel: -1,
-          "regionalAmbassador.progress": -1,
-          "regionalAmbassador.totalEarnings": -1
+          totalPoints: -1,
+          "crrRank.lastUpdated": 1
         }
       },
       {
@@ -4519,93 +4574,47 @@ export const getRegionalLeaderboard = asyncHandler(async (req, res) => {
           lastName: 1,
           profilePicture: 1,
           country: 1,
-          "regionalAmbassador.rank": 1,
-          "regionalAmbassador.progress": 1,
-          "regionalAmbassador.totalEarnings": 1,
-          "regionalAmbassador.isAmbassador": 1,
-          "regionalAmbassador.isPermanent": 1,
-          "regionalAmbassador.crrRankBased": 1,
-          "regionalAmbassador.countryRank": 1,
-          "regionalAmbassador.globalRank": 1,
-          "regionalAmbassador.achievedAt": 1,
-          rankLevel: 1
+          "crrRank.current": 1,
+          "crrRank.lastUpdated": 1,
+          rankLevel: 1,
+          totalPoints: 1
         }
       }
     ]);
 
+    // Get total count
+    const totalUsers = await User.countDocuments(matchCriteria);
+
     // Get user's position if userId provided
     let userPosition = null;
     if (userId) {
-      const allUsers = await User.aggregate([
-        {
-          $match: {
-            country: country,
-            $or: [
-              { "regionalAmbassador.totalEarnings": { $gt: 0 } },
-              { "regionalAmbassador.progress": { $gt: 0 } },
-              { "regionalAmbassador.rank": { $ne: null } }
-            ]
-          }
-        },
-        {
-          $addFields: {
-            rankLevel: {
-              $switch: {
-                branches: [
-                  { case: { $eq: ["$regionalAmbassador.rank", "Challenger"] }, then: 1 },
-                  { case: { $eq: ["$regionalAmbassador.rank", "Warrior"] }, then: 2 },
-                  { case: { $eq: ["$regionalAmbassador.rank", "Tycoon"] }, then: 3 },
-                  { case: { $eq: ["$regionalAmbassador.rank", "Champion"] }, then: 4 },
-                  { case: { $eq: ["$regionalAmbassador.rank", "Boss"] }, then: 5 }
-                ],
-                default: 1
-              }
-            }
-          }
-        },
-        {
-          $sort: {
-            rankLevel: -1,
-            "regionalAmbassador.progress": -1,
-            "regionalAmbassador.totalEarnings": -1
-          }
-        },
-        {
-          $project: {
-            _id: 1,
-            "regionalAmbassador.progress": 1,
-            "regionalAmbassador.totalEarnings": 1
-          }
-        }
-      ]);
-      
-      const userIndex = allUsers.findIndex(user => user._id.toString() === userId);
-      if (userIndex !== -1) {
-        userPosition = {
-          position: userIndex + 1,
-          progress: allUsers[userIndex].regionalAmbassador.progress || 0,
-          totalEarnings: allUsers[userIndex].regionalAmbassador.totalEarnings || 0
-        };
-      }
+      userPosition = await getUserCountryPosition(userId, country);
     }
-
-    // Convert ranks Map to array for response
-    const ranksArray = Array.from(regionalConfig.ranks.entries()).map(([name, details]) => ({
-      name,
-      level: details.level,
-      minProgress: details.minProgress
-    })).sort((a, b) => a.level - b.level);
 
     res.status(200).json({
       success: true,
       data: {
-        leaderboard,
-        userPosition,
-        country,
-        ranks: ranksArray,
+        leaderboard: leaderboard.map((user, index) => ({
+          rank: skip + index + 1,
+          name: `${user.firstName} ${user.lastName}`,
+          username: user.username,
+          country: user.country,
+          flag: getCountryFlag(user.country),
+          profilePicture: user.profilePicture,
+          crrRank: user.crrRank.current,
+          rankIcon: getCRRRankIcon(user.crrRank.current),
+          achievedAt: user.crrRank.lastUpdated,
+          totalPoints: user.totalPoints
+        })),
+        userPosition: userPosition ? {
+          rank: userPosition,
+          country: country || 'All Countries'
+        } : null,
+        country: country || 'All Countries',
         pagination: {
           page,
           limit,
+          total: totalUsers,
           hasMore: leaderboard.length === limit
         }
       }
@@ -4624,7 +4633,7 @@ export const getRegionalLeaderboard = asyncHandler(async (req, res) => {
 export const getGlobalAmbassadors = asyncHandler(async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
     const mlm = await MLM.findOne();
@@ -4635,113 +4644,35 @@ export const getGlobalAmbassadors = asyncHandler(async (req, res) => {
       });
     }
 
-    // Get all users who are Regional Ambassadors
-    const globalAmbassadors = await User.aggregate([
-      {
-        $match: {
-          "regionalAmbassador.isAmbassador": true,
-          "regionalAmbassador.isActive": true
-        }
-      },
-      {
-        $addFields: {
-          rankLevel: {
-            $switch: {
-              branches: [
-                { case: { $eq: ["$regionalAmbassador.rank", "Challenger"] }, then: 1 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Warrior"] }, then: 2 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Tycoon"] }, then: 3 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Champion"] }, then: 4 },
-                { case: { $eq: ["$regionalAmbassador.rank", "Boss"] }, then: 5 }
-              ],
-              default: 1
-            }
-          },
-          isVictoryRank: {
-            $and: [
-              { $eq: ["$regionalAmbassador.rank", "Boss"] },
-              { $eq: ["$regionalAmbassador.crrRankBased", true] }
-            ]
-          }
-        }
-      },
-      {
-        $sort: {
-          rankLevel: -1,
-          "regionalAmbassador.progress": -1,
-          "regionalAmbassador.totalEarnings": -1,
-          "regionalAmbassador.achievedAt": 1
-        }
-      },
-      {
-        $skip: skip
-      },
-      {
-        $limit: limit
-      },
-      {
-        $project: {
-          username: 1,
-          firstName: 1,
-          lastName: 1,
-          profilePicture: 1,
-          country: 1,
-          "regionalAmbassador.rank": 1,
-          "regionalAmbassador.progress": 1,
-          "regionalAmbassador.totalEarnings": 1,
-          "regionalAmbassador.isAmbassador": 1,
-          "regionalAmbassador.isPermanent": 1,
-          "regionalAmbassador.crrRankBased": 1,
-          "regionalAmbassador.countryRank": 1,
-          "regionalAmbassador.globalRank": 1,
-          "regionalAmbassador.achievedAt": 1,
-          "regionalAmbassador.diamondAchievedAt": 1,
-          rankLevel: 1,
-          isVictoryRank: 1
-        }
-      }
-    ]);
+    // Get all country ambassadors (highest CRR rank in each country)
+    const globalAmbassadors = await getGlobalAmbassadorsList();
 
-    // Get total count for pagination
-    const totalCount = await User.countDocuments({
-      "regionalAmbassador.isAmbassador": true,
-      "regionalAmbassador.isActive": true
-    });
-
-    // Group by country for better organization
-    const ambassadorsByCountry = globalAmbassadors.reduce((acc, ambassador) => {
-      const country = ambassador.country || 'Unknown';
-      if (!acc[country]) {
-        acc[country] = [];
-      }
-      acc[country].push(ambassador);
-      return acc;
-    }, {});
-
-    // Convert ranks Map to array for response
-    const ranksArray = Array.from(mlm.regionalAmbassadorConfig.ranks.entries()).map(([name, details]) => ({
-      name,
-      level: details.level,
-      minProgress: details.minProgress
-    })).sort((a, b) => a.level - b.level);
+    // Apply pagination
+    const paginatedAmbassadors = globalAmbassadors.slice(skip, skip + limit);
 
     res.status(200).json({
       success: true,
       data: {
-        ambassadors: globalAmbassadors,
-        ambassadorsByCountry,
-        ranks: ranksArray,
-        statistics: {
-          totalAmbassadors: totalCount,
-          victoryRankHolders: globalAmbassadors.filter(amb => amb.isVictoryRank).length,
-          permanentAmbassadors: globalAmbassadors.filter(amb => amb.regionalAmbassador.isPermanent).length,
-          crrBasedAmbassadors: globalAmbassadors.filter(amb => amb.regionalAmbassador.crrRankBased).length
-        },
+        ambassadors: paginatedAmbassadors.map(ambassador => ({
+          id: ambassador.userId,
+          name: `${ambassador.firstName} ${ambassador.lastName}`,
+          username: ambassador.username,
+          profilePicture: ambassador.profilePicture,
+          country: ambassador.country,
+          flag: getCountryFlag(ambassador.country),
+          rank: ambassador.crrRank,
+          rankIcon: getCRRRankIcon(ambassador.crrRank),
+          totalEarnings: ambassador.totalEarnings || 0,
+          achievedAt: ambassador.achievedAt,
+          isPermanent: ambassador.isPermanent || false
+        })),
+        totalAmbassadors: globalAmbassadors.length,
+        totalCountries: new Set(globalAmbassadors.map(amb => amb.country)).size,
         pagination: {
           page,
           limit,
-          total: totalCount,
-          hasMore: globalAmbassadors.length === limit
+          total: globalAmbassadors.length,
+          hasMore: paginatedAmbassadors.length === limit
         }
       }
     });
@@ -4754,6 +4685,194 @@ export const getGlobalAmbassadors = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// Helper functions for Regional Ambassador system
+async function getCurrentCountryAmbassador(country) {
+  try {
+    const ambassador = await User.aggregate([
+      {
+        $match: { country: country }
+      },
+      {
+        $addFields: {
+          rankLevel: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$crrRank.current", "None"] }, then: 0 },
+                { case: { $eq: ["$crrRank.current", "Challenger"] }, then: 1 },
+                { case: { $eq: ["$crrRank.current", "Warrior"] }, then: 2 },
+                { case: { $eq: ["$crrRank.current", "Tycoon"] }, then: 3 },
+                { case: { $eq: ["$crrRank.current", "CHAMPION"] }, then: 4 },
+                { case: { $eq: ["$crrRank.current", "BOSS"] }, then: 5 }
+              ],
+              default: 0
+            }
+          }
+        }
+      },
+      {
+        $sort: { rankLevel: -1, "crrRank.lastUpdated": 1 }
+      },
+      {
+        $limit: 1
+      }
+    ]);
+
+    return ambassador.length > 0 ? ambassador[0] : null;
+  } catch (error) {
+    console.error("Error getting current country ambassador:", error);
+    return null;
+  }
+}
+
+async function getGlobalAmbassadorsList() {
+  try {
+    // Get the highest CRR rank user from each country
+    const ambassadors = await User.aggregate([
+      {
+        $addFields: {
+          rankLevel: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$crrRank.current", "None"] }, then: 0 },
+                { case: { $eq: ["$crrRank.current", "Challenger"] }, then: 1 },
+                { case: { $eq: ["$crrRank.current", "Warrior"] }, then: 2 },
+                { case: { $eq: ["$crrRank.current", "Tycoon"] }, then: 3 },
+                { case: { $eq: ["$crrRank.current", "CHAMPION"] }, then: 4 },
+                { case: { $eq: ["$crrRank.current", "BOSS"] }, then: 5 }
+              ],
+              default: 0
+            }
+          }
+        }
+      },
+      {
+        $sort: { rankLevel: -1, "crrRank.lastUpdated": 1 }
+      },
+      {
+        $group: {
+          _id: "$country",
+          userId: { $first: "$_id" },
+          firstName: { $first: "$firstName" },
+          lastName: { $first: "$lastName" },
+          username: { $first: "$username" },
+          profilePicture: { $first: "$profilePicture" },
+          country: { $first: "$country" },
+          crrRank: { $first: "$crrRank.current" },
+          rankLevel: { $first: "$rankLevel" },
+          achievedAt: { $first: "$crrRank.lastUpdated" },
+          isPermanent: { $first: { $eq: ["$crrRank.current", "BOSS"] } }
+        }
+      },
+      {
+        $sort: { rankLevel: -1, achievedAt: 1 }
+      }
+    ]);
+
+    return ambassadors;
+  } catch (error) {
+    console.error("Error getting global ambassadors list:", error);
+    return [];
+  }
+}
+
+async function calculateRegionalEarnings(userId) {
+  try {
+    // This would calculate regional earnings based on the user's position
+    // For now, return a placeholder value
+    return 1250.00; // Placeholder
+  } catch (error) {
+    console.error("Error calculating regional earnings:", error);
+    return 0;
+  }
+}
+
+// Helper functions for Regional Ambassador system
+function getCRRRankLevel(rank) {
+  const rankLevels = {
+    'None': 0,
+    'Challenger': 1,
+    'Warrior': 2,
+    'Tycoon': 3,
+    'CHAMPION': 4,
+    'BOSS': 5
+  };
+  return rankLevels[rank] || 0;
+}
+
+function getCRRRankIcon(rank) {
+  const rankIcons = {
+    'None': '🔒',
+    'Challenger': '🥇',
+    'Warrior': '🥈',
+    'Tycoon': '🥉',
+    'CHAMPION': '🏅',
+    'BOSS': '🎖'
+  };
+  return rankIcons[rank] || '🔒';
+}
+
+function calculateRegionalProgress(currentRank, regionalConfig) {
+  const rankLevel = getCRRRankLevel(currentRank);
+  const maxLevel = 5; // BOSS rank
+  return Math.round((rankLevel / maxLevel) * 100);
+}
+
+
+
+async function getUserCountryPosition(userId, country) {
+  try {
+    const matchCriteria = country ? { country } : {};
+    
+    const userPosition = await User.aggregate([
+      {
+        $match: matchCriteria
+      },
+      {
+        $addFields: {
+          rankLevel: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$crrRank.current", "None"] }, then: 0 },
+                { case: { $eq: ["$crrRank.current", "Challenger"] }, then: 1 },
+                { case: { $eq: ["$crrRank.current", "Warrior"] }, then: 2 },
+                { case: { $eq: ["$crrRank.current", "Tycoon"] }, then: 3 },
+                { case: { $eq: ["$crrRank.current", "CHAMPION"] }, then: 4 },
+                { case: { $eq: ["$crrRank.current", "BOSS"] }, then: 5 }
+              ],
+              default: 0
+            }
+          }
+        }
+      },
+      {
+        $sort: { rankLevel: -1, "crrRank.lastUpdated": 1 }
+      },
+      {
+        $group: {
+          _id: null,
+          users: { $push: { userId: "$_id", rankLevel: "$rankLevel" } }
+        }
+      },
+      {
+        $unwind: { path: "$users", includeArrayIndex: "position" }
+      },
+      {
+        $match: { "users.userId": new mongoose.Types.ObjectId(userId) }
+      },
+      {
+        $project: { position: { $add: ["$position", 1] } }
+      }
+    ]);
+
+    return userPosition.length > 0 ? userPosition[0].position : null;
+  } catch (error) {
+    console.error("Error getting user country position:", error);
+    return null;
+  }
+}
+
+
 
 // Handle country update request
 export const handleCountryUpdateRequest = asyncHandler(async (req, res) => {
