@@ -57,6 +57,10 @@ export const addMoneyToMLM = async (userId, amount, rideId, rideFare = null, rid
     // Update user progress for BBR, HLR, and Regional Ambassador
     const progressUpdates = await updateUserProgress(user, rideFare || (amount / 0.15), distribution, mlm);
 
+    // Ensure transactions array exists
+    if (!mlm.transactions) mlm.transactions = [];
+    if (mlm.transactions === undefined) mlm.transactions = [];
+    
     // Add transaction with progress tracking
     mlm.transactions.push({
       userId,
@@ -324,6 +328,7 @@ const distributeInTree = async (personId, treeAmount, levelPercentages, rideId, 
  * @returns {Object} Upline members by level
  */
 export const getUplineMembers = async (userId, levels = 4) => {
+  console.log('getUplineMembers called with userId:', userId, 'levels:', levels);
   try {
     const upline = {};
     // Handle both ObjectId and username/sponsorId

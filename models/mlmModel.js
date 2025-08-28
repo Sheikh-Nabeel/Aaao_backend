@@ -7,6 +7,7 @@ const mlmSchema = new mongoose.Schema({
     required: true,
     default: "Default MLM System"
   },
+
   
   // Main Distribution Percentages (Total 100%)
   ddr: { type: Number, default: 24, min: 0, max: 100 },
@@ -123,7 +124,7 @@ const mlmSchema = new mongoose.Schema({
     // Ride Type
     rideType: {
       type: String,
-      enum: ['personal', 'team'],
+      enum: ['personal', 'team', 'user_standard', 'driver_standard'],
       required: true
     },
     
@@ -443,6 +444,43 @@ mlmSchema.pre('save', function(next) {
 
 // Method to add money to MLM system
 mlmSchema.methods.addMoney = function(userId, amount, rideId, rideType = 'personal') {
+  console.log('addMoney method called with userId:', userId);
+  console.log('this object:', this);
+  console.log('this.transactions:', this.transactions);
+  
+  // Ensure transactions is initialized as an array
+  console.log('Checking transactions initialization...');
+  console.log('this.transactions before check:', this.transactions);
+  console.log('typeof this.transactions:', typeof this.transactions);
+  console.log('Array.isArray(this.transactions):', Array.isArray(this.transactions));
+  
+  if (!this.transactions) {
+    console.log('Initializing transactions as empty array');
+    this.transactions = [];
+    this.markModified('transactions');
+  } else if (!Array.isArray(this.transactions)) {
+    console.log('transactions exists but is not an array, resetting to empty array');
+    this.transactions = [];
+    this.markModified('transactions');
+  }
+  
+  // Ensure currentBalances is initialized as an object
+  if (!this.currentBalances) {
+    this.currentBalances = {};
+    this.markModified('currentBalances');
+  } else if (typeof this.currentBalances !== 'object') {
+    console.log('currentBalances exists but is not an object, resetting to empty object');
+    this.currentBalances = {};
+    this.markModified('currentBalances');
+  }
+  
+  console.log('this.transactions after initialization:', Array.isArray(this.transactions));
+  console.log('this.transactions length:', this.transactions ? this.transactions.length : 0);
+  
+  // Ensure userId is valid
+  if (!userId) {
+    throw new Error('userId is required for MLM transaction');
+  }
   // Calculate main distribution amounts
   const distribution = {
     ddr: (amount * this.ddr) / 100,
@@ -462,51 +500,51 @@ mlmSchema.methods.addMoney = function(userId, amount, rideId, rideType = 'person
   // Calculate DDR level amounts
   const ddrAmount = distribution.ddr;
   const ddrDistribution = {
-    ddrLevel1: (ddrAmount * this.ddrLevel1) / this.ddr,
-    ddrLevel2: (ddrAmount * this.ddrLevel2) / this.ddr,
-    ddrLevel3: (ddrAmount * this.ddrLevel3) / this.ddr,
-    ddrLevel4: (ddrAmount * this.ddrLevel4) / this.ddr
+    ddrLevel1: this.ddr ? (ddrAmount * this.ddrLevel1) / this.ddr : 0,
+    ddrLevel2: this.ddr ? (ddrAmount * this.ddrLevel2) / this.ddr : 0,
+    ddrLevel3: this.ddr ? (ddrAmount * this.ddrLevel3) / this.ddr : 0,
+    ddrLevel4: this.ddr ? (ddrAmount * this.ddrLevel4) / this.ddr : 0
   };
   
   // Calculate Porparle Team amounts
   const ptAmount = distribution.porparleTeam;
   const ptDistribution = {
-    gc: (ptAmount * this.gc) / this.porparleTeam,
-    la: (ptAmount * this.la) / this.porparleTeam,
-    ceo: (ptAmount * this.ceo) / this.porparleTeam,
-    coo: (ptAmount * this.coo) / this.porparleTeam,
-    cmo: (ptAmount * this.cmo) / this.porparleTeam,
-    cfo: (ptAmount * this.cfo) / this.porparleTeam,
-    cto: (ptAmount * this.cto) / this.porparleTeam,
-    chro: (ptAmount * this.chro) / this.porparleTeam,
-    topTeamPerform: (ptAmount * this.topTeamPerform) / this.porparleTeam
+    gc: this.porparleTeam ? (ptAmount * this.gc) / this.porparleTeam : 0,
+    la: this.porparleTeam ? (ptAmount * this.la) / this.porparleTeam : 0,
+    ceo: this.porparleTeam ? (ptAmount * this.ceo) / this.porparleTeam : 0,
+    coo: this.porparleTeam ? (ptAmount * this.coo) / this.porparleTeam : 0,
+    cmo: this.porparleTeam ? (ptAmount * this.cmo) / this.porparleTeam : 0,
+    cfo: this.porparleTeam ? (ptAmount * this.cfo) / this.porparleTeam : 0,
+    cto: this.porparleTeam ? (ptAmount * this.cto) / this.porparleTeam : 0,
+    chro: this.porparleTeam ? (ptAmount * this.chro) / this.porparleTeam : 0,
+    topTeamPerform: this.porparleTeam ? (ptAmount * this.topTeamPerform) / this.porparleTeam : 0
   };
   
   // Calculate Top Team Performance amounts
   const ttAmount = ptDistribution.topTeamPerform;
   const ttDistribution = {
-    winner: (ttAmount * this.winner) / this.topTeamPerform,
-    fighter: (ttAmount * this.fighter) / this.topTeamPerform
+    winner: this.topTeamPerform ? (ttAmount * this.winner) / this.topTeamPerform : 0,
+    fighter: this.topTeamPerform ? (ttAmount * this.fighter) / this.topTeamPerform : 0
   };
   
   // Calculate Company Operations amounts
   const coAmount = distribution.companyOperations;
   const coDistribution = {
-    operationExpense: (coAmount * this.operationExpense) / this.companyOperations,
-    organizationEvent: (coAmount * this.organizationEvent) / this.companyOperations
+    operationExpense: this.companyOperations ? (coAmount * this.operationExpense) / this.companyOperations : 0,
+    organizationEvent: this.companyOperations ? (coAmount * this.organizationEvent) / this.companyOperations : 0
   };
   
   // Calculate Public Share amounts
   const psAmount = distribution.publicShare;
   const psDistribution = {
-    chairmanFounder: (psAmount * this.chairmanFounder) / this.publicShare,
-    shareholder1: (psAmount * this.shareholder1) / this.publicShare,
-    shareholder2: (psAmount * this.shareholder2) / this.publicShare,
-    shareholder3: (psAmount * this.shareholder3) / this.publicShare
+    chairmanFounder: this.publicShare ? (psAmount * this.chairmanFounder) / this.publicShare : 0,
+    shareholder1: this.publicShare ? (psAmount * this.shareholder1) / this.publicShare : 0,
+    shareholder2: this.publicShare ? (psAmount * this.shareholder2) / this.publicShare : 0,
+    shareholder3: this.publicShare ? (psAmount * this.shareholder3) / this.publicShare : 0
   };
   
-  // Add transaction with all distribution details
-  this.transactions.push({
+  // Create a new transaction record
+  const transaction = {
     userId,
     amount,
     rideId,
@@ -557,39 +595,93 @@ mlmSchema.methods.addMoney = function(userId, amount, rideId, rideType = 'person
       shareholder2: psDistribution.shareholder2,
       shareholder3: psDistribution.shareholder3
     },
+    qualificationPoints: {
+      tgp: 0, // Will be calculated separately
+      pgp: 0  // Will be calculated separately
+    },
     timestamp: new Date()
-  });
+  };
+  
+  // Add the transaction to the transactions array
+  // Double-check that transactions is an array before pushing
+  if (!Array.isArray(this.transactions)) {
+    console.log('Warning: transactions is still not an array before push, reinitializing');
+    this.transactions = [];
+  }
+  
+  this.transactions.push(transaction);
+  this.markModified('transactions');
+  console.log('Transaction successfully added to transactions array');
   
   // Update total amount
+  if (!this.totalAmount) {
+    this.totalAmount = 0;
+  }
   this.totalAmount += amount;
   
   // Update main distribution balances
   Object.keys(distribution).forEach(key => {
+    if (!this.currentBalances) {
+      this.currentBalances = {};
+    }
+    if (!this.currentBalances[key]) {
+      this.currentBalances[key] = 0;
+    }
     this.currentBalances[key] += distribution[key];
   });
   
   // Update DDR level balances
   Object.keys(ddrDistribution).forEach(key => {
+    if (!this.currentBalances) {
+      this.currentBalances = {};
+    }
+    if (!this.currentBalances[key]) {
+      this.currentBalances[key] = 0;
+    }
     this.currentBalances[key] += ddrDistribution[key];
   });
   
   // Update Porparle Team balances
   Object.keys(ptDistribution).forEach(key => {
+    if (!this.currentBalances) {
+      this.currentBalances = {};
+    }
+    if (!this.currentBalances[key]) {
+      this.currentBalances[key] = 0;
+    }
     this.currentBalances[key] += ptDistribution[key];
   });
   
   // Update Top Team Performance balances
   Object.keys(ttDistribution).forEach(key => {
+    if (!this.currentBalances) {
+      this.currentBalances = {};
+    }
+    if (!this.currentBalances[key]) {
+      this.currentBalances[key] = 0;
+    }
     this.currentBalances[key] += ttDistribution[key];
   });
   
   // Update Company Operations balances
   Object.keys(coDistribution).forEach(key => {
+    if (!this.currentBalances) {
+      this.currentBalances = {};
+    }
+    if (!this.currentBalances[key]) {
+      this.currentBalances[key] = 0;
+    }
     this.currentBalances[key] += coDistribution[key];
   });
   
   // Update Public Share balances
   Object.keys(psDistribution).forEach(key => {
+    if (!this.currentBalances) {
+      this.currentBalances = {};
+    }
+    if (!this.currentBalances[key]) {
+      this.currentBalances[key] = 0;
+    }
     this.currentBalances[key] += psDistribution[key];
   });
   

@@ -197,7 +197,7 @@ io.on('connection', (socket) => {
 // Make io accessible to other modules
 app.set('io', io);
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3003;
 server.listen(PORT, () =>
   console.log(`🚀 Server started successfully on port: ${PORT}`.cyan.bold)
 );

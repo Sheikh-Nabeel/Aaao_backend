@@ -203,7 +203,9 @@ export const resetMLMData = asyncHandler(async (req, res) => {
 
 // Ride completion MLM distribution
 export const distributeRideMLM = asyncHandler(async (req, res) => {
+  console.log('Starting distributeRideMLM function');
   try {
+    console.log('Request body:', JSON.stringify(req.body));
     const { userId, driverId, rideId, totalFare, rideType } = req.body;
     
     if (!userId || !rideId || !totalFare) {
@@ -229,74 +231,163 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       });
     }
 
-    // Calculate 15% of ride fare for MLM
-    const mlmAmount = totalFare * 0.15;
+    // Calculate payment distribution
+    // 85% of ride fare goes to driver
+    // MLM gets 7.5% from user and 7.5% from driver (total 15%)
+    const driverPayment = totalFare * 0.85;
+    
+    // Calculate MLM amounts separately for user and driver
+    const userMlmAmount = totalFare * 0.075; // 7.5% from user
+    const driverMlmAmount = totalFare * 0.075; // 7.5% from driver
+    const mlmAmount = userMlmAmount + driverMlmAmount; // Total MLM amount (15%)
     
     // Calculate qualification points for TGP/PGP
-    // User and driver each get half fare as PGP/TGP
-    const driverPoints = totalFare / 2;
-    const userPoints = totalFare / 2;
-    // Upliners get half fare as TGP
-    const tgpPoints = totalFare / 2;
+    // User and driver each get 50% of ride fare as PGP
+    const pgpPoints = totalFare * 0.5;
+    // Upliners get equivalent TGP points (1 PGP = 1 TGP)
+    const tgpPoints = pgpPoints; // Same as PGP points
     
-    const mlm = await MLM.findOne();
+    let mlm = await MLM.findOne();
+    console.log('MLM found:', mlm ? 'Yes' : 'No');
+    console.log('MLM object keys:', mlm ? Object.keys(mlm) : 'No MLM');
+    console.log('MLM transactions type:', mlm ? typeof mlm.transactions : 'No MLM');
+    console.log('MLM transactions:', mlm ? mlm.transactions : 'No MLM');
+    
     if (!mlm) {
-      return res.status(404).json({
-        success: false,
-        message: "MLM system not found"
+      console.log('Creating new MLM system');
+      // Create a new MLM system if one doesn't exist
+      mlm = new MLM({
+        name: "MLM System",
+        ddr: 24,
+        crr: 13.3,
+        bbr: 6,
+        hlr: 6.7,
+        regionalAmbassador: 0.4,
+        porparleTeam: 10,
+        rop: 3,
+        companyOperations: 3,
+        technologyPool: 2.6,
+        foundationPool: 1,
+        publicShare: 15,
+        netProfit: 15,
+        totalAmount: 0,
+        transactions: [],
+        currentBalances: {}
       });
+      // Save the newly created MLM immediately to ensure it's properly initialized
+      await mlm.save();
+      
+      // Reload the MLM from database to ensure it's a proper document instance
+      mlm = await MLM.findOne();
+      if (!mlm) {
+        throw new Error('Failed to initialize MLM system properly');
+      }
     }
-
-    // Get user and driver for TGP/PGP distribution
-    const user = await User.findById(userId);
-    const driver = driverId ? await User.findById(driverId) : null;
     
+    console.log('MLM transactions:', mlm && mlm.transactions ? 'Exists' : 'Undefined');
+    console.log('About to check MLM initialization...');
+    
+    // Ensure transactions array and currentBalances object are initialized
+    if (!mlm) {
+      throw new Error('MLM object is undefined');
+    }
+    
+    console.log('MLM is defined, checking transactions...');
+    console.log('mlm object at this point:', mlm);
+        console.log('mlm.transactions at this point:', mlm.transactions);
+    console.log('About to call getUplineMembers...');
+    console.log('getUplineMembers function:', typeof getUplineMembers);
+    
+    try {
+      if (!mlm.transactions) {
+        mlm.transactions = [];
+        mlm.markModified('transactions');
+        await mlm.save();
+        // Reload the MLM from database to ensure it's properly initialized
+        mlm = await MLM.findOne();
+        if (!mlm || !mlm.transactions) {
+          throw new Error('Failed to initialize MLM transactions properly');
+        }
+      }
+      
+      if (!mlm.currentBalances) {
+        mlm.currentBalances = {};
+        mlm.markModified('currentBalances');
+        await mlm.save();
+      }
+    } catch (error) {
+      console.error('Error in MLM initialization:', error);
+      throw error;
+    }
+    
+    // Get user and driver
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
         message: "User not found"
       });
     }
-
-    // Simplified logic: Both user and driver always get PGP points when ride is completed
-    // Add PGP qualification points to user
+    
+    // Add PGP to user
     await user.addQualificationPoints({
-      points: userPoints,
+      points: pgpPoints,
       rideId,
-      type: 'pgp', // User always gets PGP for ride completion
+      type: 'pgp',
       rideType: 'personal',
       rideFare: totalFare
     });
     
-    // Update user's CRR rank after adding points
+    // Update user's CRR rank
     await user.updateCRRRank();
     
-    // Add PGP qualification points to driver if different from user
-    if (driver && userId !== driverId) {
+    let driver = null;
+    if (driverId) {
+      driver = await User.findById(driverId);
+      if (!driver) {
+        return res.status(404).json({
+          success: false,
+          message: "Driver not found"
+        });
+      }
+      
+      // Add driver payment to driver's wallet
+      await driver.addToWallet(driverPayment);
+      
+      // Add PGP to driver
       await driver.addQualificationPoints({
-        points: driverPoints,
+        points: pgpPoints,
         rideId,
-        type: 'pgp', // Driver always gets PGP for ride completion
-        rideType: 'team',
+        type: 'pgp',
+        rideType: 'personal',
         rideFare: totalFare
       });
       
-      // Update driver's CRR rank after adding points
+      // Update driver's CRR rank
       await driver.updateCRRRank();
     }
     
-    // Now distribute TGP to team members (upline sponsors) when any team member completes a ride
+    // Get upline members (team sponsors) for both user and driver
+
+    // Now distribute TGP and DDR payments to upline members
     // This is the key change: TGP distribution to team hierarchy
     const teamDistributions = [];
+    const ddrDistributions = [];
     
     // Get upline members (team sponsors) for both user and driver
+    console.log('Getting user upline members...');
     const userUpline = await getUplineMembers(userId, 4);
-    const driverUpline = driver ? await getUplineMembers(driverId, 4) : {};
+    console.log('User upline members:', userUpline);
     
-    // Distribute TGP to user's upline team (sponsors get TGP from team member's activity)
+    console.log('Getting driver upline members...');
+    const driverUpline = driver ? await getUplineMembers(driverId, 4) : {};
+    console.log('Driver upline members:', driverUpline);
+    
+    // Distribute TGP to user's upline team (sponsors get TGP from downline activity)
     for (let level = 1; level <= 4; level++) {
       const sponsor = userUpline[`level${level}`];
       if (sponsor) {
+        // Add TGP points to sponsor
         await sponsor.addQualificationPoints({
           points: tgpPoints,
           rideId,
@@ -316,6 +407,37 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           type: 'tgp',
           source: 'user_activity'
         });
+        
+        // Calculate DDR payment for this level based on MLM configuration
+        // Get the percentage for this level from MLM configuration
+        let levelPercentage = 0;
+        switch(level) {
+          case 1: levelPercentage = mlm.ddrLevel1; break;
+          case 2: levelPercentage = mlm.ddrLevel2; break;
+          case 3: levelPercentage = mlm.ddrLevel3; break;
+          case 4: levelPercentage = mlm.ddrLevel4; break;
+        }
+        
+        // Calculate the amount for this level - split between user and driver contributions
+        const userDdrAmount = (userMlmAmount * levelPercentage) / 100;
+        const driverDdrAmount = (driverMlmAmount * levelPercentage) / 100;
+        const ddrLevelAmount = userDdrAmount + driverDdrAmount;
+        
+        // Add to sponsor's wallet
+        await sponsor.addToWallet(ddrLevelAmount);
+        
+        ddrDistributions.push({
+          sponsorId: sponsor._id,
+          sponsorName: sponsor.username,
+          level,
+          amount: {
+            total: ddrLevelAmount,
+            user: userDdrAmount,
+            driver: driverDdrAmount
+          },
+          percentage: levelPercentage,
+          source: 'ride_activity'
+        });
       }
     }
     
@@ -324,6 +446,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       for (let level = 1; level <= 4; level++) {
         const sponsor = driverUpline[`level${level}`];
         if (sponsor) {
+          // Add TGP points to sponsor
           await sponsor.addQualificationPoints({
             points: tgpPoints,
             rideId,
@@ -343,44 +466,98 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             type: 'tgp',
             source: 'driver_activity'
           });
+          
+          // Calculate DDR payment for this level based on MLM configuration
+          // Get the percentage for this level from MLM configuration
+          let levelPercentage = 0;
+          switch(level) {
+            case 1: levelPercentage = mlm.ddrLevel1; break;
+            case 2: levelPercentage = mlm.ddrLevel2; break;
+            case 3: levelPercentage = mlm.ddrLevel3; break;
+            case 4: levelPercentage = mlm.ddrLevel4; break;
+          }
+          
+          // Calculate the amount for this level - split between user and driver contributions
+          const userDdrAmount = (userMlmAmount * levelPercentage) / 100;
+          const driverDdrAmount = (driverMlmAmount * levelPercentage) / 100;
+          const ddrLevelAmount = userDdrAmount + driverDdrAmount;
+          
+          // Add to sponsor's wallet
+          await sponsor.addToWallet(ddrLevelAmount);
+          
+          ddrDistributions.push({
+            sponsorId: sponsor._id,
+            sponsorName: sponsor.username,
+            level,
+            amount: {
+              total: ddrLevelAmount,
+              user: userDdrAmount,
+              driver: driverDdrAmount
+            },
+            percentage: levelPercentage,
+            source: 'ride_activity'
+          });
         }
       }
     }
 
-    // Calculate distribution based on current percentages
-    const distribution = {
-      ddr: (mlmAmount * mlm.ddr) / 100,
-      crr: (mlmAmount * mlm.crr) / 100,
-      bbr: (mlmAmount * mlm.bbr) / 100,
-      hlr: (mlmAmount * mlm.hlr) / 100,
-      regionalAmbassador: (mlmAmount * mlm.regionalAmbassador) / 100,
-      porparleTeam: (mlmAmount * mlm.porparleTeam) / 100,
-      rop: (mlmAmount * mlm.rop) / 100,
-      companyOperations: (mlmAmount * mlm.companyOperations) / 100,
-      technologyPool: (mlmAmount * mlm.technologyPool) / 100,
-      foundationPool: (mlmAmount * mlm.foundationPool) / 100,
-      publicShare: (mlmAmount * mlm.publicShare) / 100,
-      netProfit: (mlmAmount * mlm.netProfit) / 100
-    };
-
-    // Calculate DDR sub-distributions
-    const ddrSubDistribution = {
-      ddrLevel1: (distribution.ddr * mlm.ddrLevel1) / 100,
-      ddrLevel2: (distribution.ddr * mlm.ddrLevel2) / 100,
-      ddrLevel3: (distribution.ddr * mlm.ddrLevel3) / 100,
-      ddrLevel4: (distribution.ddr * mlm.ddrLevel4) / 100
-    };
-
-    // Separate qualification-based rewards that go to MLM pool
-    const qualificationRewards = {
-      crr: distribution.crr,
-      bbr: distribution.bbr,
-      hlr: distribution.hlr,
-      regionalAmbassador: distribution.regionalAmbassador
-    };
+    // Add the user's MLM amount to the MLM system
+    // Ensure MLM model is properly initialized
+    console.log('Before initialization - mlm.transactions type:', typeof mlm.transactions);
+    
+    // Create a new MLM document if it doesn't exist
+    if (!mlm) {
+      console.log('Creating new MLM document');
+      mlm = new MLM();
+      await mlm.save();
+    }
+    
+    // Ensure transactions is initialized as an array
+    if (!mlm.transactions || !Array.isArray(mlm.transactions)) {
+      console.log('Initializing empty transactions array');
+      mlm.transactions = [];
+      mlm.markModified('transactions');
+    }
+    
+    // Ensure currentBalances is initialized as an object
+    if (!mlm.currentBalances) {
+      console.log('Initializing empty currentBalances object');
+      mlm.currentBalances = {};
+      mlm.markModified('currentBalances');
+    }
+    
+    // Save the MLM document with initialized properties
+    await mlm.save();
+    
+    // Reload the MLM document to ensure it's properly initialized
+    mlm = await MLM.findOne();
+    
+    console.log('After initialization - mlm.transactions type:', typeof mlm.transactions);
+    console.log('mlm.transactions instanceof Array:', Array.isArray(mlm.transactions));
+    console.log('mlm.transactions length:', mlm.transactions ? mlm.transactions.length : 'undefined');
+    
+    // Initialize distribution variables
+    let userMlmDistribution = null;
+    let driverMlmDistribution = null;
+    
+    try {
+      // Process user MLM distribution
+      userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId, 'user_' + rideType);
+      
+      // Add the driver's MLM amount to the MLM system if driver exists
+      if (driver) {
+        driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId, 'driver_' + rideType);
+      }
+      
+      // Save the MLM model
+      await mlm.save();
+    } catch (error) {
+      console.error('Error in MLM distribution:', error);
+      throw new Error(`MLM distribution error: ${error.message}`);
+    }
 
     // Update BBR team rides for sponsors (only count team members who registered after campaign creation)
-    const activeBBRCampaign = mlm.bbrCampaigns.current;
+    const activeBBRCampaign = mlm.bbrCampaigns?.current;
     if (activeBBRCampaign && activeBBRCampaign.isActive) {
       const campaignStartDate = new Date(activeBBRCampaign.startDate);
       
@@ -497,6 +674,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       }
       
       if (!user.bbrParticipation.currentCampaign || 
+          !user.bbrParticipation.currentCampaign.campaignId ||
           user.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
         user.bbrParticipation.currentCampaign = {
           campaignId: activeBBRCampaign._id,
@@ -522,64 +700,35 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       await user.save();
     }
 
-    // Add transaction
-    mlm.transactions.push({
-      userId,
-      driverId,
-      amount: mlmAmount,
-      rideId,
-      rideType: rideType || 'personal', // Add required rideType field
-      distribution: {
-        ...distribution,
-        ...ddrSubDistribution
-      },
-      qualificationRewards,
-      qualificationPointsDistribution: {
-        userPoints,
-        driverPoints,
-        userType: userQualificationPointType,
-        driverType: driver ? 'pgp' : null,
-        isPersonalRide,
-        teamDistributions
-      },
-      timestamp: new Date(),
-      note: "CRR, BBR, HLR, Regional Ambassador are qualification-based rewards that go to MLM pool. TGP/PGP qualification points distributed based on ride type."
-    });
-
-    // Update total amount
-    mlm.totalAmount += mlmAmount;
-
-    // Update current balances
-    Object.keys(distribution).forEach(key => {
-      mlm.currentBalances[key] += distribution[key];
-    });
-    
-    Object.keys(ddrSubDistribution).forEach(key => {
-      mlm.currentBalances[key] += ddrSubDistribution[key];
-    });
-
-    await mlm.save();
-
+    // Return the complete distribution information
     res.status(200).json({
       success: true,
-      message: "MLM distribution and TGP/PGP allocation completed successfully",
+      message: 'Ride MLM distribution completed successfully',
       data: {
-        mlmAmount,
-        distribution,
-        ddrSubDistribution,
-        qualificationRewards,
-        qualificationPointsDistribution: {
-          userPoints,
-          driverPoints,
-          userType: 'pgp',
-          driverType: driver ? 'pgp' : null,
-          teamDistributions
+        rideId,
+        totalFare,
+        driverPayment,
+        mlmAmount: {
+          total: mlmAmount,
+          user: userMlmAmount,
+          driver: driverMlmAmount
         },
-        note: "CRR, BBR, HLR, Regional Ambassador require qualification and go to MLM pool. Both user and driver receive PGP points, upliners receive TGP points.",
-        totalMLMAmount: mlm.totalAmount
+        pgpPoints: {
+          user: pgpPoints,
+          driver: pgpPoints
+        },
+        tgpDistributions: teamDistributions,
+        ddrDistributions,
+        // Only include mlmDistribution if it was successfully created
+        mlmDistribution: {
+          user: userMlmDistribution || null,
+          driver: driverMlmDistribution || null
+        }
       }
     });
   } catch (error) {
+    console.error('Error in distributeRideMLM:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: error.message

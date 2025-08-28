@@ -140,6 +140,82 @@ const userSchema = new mongoose.Schema(
       ref: "User",
       default: [],
     },
+    qualificationPoints: {
+      pgp: {
+        monthly: { type: Number, default: 0 },
+        accumulated: { type: Number, default: 0 },
+        lastResetDate: { type: Date, default: Date.now }
+      },
+      tgp: {
+        monthly: { type: Number, default: 0 },
+        accumulated: { type: Number, default: 0 },
+        lastResetDate: { type: Date, default: Date.now }
+      },
+      transactions: {
+        type: [{
+          points: { type: Number, required: true },
+          rideId: { type: String, required: true },
+          type: { type: String, enum: ['pgp', 'tgp'], required: true },
+          rideType: { type: String, default: 'personal' },
+          rideFare: { type: Number, default: 0 },
+          timestamp: { type: Date, default: Date.now },
+          month: { type: Number, required: true },
+          year: { type: Number, required: true }
+        }],
+        default: []
+      }
+    },
+    crrRank: {
+      current: { type: String, enum: ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond'], default: 'Bronze' },
+      lastUpdated: { type: Date, default: Date.now },
+      history: {
+        type: [{
+          rank: { type: String, enum: ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond'], required: true },
+          achievedAt: { type: Date, default: Date.now },
+          qualificationPoints: { type: Number, required: true }
+        }],
+        default: []
+      }
+    },
+    wallet: {
+      balance: { type: Number, default: 0 },
+      lastUpdated: { type: Date, default: Date.now },
+      transactions: {
+        type: [{
+          amount: { type: Number, required: true },
+          type: { type: String, enum: ['credit', 'debit'], required: true },
+          description: { type: String, required: true },
+          timestamp: { type: Date, default: Date.now }
+        }],
+        default: []
+      }
+    },
+    bbrParticipation: {
+      currentCampaign: {
+        campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MLM' },
+        totalRides: { type: Number, default: 0 },
+        soloRides: { type: Number, default: 0 },
+        teamRides: { type: Number, default: 0 },
+        achieved: { type: Boolean, default: false },
+        joinedAt: { type: Date, default: Date.now },
+        lastRideAt: { type: Date }
+      },
+      totalWins: { type: Number, default: 0 },
+      totalRewardsEarned: { type: Number, default: 0 },
+      history: {
+        type: [{
+          campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MLM' },
+          totalRides: { type: Number },
+          soloRides: { type: Number },
+          teamRides: { type: Number },
+          achieved: { type: Boolean },
+          isWinner: { type: Boolean },
+          rewardAmount: { type: Number },
+          participatedAt: { type: Date }
+        }],
+        default: []
+      }
+    },
   },
   { timestamps: true }
 );
@@ -383,7 +459,24 @@ userSchema.methods.checkMLMQualification = function () {
 };
 
 // CRR Rank Management Methods
-userSchema.methods.updateCRRRank = function(rankThresholds) {
+userSchema.methods.updateCRRRank = async function(rankThresholds) {
+  // If rankThresholds is not provided, get them from MLM model
+  if (!rankThresholds) {
+    const MLM = mongoose.model('MLM');
+    const mlm = await MLM.findOne();
+    if (mlm && mlm.rankThresholds) {
+      rankThresholds = mlm.rankThresholds;
+    } else {
+      // Default rank thresholds if MLM is not available
+      rankThresholds = {
+        Bronze: { min: 0, max: 999 },
+        Silver: { min: 1000, max: 2499 },
+        Gold: { min: 2500, max: 4999 },
+        Platinum: { min: 5000, max: 9999 },
+        Diamond: { min: 10000, max: null }
+      };
+    }
+  }
   const stats = this.getQualificationPointsStats();
   const tgpPoints = stats.tgp.accumulated;
   const pgpPoints = stats.pgp.accumulated;
