@@ -30,21 +30,18 @@ import {
   getDDRCRRStats,
   // BBR Controller Functions
   getCurrentBBRCampaign,
-  getUserBBRProgress,
   getBBRLeaderboard,
   getPastBBRWins,
-  getBBRTips,
-  getBBRDashboard,
   createBBRCampaign,
-  updateBBRTips,
+  updateBBRCampaign,
+  deleteBBRCampaign,
   getBBRCampaignManagement,
-  endBBRCampaign,
   // HLR Controller Functions
   getUserHLRProgress,
-  getHLRQualifiedMembers,
-  processHLRReward,
-  getHLRTips,
+  getHLRLeaderboard,
   updateHLRConfig,
+  manuallyAwardHLR,
+  getHLRManagement,
   // Regional Ambassador Controller Functions
   getUserRegionalProgress,
   getRegionalLeaderboard,
@@ -159,53 +156,44 @@ router.put("/admin/crr/config",  updateCRRRankConfig);
 router.get("/admin/ddr-crr-stats",  getDDRCRRStats);
 
 // BBR (Bonus Booster Rewards) Routes
-// Get current BBR campaign details
-router.get("/bbr/current-campaign", getCurrentBBRCampaign);
+// Get current BBR campaign with user progress
+router.get("/bbr/current-campaign/:userId", getCurrentBBRCampaign);
 
-// Get user's BBR progress for current campaign
-router.get("/bbr/progress/:userId", getUserBBRProgress);
-
-// Get BBR leaderboard for current campaign
+// Get BBR leaderboard
 router.get("/bbr/leaderboard", getBBRLeaderboard);
 
 // Get user's past BBR wins history
 router.get("/bbr/past-wins/:userId", getPastBBRWins);
 
-// Get BBR tips and motivational content
-router.get("/bbr/tips", getBBRTips);
-
-// Get comprehensive BBR dashboard for user
-router.get("/bbr/dashboard/:userId", getBBRDashboard);
-
 // Admin BBR Routes
 // Create new BBR campaign (Admin only)
-router.post("/admin/bbr/campaign", adminHandler, createBBRCampaign);
+router.post("/admin/bbr/campaign",  createBBRCampaign);
 
-// Update BBR tips (Admin only)
-router.put("/admin/bbr/tips", adminHandler, updateBBRTips);
+// Update BBR campaign (Admin only)
+router.put("/admin/bbr/campaign",  updateBBRCampaign);
+
+// Delete/End BBR campaign (Admin only)
+router.delete("/admin/bbr/campaign",  deleteBBRCampaign);
 
 // Get BBR campaign management (Admin only)
-router.get("/admin/bbr/management", adminHandler, getBBRCampaignManagement);
-
-// End current BBR campaign (Admin only)
-router.post("/admin/bbr/end-campaign", adminHandler, endBBRCampaign);
+router.get("/admin/bbr/management",  getBBRCampaignManagement);
 
 // HLR (HonorPay Loyalty Rewards) Routes
 // Get user's HLR progress and qualification status
 router.get("/hlr/progress/:userId", getUserHLRProgress);
 
-// Get HLR qualified members leaderboard
-router.get("/hlr/qualified-members", getHLRQualifiedMembers);
-
-// Process HLR reward claim (retirement/death)
-router.post("/hlr/process-reward", processHLRReward);
-
-// Get HLR tips and motivational content
-router.get("/hlr/tips", getHLRTips);
+// Get HLR leaderboard
+router.get("/hlr/leaderboard", getHLRLeaderboard);
 
 // Admin HLR Routes
 // Update HLR configuration (Admin only)
-router.put("/admin/hlr/config", adminHandler, updateHLRConfig);
+router.put("/admin/hlr/config", updateHLRConfig);
+
+// Manually award HLR to user (Admin only)
+router.post("/admin/hlr/award", manuallyAwardHLR);
+
+// Get HLR management dashboard (Admin only)
+router.get("/admin/hlr/management", getHLRManagement);
 
 // Regional Ambassador Routes
 // Get user's regional ambassador progress

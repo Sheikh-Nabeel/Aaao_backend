@@ -582,106 +582,133 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     if (activeBBRCampaign && activeBBRCampaign.isActive) {
       const campaignStartDate = new Date(activeBBRCampaign.startDate);
       
-      // Update BBR participation for user's upline sponsors if user registered after campaign start
-      if (user.createdAt > campaignStartDate) {
-        for (let level = 1; level <= 4; level++) {
-          const sponsor = userUpline[`level${level}`];
-          if (sponsor) {
-            // Update sponsor's BBR participation
-            if (!sponsor.bbrParticipation) {
-              sponsor.bbrParticipation = {
-                currentCampaign: {
+      // Update BBR participation automatically for all users
+      if (activeBBRCampaign) {
+        const campaignStartDate = new Date(activeBBRCampaign.startDate);
+        
+        // Update BBR participation for user's upline sponsors (team rides)
+        if (user.createdAt > campaignStartDate) {
+          for (let level = 1; level <= 4; level++) {
+            const sponsor = userUpline[`level${level}`];
+            if (sponsor) {
+              // Initialize BBR participation if not exists
+              if (!sponsor.bbrParticipation) {
+                sponsor.bbrParticipation = {
+                  currentCampaign: {
+                    campaignId: activeBBRCampaign._id,
+                    totalRides: 0,
+                    soloRides: 0,
+                    teamRides: 0,
+                    achieved: false,
+                    joinedAt: new Date(),
+                    lastRideAt: null
+                  },
+                  totalWins: 0,
+                  totalRewardsEarned: 0,
+                  history: []
+                };
+              }
+              
+              // Check if participating in current campaign
+              if (!sponsor.bbrParticipation.currentCampaign || 
+                  !sponsor.bbrParticipation.currentCampaign.campaignId ||
+                  sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+                sponsor.bbrParticipation.currentCampaign = {
                   campaignId: activeBBRCampaign._id,
                   totalRides: 0,
+                  soloRides: 0,
+                  teamRides: 0,
                   achieved: false,
                   joinedAt: new Date(),
                   lastRideAt: null
-                },
-                totalWins: 0,
-                totalRewardsEarned: 0,
-                history: []
-              };
+                };
+              }
+              
+              // Increment team rides for sponsor
+              sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
+              sponsor.bbrParticipation.currentCampaign.totalRides = 
+                (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
+                sponsor.bbrParticipation.currentCampaign.teamRides;
+              sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
+              
+              await sponsor.save();
             }
-            
-            if (!sponsor.bbrParticipation.currentCampaign || 
-                !sponsor.bbrParticipation.currentCampaign.campaignId ||
-                sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
-              sponsor.bbrParticipation.currentCampaign = {
-                campaignId: activeBBRCampaign._id,
-                totalRides: 0,
-                achieved: false,
-                joinedAt: new Date(),
-                lastRideAt: null
-              };
-            }
-            
-            // Increment team rides for sponsor
-            if (!sponsor.bbrParticipation.currentCampaign.teamRides) {
-              sponsor.bbrParticipation.currentCampaign.teamRides = 0;
-            }
-            sponsor.bbrParticipation.currentCampaign.teamRides += 1;
-            sponsor.bbrParticipation.currentCampaign.totalRides = 
-              (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
-              sponsor.bbrParticipation.currentCampaign.teamRides;
-            sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
-            
-            await sponsor.save();
           }
         }
-      }
-      
-      // Update team rides for driver's upline sponsors if driver exists and registered after campaign start
-      if (driver && userId !== driverId && driver.createdAt > campaignStartDate) {
-        for (let level = 1; level <= 4; level++) {
-          const sponsor = driverUpline[`level${level}`];
-          if (sponsor) {
-            // Update sponsor's BBR participation
-            if (!sponsor.bbrParticipation) {
-              sponsor.bbrParticipation = {
-                currentCampaign: {
+        
+        // Update team rides for driver's upline sponsors if driver exists and registered after campaign start
+        if (driver && userId !== driverId && driver.createdAt > campaignStartDate) {
+          for (let level = 1; level <= 4; level++) {
+            const sponsor = driverUpline[`level${level}`];
+            if (sponsor) {
+              // Initialize BBR participation if not exists
+              if (!sponsor.bbrParticipation) {
+                sponsor.bbrParticipation = {
+                  currentCampaign: {
+                    campaignId: activeBBRCampaign._id,
+                    totalRides: 0,
+                    soloRides: 0,
+                    teamRides: 0,
+                    achieved: false,
+                    joinedAt: new Date(),
+                    lastRideAt: null
+                  },
+                  totalWins: 0,
+                  totalRewardsEarned: 0,
+                  history: []
+                };
+              }
+              
+              // Check if participating in current campaign
+              if (!sponsor.bbrParticipation.currentCampaign || 
+                  !sponsor.bbrParticipation.currentCampaign.campaignId ||
+                  sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+                sponsor.bbrParticipation.currentCampaign = {
                   campaignId: activeBBRCampaign._id,
                   totalRides: 0,
+                  soloRides: 0,
+                  teamRides: 0,
                   achieved: false,
                   joinedAt: new Date(),
                   lastRideAt: null
-                },
-                totalWins: 0,
-                totalRewardsEarned: 0,
-                history: []
-              };
+                };
+              }
+              
+              // Increment team rides for sponsor
+              sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
+              sponsor.bbrParticipation.currentCampaign.totalRides = 
+                (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
+                sponsor.bbrParticipation.currentCampaign.teamRides;
+              sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
+              
+              await sponsor.save();
             }
-            
-            if (!sponsor.bbrParticipation.currentCampaign || 
-                !sponsor.bbrParticipation.currentCampaign.campaignId ||
-                sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
-              sponsor.bbrParticipation.currentCampaign = {
-                campaignId: activeBBRCampaign._id,
-                totalRides: 0,
-                achieved: false,
-                joinedAt: new Date(),
-                lastRideAt: null
-              };
-            }
-            
-            // Increment team rides for sponsor
-            if (!sponsor.bbrParticipation.currentCampaign.teamRides) {
-              sponsor.bbrParticipation.currentCampaign.teamRides = 0;
-            }
-            sponsor.bbrParticipation.currentCampaign.teamRides += 1;
-            sponsor.bbrParticipation.currentCampaign.totalRides = 
-              (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
-              sponsor.bbrParticipation.currentCampaign.teamRides;
-            sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
-            
-            await sponsor.save();
           }
         }
-      }
-      
-      // Update user's own BBR participation for solo rides
-      if (!user.bbrParticipation) {
-        user.bbrParticipation = {
-          currentCampaign: {
+        
+        // Update user's own BBR participation for solo rides
+        if (!user.bbrParticipation) {
+          user.bbrParticipation = {
+            currentCampaign: {
+              campaignId: activeBBRCampaign._id,
+              totalRides: 0,
+              soloRides: 0,
+              teamRides: 0,
+              achieved: false,
+              joinedAt: new Date(),
+              lastRideAt: null
+            },
+            totalWins: 0,
+            totalRewardsEarned: 0,
+            history: []
+          };
+        }
+        
+        // Check if participating in current campaign
+        if (!user.bbrParticipation.currentCampaign || 
+            !user.bbrParticipation.currentCampaign.campaignId ||
+            user.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+          user.bbrParticipation.currentCampaign = {
             campaignId: activeBBRCampaign._id,
             totalRides: 0,
             soloRides: 0,
@@ -689,36 +716,16 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             achieved: false,
             joinedAt: new Date(),
             lastRideAt: null
-          },
-          totalWins: 0,
-          totalRewardsEarned: 0,
-          history: []
-        };
+          };
+        }
+        
+        // Increment solo rides for user
+        user.bbrParticipation.currentCampaign.soloRides = (user.bbrParticipation.currentCampaign.soloRides || 0) + 1;
+        user.bbrParticipation.currentCampaign.totalRides = 
+          user.bbrParticipation.currentCampaign.soloRides + 
+          (user.bbrParticipation.currentCampaign.teamRides || 0);
+        user.bbrParticipation.currentCampaign.lastRideAt = new Date();
       }
-      
-      if (!user.bbrParticipation.currentCampaign || 
-          !user.bbrParticipation.currentCampaign.campaignId ||
-          user.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
-        user.bbrParticipation.currentCampaign = {
-          campaignId: activeBBRCampaign._id,
-          totalRides: 0,
-          soloRides: 0,
-          teamRides: 0,
-          achieved: false,
-          joinedAt: new Date(),
-          lastRideAt: null
-        };
-      }
-      
-      // Increment solo rides for user
-      if (!user.bbrParticipation.currentCampaign.soloRides) {
-        user.bbrParticipation.currentCampaign.soloRides = 0;
-      }
-      user.bbrParticipation.currentCampaign.soloRides += 1;
-      user.bbrParticipation.currentCampaign.totalRides = 
-        user.bbrParticipation.currentCampaign.soloRides + 
-        (user.bbrParticipation.currentCampaign.teamRides || 0);
-      user.bbrParticipation.currentCampaign.lastRideAt = new Date();
       
       await user.save();
     }
@@ -3038,53 +3045,8 @@ export const getMLMEarningsStats = asyncHandler(async (req, res) => {
 
 // ==================== BBR (Bonus Booster Rewards) Controllers ====================
 
-// Get current BBR campaign
+// Get current BBR campaign for user
 export const getCurrentBBRCampaign = asyncHandler(async (req, res) => {
-  try {
-    const mlm = await MLM.findOne();
-    if (!mlm) {
-      return res.status(404).json({
-        success: false,
-        message: "MLM system not found"
-      });
-    }
-
-    const currentCampaign = mlm.bbrCampaigns.current;
-    if (!currentCampaign || !currentCampaign.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: "No active BBR campaign found"
-      });
-    }
-
-    // Calculate time left
-    const now = new Date();
-    const timeLeft = currentCampaign.endDate - now;
-    const daysLeft = Math.max(0, Math.ceil(timeLeft / (1000 * 60 * 60 * 24)));
-    const hoursLeft = Math.max(0, Math.ceil((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
-
-    res.status(200).json({
-      success: true,
-      data: {
-        ...currentCampaign.toObject(),
-        timeLeft: {
-          days: daysLeft,
-          hours: hoursLeft
-        }
-      }
-    });
-  } catch (error) {
-    console.error("Error getting current BBR campaign:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error getting current BBR campaign",
-      error: error.message
-    });
-  }
-});
-
-// Get user's BBR progress
-export const getUserBBRProgress = asyncHandler(async (req, res) => {
   try {
     const { userId } = req.params;
     
@@ -3097,78 +3059,82 @@ export const getUserBBRProgress = asyncHandler(async (req, res) => {
     }
 
     const mlm = await MLM.findOne();
-    if (!mlm || !mlm.bbrCampaigns.current || !mlm.bbrCampaigns.current.isActive) {
+    if (!mlm) {
       return res.status(404).json({
         success: false,
-        message: "No active BBR campaign found"
+        message: "MLM system not found"
       });
     }
 
     const currentCampaign = mlm.bbrCampaigns.current;
-    const userParticipation = user.bbrParticipation?.currentCampaign;
-    
-    if (!userParticipation || userParticipation.campaignId?.toString() !== currentCampaign._id.toString()) {
+    if (!currentCampaign || !currentCampaign.isActive) {
       return res.status(200).json({
         success: true,
         data: {
-          campaign: currentCampaign,
-          progress: {
-            totalRides: 0,
-            soloRides: 0,
-            teamRides: 0,
-            progressPercentage: 0,
-            ridesNeeded: currentCampaign.requirement,
-            dailyTarget: currentCampaign.requirement
-          },
-          timeLeft: {
-            days: Math.max(0, Math.ceil((currentCampaign.endDate - new Date()) / (1000 * 60 * 60 * 24))),
-            hours: Math.max(0, Math.ceil(((currentCampaign.endDate - new Date()) % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)))
-          },
-          isQualified: false
+          currentCampaign: null,
+          progress: null,
+          message: "No active BBR campaign"
         }
       });
     }
-    
-    // Calculate progress using soloRides and teamRides
-    const soloRides = userParticipation.soloRides || 0;
-    const teamRides = userParticipation.teamRides || 0;
-    const totalRides = soloRides + teamRides;
-    const progressPercentage = Math.min((totalRides / currentCampaign.requirement) * 100, 100);
-    
+
+    // Get user's progress automatically
+    const userParticipation = user.bbrParticipation?.currentCampaign;
+    let progress = {
+      totalRides: 0,
+      soloRides: 0,
+      teamRides: 0,
+      progressPercentage: 0,
+      ridesNeeded: currentCampaign.requirement,
+      isQualified: false
+    };
+
+    if (userParticipation && userParticipation.campaignId?.toString() === currentCampaign._id.toString()) {
+      const soloRides = userParticipation.soloRides || 0;
+      const teamRides = userParticipation.teamRides || 0;
+      const totalRides = soloRides + teamRides;
+      const progressPercentage = Math.min((totalRides / currentCampaign.requirement) * 100, 100);
+      
+      progress = {
+        totalRides,
+        soloRides,
+        teamRides,
+        progressPercentage,
+        ridesNeeded: Math.max(0, currentCampaign.requirement - totalRides),
+        isQualified: totalRides >= currentCampaign.requirement
+      };
+    }
+
     // Calculate time left
     const now = new Date();
     const timeLeft = currentCampaign.endDate - now;
     const daysLeft = Math.max(0, Math.ceil(timeLeft / (1000 * 60 * 60 * 24)));
     const hoursLeft = Math.max(0, Math.ceil((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
-    
-    // Calculate daily target
-    const ridesNeeded = Math.max(0, currentCampaign.requirement - totalRides);
-    const dailyTarget = daysLeft > 0 ? Math.ceil(ridesNeeded / daysLeft) : ridesNeeded;
 
     res.status(200).json({
       success: true,
       data: {
-        campaign: currentCampaign,
-        progress: {
-          totalRides,
-          soloRides,
-          teamRides,
-          progressPercentage,
-          ridesNeeded,
-          dailyTarget
+        currentCampaign: {
+          name: currentCampaign.name,
+          requirement: currentCampaign.requirement,
+          duration: currentCampaign.duration,
+          type: currentCampaign.type,
+          newbieRidesOnly: currentCampaign.newbieRidesOnly,
+          reward: currentCampaign.reward,
+          period: `${new Date(currentCampaign.startDate).toLocaleDateString()} – ${new Date(currentCampaign.endDate).toLocaleDateString()}`,
+          timeLeft: {
+            days: daysLeft,
+            hours: hoursLeft
+          }
         },
-        timeLeft: {
-          days: daysLeft,
-          hours: hoursLeft
-        },
-        isQualified: totalRides >= currentCampaign.requirement
+        progress
       }
     });
   } catch (error) {
-    console.error("Error getting user BBR progress:", error);
+    console.error("Error getting current BBR campaign:", error);
     res.status(500).json({
       success: false,
-      message: "Error getting user BBR progress",
+      message: "Error getting current BBR campaign",
       error: error.message
     });
   }
@@ -3179,7 +3145,7 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
   try {
     const { userId } = req.query;
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
     const mlm = await MLM.findOne();
@@ -3192,7 +3158,7 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
 
     const currentCampaign = mlm.bbrCampaigns.current;
     
-    // Get leaderboard data
+    // Get leaderboard data with better indexing
     const leaderboard = await User.aggregate([
       {
         $match: {
@@ -3241,13 +3207,13 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
         },
         {
           $addFields: {
-          totalRides: {
-            $add: [
-              { $ifNull: ["$bbrParticipation.currentCampaign.soloRides", 0] },
-              { $ifNull: ["$bbrParticipation.currentCampaign.teamRides", 0] }
-            ]
+            totalRides: {
+              $add: [
+                { $ifNull: ["$bbrParticipation.currentCampaign.soloRides", 0] },
+                { $ifNull: ["$bbrParticipation.currentCampaign.teamRides", 0] }
+              ]
+            }
           }
-        }
         },
         {
           $sort: { totalRides: -1 }
@@ -3285,9 +3251,24 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        leaderboard,
-        userPosition,
-        campaign: currentCampaign,
+        leaderboard: leaderboard.map((user, index) => ({
+          rank: skip + index + 1,
+          name: `${user.firstName} ${user.lastName}`,
+          rides: user.totalRides,
+          status: user.isQualified ? 'Achieved' : 'Locked',
+          reward: currentCampaign.reward.amount
+        })),
+        userPosition: userPosition ? {
+          rank: userPosition.position,
+          rides: userPosition.totalRides,
+          status: userPosition.totalRides >= currentCampaign.requirement ? 'Achieved' : 'Locked',
+          reward: currentCampaign.reward.amount
+        } : null,
+        campaign: {
+          name: currentCampaign.name,
+          requirement: currentCampaign.requirement,
+          reward: currentCampaign.reward.amount
+        },
         pagination: {
           page,
           limit,
@@ -3330,7 +3311,12 @@ export const getPastBBRWins = asyncHandler(async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        pastWins,
+        pastWins: pastWins.map(win => ({
+          name: win.campaignName || 'BBR Campaign',
+          status: 'Achieved',
+          reward: win.rewardAmount,
+          date: win.completedAt || win.participatedAt
+        })),
         pagination: {
           page,
           limit,
@@ -3344,31 +3330,6 @@ export const getPastBBRWins = asyncHandler(async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error getting past BBR wins",
-      error: error.message
-    });
-  }
-});
-
-// Get BBR tips
-export const getBBRTips = asyncHandler(async (req, res) => {
-  try {
-    const mlm = await MLM.findOne();
-    if (!mlm) {
-      return res.status(404).json({
-        success: false,
-        message: "MLM system not found"
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: mlm.bbrTips || []
-    });
-  } catch (error) {
-    console.error("Error getting BBR tips:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error getting BBR tips",
       error: error.message
     });
   }
@@ -3444,18 +3405,11 @@ export const createBBRCampaign = asyncHandler(async (req, res) => {
   }
 });
 
-// Admin: Update BBR tips
-export const updateBBRTips = asyncHandler(async (req, res) => {
+// Admin: Update BBR campaign
+export const updateBBRCampaign = asyncHandler(async (req, res) => {
   try {
-    const { tips } = req.body;
+    const { name, requirement, duration, reward, type, newbieRidesOnly, description } = req.body;
     
-    if (!Array.isArray(tips)) {
-      return res.status(400).json({
-        success: false,
-        message: "Tips must be an array"
-      });
-    }
-
     const mlm = await MLM.findOne();
     if (!mlm) {
       return res.status(404).json({
@@ -3464,19 +3418,114 @@ export const updateBBRTips = asyncHandler(async (req, res) => {
       });
     }
 
-    mlm.bbrTips = tips;
+    if (!mlm.bbrCampaigns.current || !mlm.bbrCampaigns.current.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "No active BBR campaign to update"
+      });
+    }
+
+    const currentCampaign = mlm.bbrCampaigns.current;
+    
+    // Update fields if provided
+    if (name) currentCampaign.name = name;
+    if (requirement) currentCampaign.requirement = requirement;
+    if (duration) {
+      currentCampaign.duration = duration;
+      currentCampaign.endDate = new Date(currentCampaign.startDate.getTime() + (duration * 24 * 60 * 60 * 1000));
+    }
+    if (reward) currentCampaign.reward.amount = reward;
+    if (type) currentCampaign.type = type;
+    if (newbieRidesOnly !== undefined) currentCampaign.newbieRidesOnly = newbieRidesOnly;
+    if (description) currentCampaign.description = description;
+
     await mlm.save();
 
     res.status(200).json({
       success: true,
-      message: "BBR tips updated successfully",
-      data: tips
+      message: "BBR campaign updated successfully",
+      data: currentCampaign
     });
   } catch (error) {
-    console.error("Error updating BBR tips:", error);
+    console.error("Error updating BBR campaign:", error);
     res.status(500).json({
       success: false,
-      message: "Error updating BBR tips",
+      message: "Error updating BBR campaign",
+      error: error.message
+    });
+  }
+});
+
+// Admin: Delete/End BBR campaign
+export const deleteBBRCampaign = asyncHandler(async (req, res) => {
+  try {
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    if (!mlm.bbrCampaigns.current || !mlm.bbrCampaigns.current.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "No active BBR campaign to delete"
+      });
+    }
+
+    const currentCampaign = mlm.bbrCampaigns.current;
+    currentCampaign.isActive = false;
+    currentCampaign.endDate = new Date();
+
+    // Find all qualified users and add them as winners
+    const qualifiedUsers = await User.find({
+      "bbrParticipation.currentCampaign.campaignId": currentCampaign._id,
+      $expr: {
+        $gte: [
+          { $add: [
+            { $ifNull: ["$bbrParticipation.currentCampaign.soloRides", 0] },
+            { $ifNull: ["$bbrParticipation.currentCampaign.teamRides", 0] }
+          ]},
+          currentCampaign.requirement
+        ]
+      }
+    });
+
+    // Add winners to campaign
+    currentCampaign.winners = qualifiedUsers.map(user => ({
+      userId: user._id,
+      soloRides: user.bbrParticipation.currentCampaign.soloRides || 0,
+      teamRides: user.bbrParticipation.currentCampaign.teamRides || 0,
+      totalRides: (user.bbrParticipation.currentCampaign.soloRides || 0) + (user.bbrParticipation.currentCampaign.teamRides || 0),
+      rewardAmount: currentCampaign.reward.amount,
+      achievedAt: new Date()
+    }));
+
+    currentCampaign.totalParticipants = qualifiedUsers.length;
+    currentCampaign.totalWinners = qualifiedUsers.length;
+    currentCampaign.totalRewardDistributed = qualifiedUsers.length * currentCampaign.reward.amount;
+
+    // Move to past campaigns
+    mlm.bbrCampaigns.past.push(currentCampaign);
+    mlm.bbrCampaigns.current = null;
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: "BBR campaign deleted successfully",
+      data: {
+        campaign: currentCampaign,
+        winners: qualifiedUsers.length,
+        totalRewardDistributed: currentCampaign.totalRewardDistributed
+      }
+    });
+  } catch (error) {
+    console.error("Error deleting BBR campaign:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting BBR campaign",
       error: error.message
     });
   }
@@ -3542,81 +3591,6 @@ export const getBBRCampaignManagement = asyncHandler(async (req, res) => {
   }
 });
 
-// Admin: End current BBR campaign
-export const endBBRCampaign = asyncHandler(async (req, res) => {
-  try {
-    const mlm = await MLM.findOne();
-    if (!mlm) {
-      return res.status(404).json({
-        success: false,
-        message: "MLM system not found"
-      });
-    }
-
-    if (!mlm.bbrCampaigns.current || !mlm.bbrCampaigns.current.isActive) {
-      return res.status(400).json({
-        success: false,
-        message: "No active BBR campaign to end"
-      });
-    }
-
-    const currentCampaign = mlm.bbrCampaigns.current;
-    currentCampaign.isActive = false;
-    currentCampaign.endDate = new Date();
-
-    // Find all qualified users and add them as winners
-    const qualifiedUsers = await User.find({
-      "bbrParticipation.currentCampaign.campaignId": currentCampaign._id,
-      $expr: {
-        $gte: [
-          { $add: [
-            { $ifNull: ["$bbrParticipation.currentCampaign.soloRides", 0] },
-            { $ifNull: ["$bbrParticipation.currentCampaign.teamRides", 0] }
-          ]},
-          currentCampaign.requirement
-        ]
-      }
-    });
-
-    // Add winners to campaign
-    currentCampaign.winners = qualifiedUsers.map(user => ({
-      userId: user._id,
-      soloRides: user.bbrParticipation.currentCampaign.soloRides || 0,
-      teamRides: user.bbrParticipation.currentCampaign.teamRides || 0,
-      totalRides: (user.bbrParticipation.currentCampaign.soloRides || 0) + (user.bbrParticipation.currentCampaign.teamRides || 0),
-      rewardAmount: currentCampaign.reward.amount,
-      achievedAt: new Date()
-    }));
-
-    currentCampaign.totalParticipants = qualifiedUsers.length;
-    currentCampaign.totalWinners = qualifiedUsers.length;
-    currentCampaign.totalRewardDistributed = qualifiedUsers.length * currentCampaign.reward.amount;
-
-    // Move to past campaigns
-    mlm.bbrCampaigns.past.push(currentCampaign);
-    mlm.bbrCampaigns.current = null;
-
-    await mlm.save();
-
-    res.status(200).json({
-      success: true,
-      message: "BBR campaign ended successfully",
-      data: {
-        campaign: currentCampaign,
-        winners: qualifiedUsers.length,
-        totalRewardDistributed: currentCampaign.totalRewardDistributed
-      }
-    });
-  } catch (error) {
-    console.error("Error ending BBR campaign:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error ending BBR campaign",
-      error: error.message
-    });
-  }
-});
-
 // ==================== HLR (HonorPay Loyalty Rewards) Controllers ====================
 
 // Get user's HLR progress
@@ -3643,28 +3617,31 @@ export const getUserHLRProgress = asyncHandler(async (req, res) => {
     const hlrConfig = mlm.hlrConfig;
     const userQualification = user.hlrQualification;
     
+    // Get user's accumulated PGP and TGP
+    const currentPGP = user.qualificationPoints?.pgp?.accumulated || 0;
+    const currentTGP = user.qualificationPoints?.tgp?.accumulated || 0;
+    
     // Calculate progress percentages
-    const currentPGP = userQualification.progress?.pgpPoints || 0;
-    const currentTGP = userQualification.progress?.tgpPoints || 0;
-    const pgpProgress = Math.min((currentPGP / hlrConfig.requiredPGP) * 100, 100);
-    const tgpProgress = Math.min((currentTGP / hlrConfig.requiredTGP) * 100, 100);
+    const pgpProgress = Math.min((currentPGP / hlrConfig.requirements.pgp) * 100, 100);
+    const tgpProgress = Math.min((currentTGP / hlrConfig.requirements.tgp) * 100, 100);
     const overallProgress = Math.min(((pgpProgress + tgpProgress) / 2), 100);
     
     // Check if user is qualified
-    const isQualified = currentPGP >= hlrConfig.requiredPGP && 
-                       currentTGP >= hlrConfig.requiredTGP;
+    const isQualified = currentPGP >= hlrConfig.requirements.pgp && 
+                       currentTGP >= hlrConfig.requirements.tgp;
     
     // Calculate age and retirement eligibility
     const currentAge = user.dateOfBirth ? 
       Math.floor((new Date() - new Date(user.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 0;
     const isRetirementEligible = currentAge >= hlrConfig.retirementAge;
+    const isRewardClaimed = userQualification?.rewardClaimed || false;
 
     res.status(200).json({
       success: true,
       data: {
         requirements: {
-          requiredPGP: hlrConfig.requiredPGP,
-          requiredTGP: hlrConfig.requiredTGP,
+          requiredPGP: hlrConfig.requirements.pgp,
+          requiredTGP: hlrConfig.requirements.tgp,
           retirementAge: hlrConfig.retirementAge,
           rewardAmount: hlrConfig.rewardAmount
         },
@@ -3673,15 +3650,22 @@ export const getUserHLRProgress = asyncHandler(async (req, res) => {
           currentTGP,
           pgpProgress,
           tgpProgress,
-          overallProgress
+          overallProgress,
+          pgpNeeded: Math.max(0, hlrConfig.requirements.pgp - currentPGP),
+          tgpNeeded: Math.max(0, hlrConfig.requirements.tgp - currentTGP)
         },
-        eligibility: {
+        qualification: {
           isQualified,
           isRetirementEligible,
-          currentAge,
-          canClaimReward: isQualified && isRetirementEligible
+          isRewardClaimed,
+          canClaim: isQualified && (isRetirementEligible || userQualification?.claimReason === 'deceased'),
+          currentAge
         },
-        qualification: userQualification
+        reward: {
+          amount: hlrConfig.rewardAmount,
+          claimedAt: userQualification?.claimedAt,
+          claimReason: userQualification?.claimReason
+        }
       }
     });
   } catch (error) {
@@ -3694,12 +3678,11 @@ export const getUserHLRProgress = asyncHandler(async (req, res) => {
   }
 });
 
-// Get HLR qualified members leaderboard
-export const getHLRQualifiedMembers = asyncHandler(async (req, res) => {
+// Get HLR leaderboard
+export const getHLRLeaderboard = asyncHandler(async (req, res) => {
   try {
-    const { country } = req.query;
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
     const mlm = await MLM.findOne();
@@ -3712,36 +3695,52 @@ export const getHLRQualifiedMembers = asyncHandler(async (req, res) => {
 
     const hlrConfig = mlm.hlrConfig;
     
-    // Build match criteria
-    const matchCriteria = {
-      "hlrQualification.isQualified": true,
-      $expr: {
-        $and: [
-          { $gte: ["$hlrQualification.progress.pgpPoints", hlrConfig.requiredPGP] },
-          { $gte: ["$hlrQualification.progress.tgpPoints", hlrConfig.requiredTGP] }
-        ]
-      }
-    };
-
-    // Add country filter if specified
-    if (country) {
-      matchCriteria.country = country;
-    }
-    
-    // Get qualified members
-    const qualifiedMembers = await User.aggregate([
-      {
-        $match: matchCriteria
-      },
+    // Get ALL users with PGP/TGP (participating in HLR system)
+    const allUsers = await User.aggregate([
       {
         $addFields: {
-          totalPoints: {
-            $add: ["$hlrQualification.progress.pgpPoints", "$hlrQualification.progress.tgpPoints"]
+          currentPGP: { $ifNull: ["$qualificationPoints.pgp.accumulated", 0] },
+          currentTGP: { $ifNull: ["$qualificationPoints.tgp.accumulated", 0] },
+          totalPoints: { 
+            $add: [
+              { $ifNull: ["$qualificationPoints.pgp.accumulated", 0] },
+              { $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }
+            ]
+          },
+          isQualified: {
+            $and: [
+              { $gte: [{ $ifNull: ["$qualificationPoints.pgp.accumulated", 0] }, hlrConfig.requirements.pgp] },
+              { $gte: [{ $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }, hlrConfig.requirements.tgp] }
+            ]
+          },
+          pgpProgress: {
+            $min: [
+              100,
+              { $multiply: [{ $divide: [{ $ifNull: ["$qualificationPoints.pgp.accumulated", 0] }, hlrConfig.requirements.pgp] }, 100] }
+            ]
+          },
+          tgpProgress: {
+            $min: [
+              100,
+              { $multiply: [{ $divide: [{ $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }, hlrConfig.requirements.tgp] }, 100] }
+            ]
           }
         }
       },
       {
-        $sort: { totalPoints: -1, "hlrQualification.qualifiedAt": 1 }
+        $match: {
+          $or: [
+            { currentPGP: { $gt: 0 } },
+            { currentTGP: { $gt: 0 } }
+          ]
+        }
+      },
+      {
+        $sort: { 
+          totalPoints: -1,
+          currentPGP: -1,
+          currentTGP: -1
+        }
       },
       {
         $skip: skip
@@ -3754,57 +3753,189 @@ export const getHLRQualifiedMembers = asyncHandler(async (req, res) => {
           username: 1,
           firstName: 1,
           lastName: 1,
-          country: 1,
           profilePicture: 1,
-          "hlrQualification.progress.pgpPoints": 1,
-          "hlrQualification.progress.tgpPoints": 1,
-          "hlrQualification.qualifiedAt": 1,
-          "hlrQualification.rewardClaimed": 1,
-          totalPoints: 1
+          country: 1,
+          dateOfBirth: 1,
+          currentPGP: 1,
+          currentTGP: 1,
+          totalPoints: 1,
+          isQualified: 1,
+          pgpProgress: 1,
+          tgpProgress: 1,
+          qualifiedAt: "$hlrQualification.qualifiedAt",
+          rewardClaimed: "$hlrQualification.rewardClaimed",
+          claimedAt: "$hlrQualification.claimedAt",
+          claimReason: "$hlrQualification.claimReason"
         }
       }
     ]);
 
-    // Get total count of qualified members
-    const totalQualified = await User.countDocuments(matchCriteria);
+    // Get total count of participating users
+    const totalParticipating = await User.countDocuments({
+      $or: [
+        { "qualificationPoints.pgp.accumulated": { $gt: 0 } },
+        { "qualificationPoints.tgp.accumulated": { $gt: 0 } }
+      ]
+    });
+
+    // Get count of qualified users
+    const totalQualified = await User.countDocuments({
+      $expr: {
+        $and: [
+          { $gte: [{ $ifNull: ["$qualificationPoints.pgp.accumulated", 0] }, hlrConfig.requirements.pgp] },
+          { $gte: [{ $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }, hlrConfig.requirements.tgp] }
+        ]
+      }
+    });
 
     res.status(200).json({
       success: true,
       data: {
-        qualifiedMembers,
-        totalQualified,
+        leaderboard: allUsers.map((member, index) => {
+          const currentAge = member.dateOfBirth ? 
+            Math.floor((new Date() - new Date(member.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 0;
+          
+          let status = 'Participating';
+          if (member.isQualified) {
+            if (member.rewardClaimed) {
+              status = 'Reward Claimed';
+            } else if (currentAge >= hlrConfig.retirementAge) {
+              status = 'Eligible for Reward';
+            } else {
+              status = 'Qualified (Waiting for Age)';
+            }
+          } else {
+            status = 'In Progress';
+          }
+
+          return {
+            rank: skip + index + 1,
+            name: `${member.firstName} ${member.lastName}`,
+            country: member.country || 'Unknown',
+            flag: getCountryFlag(member.country),
+            age: currentAge,
+            pgp: member.currentPGP,
+            tgp: member.currentTGP,
+            totalPoints: member.totalPoints,
+            pgpProgress: Math.round(member.pgpProgress),
+            tgpProgress: Math.round(member.tgpProgress),
+            overallProgress: Math.round((member.pgpProgress + member.tgpProgress) / 2),
+            isQualified: member.isQualified,
+            status: status,
+            qualifiedAt: member.qualifiedAt,
+            rewardClaimed: member.rewardClaimed,
+            claimedAt: member.claimedAt,
+            claimReason: member.claimReason
+          };
+        }),
+        statistics: {
+          totalParticipating,
+          totalQualified,
+          qualificationRate: totalParticipating > 0 ? ((totalQualified / totalParticipating) * 100).toFixed(1) : 0
+        },
         requirements: {
-          requiredPGP: hlrConfig.requiredPGP,
-          requiredTGP: hlrConfig.requiredTGP,
+          requiredPGP: hlrConfig.requirements.pgp,
+          requiredTGP: hlrConfig.requirements.tgp,
+          retirementAge: hlrConfig.retirementAge,
           rewardAmount: hlrConfig.rewardAmount
         },
         pagination: {
           page,
           limit,
-          total: totalQualified,
-          hasMore: qualifiedMembers.length === limit
+          total: totalParticipating,
+          hasMore: allUsers.length === limit
         }
       }
     });
   } catch (error) {
-    console.error("Error getting HLR qualified members:", error);
+    console.error("Error getting HLR leaderboard:", error);
     res.status(500).json({
       success: false,
-      message: "Error getting HLR qualified members",
+      message: "Error getting HLR leaderboard",
       error: error.message
     });
   }
 });
 
-// Process HLR reward (for retirement or death)
-export const processHLRReward = asyncHandler(async (req, res) => {
+// Helper function to get country flag emoji
+function getCountryFlag(country) {
+  const flagMap = {
+    'UAE': '🇦🇪',
+    'Pakistan': '🇵🇰',
+    'Saudi Arabia': '🇸🇦',
+    'India': '🇮🇳',
+    'UK': '🇬🇧',
+    'USA': '🇺🇸',
+    'Canada': '🇨🇦',
+    'Australia': '🇦🇺',
+    'Germany': '🇩🇪',
+    'France': '🇫🇷',
+    'Italy': '🇮🇹',
+    'Spain': '🇪🇸',
+    'Netherlands': '🇳🇱',
+    'Belgium': '🇧🇪',
+    'Switzerland': '🇨🇭',
+    'Austria': '🇦🇹',
+    'Sweden': '🇸🇪',
+    'Norway': '🇳🇴',
+    'Denmark': '🇩🇰',
+    'Finland': '🇫🇮'
+  };
+  return flagMap[country] || '🌍';
+}
+
+// Admin: Update HLR configuration
+export const updateHLRConfig = asyncHandler(async (req, res) => {
   try {
-    const { userId, reason } = req.body; // reason: 'retirement' or 'death'
+    const { requiredPGP, requiredTGP, retirementAge, rewardAmount } = req.body;
     
-    if (!userId || !reason || !['retirement', 'death'].includes(reason)) {
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Update HLR configuration
+    if (requiredPGP !== undefined) mlm.hlrConfig.requirements.pgp = requiredPGP;
+    if (requiredTGP !== undefined) mlm.hlrConfig.requirements.tgp = requiredTGP;
+    if (retirementAge !== undefined) mlm.hlrConfig.retirementAge = retirementAge;
+    if (rewardAmount !== undefined) mlm.hlrConfig.rewardAmount = rewardAmount;
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: "HLR configuration updated successfully",
+      data: mlm.hlrConfig
+    });
+  } catch (error) {
+    console.error("Error updating HLR configuration:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating HLR configuration",
+      error: error.message
+    });
+  }
+});
+
+// Admin: Manually award HLR to user
+export const manuallyAwardHLR = asyncHandler(async (req, res) => {
+  try {
+    const { userId, claimReason, notes } = req.body;
+    
+    if (!userId || !claimReason) {
       return res.status(400).json({
         success: false,
-        message: "Invalid userId or reason. Reason must be 'retirement' or 'death'"
+        message: "Missing required fields: userId, claimReason"
+      });
+    }
+
+    if (!['retirement', 'deceased'].includes(claimReason)) {
+      return res.status(400).json({
+        success: false,
+        message: "claimReason must be 'retirement' or 'deceased'"
       });
     }
 
@@ -3824,55 +3955,73 @@ export const processHLRReward = asyncHandler(async (req, res) => {
       });
     }
 
-    const hlrConfig = mlm.hlrConfig;
-    const userQualification = user.hlrQualification;
+    // Check if user is already qualified
+    const currentPGP = user.qualificationPoints?.pgp?.accumulated || 0;
+    const currentTGP = user.qualificationPoints?.tgp?.accumulated || 0;
     
-    // Check if user is qualified
-    const currentPGP = userQualification.progress?.pgpPoints || 0;
-    const currentTGP = userQualification.progress?.tgpPoints || 0;
-    const isQualified = currentPGP >= hlrConfig.requiredPGP && 
-                       currentTGP >= hlrConfig.requiredTGP;
-    
+    const isQualified = currentPGP >= mlm.hlrConfig.requirements.pgp && 
+                       currentTGP >= mlm.hlrConfig.requirements.tgp;
+
     if (!isQualified) {
       return res.status(400).json({
         success: false,
-        message: "User does not meet HLR qualification requirements"
+        message: "User does not meet HLR qualification requirements",
+        data: {
+          currentPGP,
+          currentTGP,
+          requiredPGP: mlm.hlrConfig.requirements.pgp,
+          requiredTGP: mlm.hlrConfig.requirements.tgp
+        }
       });
     }
 
     // Check if reward already claimed
-    if (userQualification.rewardClaimed) {
+    if (user.hlrQualification?.rewardClaimed) {
       return res.status(400).json({
         success: false,
-        message: "HLR reward has already been claimed"
+        message: "HLR reward already claimed by this user"
       });
     }
 
-    // For retirement, check age
-    if (reason === 'retirement') {
-      const currentAge = user.dateOfBirth ? 
-        Math.floor((new Date() - new Date(user.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 0;
-      
-      if (currentAge < hlrConfig.retirementAge) {
-        return res.status(400).json({
-          success: false,
-          message: `User must be at least ${hlrConfig.retirementAge} years old for retirement reward`
-        });
-      }
+    // Award HLR to user
+    if (!user.hlrQualification) {
+      user.hlrQualification = {
+        isQualified: false,
+        qualifiedAt: null,
+        rewardClaimed: false,
+        claimedAt: null,
+        claimReason: null,
+        notes: []
+      };
     }
 
-    // Process the reward
+    user.hlrQualification.isQualified = true;
+    user.hlrQualification.qualifiedAt = new Date();
     user.hlrQualification.rewardClaimed = true;
-    user.hlrQualification.rewardClaimedAt = new Date();
-    user.hlrQualification.rewardReason = reason;
-    user.hlrQualification.rewardAmount = hlrConfig.rewardAmount;
+    user.hlrQualification.claimedAt = new Date();
+    user.hlrQualification.claimReason = claimReason;
     
-    // Add to user's wallet
-    user.wallet.balance += hlrConfig.rewardAmount;
+    if (notes) {
+      user.hlrQualification.notes.push({
+        note: notes,
+        addedAt: new Date(),
+        addedBy: 'admin'
+      });
+    }
+
+    // Add reward to user's wallet
+    if (!user.wallet) {
+      user.wallet = {
+        balance: 0,
+        transactions: []
+      };
+    }
+
+    user.wallet.balance += mlm.hlrConfig.rewardAmount;
     user.wallet.transactions.push({
+      amount: mlm.hlrConfig.rewardAmount,
       type: 'credit',
-      amount: hlrConfig.rewardAmount,
-      description: `HLR reward for ${reason}`,
+      description: `HLR Reward - ${claimReason}`,
       timestamp: new Date()
     });
 
@@ -3880,25 +4029,38 @@ export const processHLRReward = asyncHandler(async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "HLR reward processed successfully",
+      message: "HLR reward awarded successfully",
       data: {
-        rewardAmount: hlrConfig.rewardAmount,
-        reason,
-        claimedAt: user.hlrQualification.rewardClaimedAt
+        user: {
+          id: user._id,
+          name: `${user.firstName} ${user.lastName}`,
+          country: user.country
+        },
+        reward: {
+          amount: mlm.hlrConfig.rewardAmount,
+          claimReason,
+          claimedAt: user.hlrQualification.claimedAt
+        },
+        qualification: {
+          currentPGP,
+          currentTGP,
+          requiredPGP: mlm.hlrConfig.requirements.pgp,
+          requiredTGP: mlm.hlrConfig.requirements.tgp
+        }
       }
     });
   } catch (error) {
-    console.error("Error processing HLR reward:", error);
+    console.error("Error manually awarding HLR:", error);
     res.status(500).json({
       success: false,
-      message: "Error processing HLR reward",
+      message: "Error manually awarding HLR",
       error: error.message
     });
   }
 });
 
-// Get HLR tips
-export const getHLRTips = asyncHandler(async (req, res) => {
+// Admin: Get HLR management dashboard
+export const getHLRManagement = asyncHandler(async (req, res) => {
   try {
     const mlm = await MLM.findOne();
     if (!mlm) {
@@ -3908,52 +4070,65 @@ export const getHLRTips = asyncHandler(async (req, res) => {
       });
     }
 
-    res.status(200).json({
-      success: true,
-      data: mlm.hlrConfig.tips || []
-    });
-  } catch (error) {
-    console.error("Error getting HLR tips:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error getting HLR tips",
-      error: error.message
-    });
-  }
-});
-
-// Admin: Update HLR configuration
-export const updateHLRConfig = asyncHandler(async (req, res) => {
-  try {
-    const { requiredPGP, requiredTGP, retirementAge, rewardAmount, tips } = req.body;
+    const hlrConfig = mlm.hlrConfig;
     
-    const mlm = await MLM.findOne();
-    if (!mlm) {
-      return res.status(404).json({
-        success: false,
-        message: "MLM system not found"
-      });
-    }
+    // Get HLR statistics
+    const totalQualified = await User.countDocuments({
+      $expr: {
+        $and: [
+          { $gte: [{ $ifNull: ["$qualificationPoints.pgp.accumulated", 0] }, hlrConfig.requirements.pgp] },
+          { $gte: [{ $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }, hlrConfig.requirements.tgp] }
+        ]
+      }
+    });
 
-    // Update configuration
-    if (requiredPGP !== undefined) mlm.hlrConfig.requiredPGP = requiredPGP;
-    if (requiredTGP !== undefined) mlm.hlrConfig.requiredTGP = requiredTGP;
-    if (retirementAge !== undefined) mlm.hlrConfig.retirementAge = retirementAge;
-    if (rewardAmount !== undefined) mlm.hlrConfig.rewardAmount = rewardAmount;
-    if (tips !== undefined) mlm.hlrConfig.tips = tips;
+    const totalRewardsClaimed = await User.countDocuments({
+      "hlrQualification.rewardClaimed": true
+    });
 
-    await mlm.save();
+    const totalRewardsDistributed = totalRewardsClaimed * hlrConfig.rewardAmount;
+
+    const pendingClaims = await User.countDocuments({
+      $expr: {
+        $and: [
+          { $gte: [{ $ifNull: ["$qualificationPoints.pgp.accumulated", 0] }, hlrConfig.requirements.pgp] },
+          { $gte: [{ $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }, hlrConfig.requirements.tgp] }
+        ]
+      },
+      "hlrQualification.rewardClaimed": { $ne: true }
+    });
+
+    // Get recent HLR awards
+    const recentAwards = await User.find({
+      "hlrQualification.rewardClaimed": true
+    })
+    .sort({ "hlrQualification.claimedAt": -1 })
+    .limit(10)
+    .select('firstName lastName country hlrQualification.claimedAt hlrQualification.claimReason');
 
     res.status(200).json({
       success: true,
-      message: "HLR configuration updated successfully",
-      data: mlm.hlrConfig
+      data: {
+        config: hlrConfig,
+        statistics: {
+          totalQualified,
+          totalRewardsClaimed,
+          totalRewardsDistributed,
+          pendingClaims
+        },
+        recentAwards: recentAwards.map(award => ({
+          name: `${award.firstName} ${award.lastName}`,
+          country: award.country,
+          claimedAt: award.hlrQualification.claimedAt,
+          claimReason: award.hlrQualification.claimReason
+        }))
+      }
     });
   } catch (error) {
-    console.error("Error updating HLR configuration:", error);
+    console.error("Error getting HLR management:", error);
     res.status(500).json({
       success: false,
-      message: "Error updating HLR configuration",
+      message: "Error getting HLR management",
       error: error.message
     });
   }

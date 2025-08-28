@@ -48,6 +48,10 @@ const userSchema = new mongoose.Schema(
         "Phone number must be exactly 13 characters including country code",
       ],
     },
+    dateOfBirth: {
+      type: Date,
+      required: false
+    },
     password: {
       type: String,
       required: [true, "Password is required"],
@@ -223,6 +227,23 @@ const userSchema = new mongoose.Schema(
         default: []
       }
     },
+    // HLR Qualification
+    hlrQualification: {
+      isQualified: { type: Boolean, default: false },
+      qualifiedAt: { type: Date },
+      rewardClaimed: { type: Boolean, default: false },
+      claimedAt: { type: Date },
+      claimReason: { 
+        type: String, 
+        enum: ['retirement', 'deceased'], 
+        default: null 
+      },
+      notes: [{
+        note: { type: String, required: true },
+        addedAt: { type: Date, default: Date.now },
+        addedBy: { type: String, required: true }
+      }]
+    },
   },
   { timestamps: true }
 );
@@ -291,10 +312,17 @@ userSchema.index({ "crrRank.history.rank": 1 });
 userSchema.index({ "crrRank.history.achievedAt": -1 });
 // Indexes for BBR participation
 userSchema.index({ "bbrParticipation.currentCampaign.campaignId": 1 });
-userSchema.index({ "bbrParticipation.currentCampaign.totalRides": 1 });
+userSchema.index({ "bbrParticipation.currentCampaign.totalRides": -1 });
+userSchema.index({ "bbrParticipation.currentCampaign.soloRides": -1 });
+userSchema.index({ "bbrParticipation.currentCampaign.teamRides": -1 });
 userSchema.index({ "bbrParticipation.currentCampaign.achieved": 1 });
-userSchema.index({ "bbrParticipation.totalWins": 1 });
-userSchema.index({ "bbrParticipation.totalRewardsEarned": 1 });
+userSchema.index({ "bbrParticipation.currentCampaign.joinedAt": -1 });
+userSchema.index({ "bbrParticipation.currentCampaign.lastRideAt": -1 });
+userSchema.index({ "bbrParticipation.totalWins": -1 });
+userSchema.index({ "bbrParticipation.totalRewardsEarned": -1 });
+userSchema.index({ "bbrParticipation.history.isWinner": 1 });
+userSchema.index({ "bbrParticipation.history.completedAt": -1 });
+userSchema.index({ "bbrParticipation.history.participatedAt": -1 });
 // Indexes for HLR qualification
 userSchema.index({ "hlrQualification.isQualified": 1 });
 userSchema.index({ "hlrQualification.qualifiedAt": -1 });
