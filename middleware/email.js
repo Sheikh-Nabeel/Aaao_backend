@@ -19,7 +19,7 @@ import { transporter } from "./email.config.middelware.js";
 export const sendemailverification = async (email, verificationcode) => {
   try {
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: `"AAAO GO" <support@aaaogo.com>`,
       to: email,
       subject: "Verify Your Email to Use AAAO GO App",
       text: "Verify your email",
@@ -38,7 +38,7 @@ export const sendemailverification = async (email, verificationcode) => {
 export const sendKYCApprovalEmail = async (email, kycLevel, userName = "User") => {
   try {
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: `"AAAO GO" <support@aaaogo.com>`,
       to: email,
       subject: `KYC Level ${kycLevel} Approved - AAAO GO`,
       text: "Your KYC submission has been approved",
@@ -57,7 +57,7 @@ export const sendKYCApprovalEmail = async (email, kycLevel, userName = "User") =
 export const sendKYCRejectionEmail = async (email, reason, userName = "User") => {
   try {
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: `"AAAO GO" <support@aaaogo.com>`,
       to: email,
       subject: "KYC Submission Update - AAAO GO",
       text: "Your KYC submission requires attention",
@@ -78,19 +78,48 @@ export const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-// Send general OTP email
+// Send general OTP email with anti-spam measures
 export const sendOTPEmail = async (email, otpCode, purpose = "verification") => {
   try {
+    const timestamp = new Date().toISOString();
+    const messageId = `otp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: {
+        name: "AAAO GO Security",
+        address: "support@aaaogo.com"
+      },
       to: email,
-      subject: `Your OTP Code for ${purpose}`,
-      text: `Your OTP code is: ${otpCode}`,
+      subject: `🔐 Your AAAO GO Security Code: ${otpCode}`,
+      text: `Your AAAO GO security code is: ${otpCode}. This code expires in 10 minutes. Do not share this code with anyone.`,
       html: OTP_Email_Template
         .replace("{otpCode}", otpCode)
         .replace("{purpose}", purpose),
+      
+      // Anti-spam headers
+      headers: {
+        'Message-ID': `<${messageId}@aaaogo.com>`,
+        'Date': new Date().toUTCString(),
+        'X-Priority': '1',
+        'X-MSMail-Priority': 'High',
+        'Importance': 'high',
+        'X-Mailer': 'AAAO GO Security System',
+        'X-Auto-Response-Suppress': 'OOF, AutoReply',
+        'Precedence': 'bulk',
+        'List-Unsubscribe': '<mailto:support@aaaogo.com?subject=unsubscribe>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+      },
+      
+      // DKIM and SPF friendly
+      dkim: {
+        domainName: 'aaaogo.com',
+        keySelector: 'default',
+        privateKey: process.env.DKIM_PRIVATE_KEY || '',
+        headerFieldNames: 'from:to:subject:date'
+      }
     });
-    console.log("OTP email sent successfully:", response);
+    
+    console.log("OTP email sent successfully:", response.messageId);
     return { success: true, messageId: response.messageId };
   } catch (error) {
     console.error("Error sending OTP email:", error.message);
@@ -98,17 +127,45 @@ export const sendOTPEmail = async (email, otpCode, purpose = "verification") => 
   }
 };
 
-// Send password reset OTP
+// Send password reset OTP with anti-spam measures
 export const sendPasswordResetOTP = async (email, otpCode) => {
   try {
+    const messageId = `pwd-reset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: {
+        name: "AAAO GO Security",
+        address: "support@aaaogo.com"
+      },
       to: email,
-      subject: "Password Reset OTP - AAAO GO",
-      text: `Your password reset OTP is: ${otpCode}`,
+      subject: `🔑 Password Reset Code: ${otpCode} - AAAO GO`,
+      text: `Your AAAO GO password reset code is: ${otpCode}. This code expires in 10 minutes. If you didn't request this, please ignore this email.`,
       html: Password_Reset_OTP_Template.replace("{otpCode}", otpCode),
+      
+      // Anti-spam headers
+      headers: {
+        'Message-ID': `<${messageId}@aaaogo.com>`,
+        'Date': new Date().toUTCString(),
+        'X-Priority': '1',
+        'X-MSMail-Priority': 'High',
+        'Importance': 'high',
+        'X-Mailer': 'AAAO GO Security System',
+        'X-Auto-Response-Suppress': 'OOF, AutoReply',
+        'Precedence': 'bulk',
+        'List-Unsubscribe': '<mailto:support@aaaogo.com?subject=unsubscribe>',
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+      },
+      
+      // DKIM and SPF friendly
+      dkim: {
+        domainName: 'aaaogo.com',
+        keySelector: 'default',
+        privateKey: process.env.DKIM_PRIVATE_KEY || '',
+        headerFieldNames: 'from:to:subject:date'
+      }
     });
-    console.log("Password reset OTP sent successfully:", response);
+    
+    console.log("Password reset OTP sent successfully:", response.messageId);
     return { success: true, messageId: response.messageId };
   } catch (error) {
     console.error("Error sending password reset OTP:", error.message);
@@ -126,7 +183,7 @@ export const sendLoginOTP = async (email, otpCode, loginDetails = {}) => {
     } = loginDetails;
 
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: `"AAAO GO" <support@aaaogo.com>`,
       to: email,
       subject: "Login Verification OTP - AAAO GO",
       text: `Your login OTP is: ${otpCode}`,
@@ -148,7 +205,7 @@ export const sendLoginOTP = async (email, otpCode, loginDetails = {}) => {
 export const sendDriverApprovalEmail = async (email, driverName = "Driver") => {
   try {
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: `"AAAO GO" <support@aaaogo.com>`,
       to: email,
       subject: "Driver Application Approved - AAAO GO",
       text: "Your driver application has been approved",
@@ -166,7 +223,7 @@ export const sendDriverApprovalEmail = async (email, driverName = "Driver") => {
 export const sendDriverRejectionEmail = async (email, reason, driverName = "Driver") => {
   try {
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: `"AAAO GO" <support@aaaogo.com>`,
       to: email,
       subject: "Driver Application Update - AAAO GO",
       text: "Your driver application requires attention",
@@ -196,7 +253,7 @@ export const sendBookingConfirmation = async (email, bookingDetails) => {
     } = bookingDetails;
 
     const response = await transporter.sendMail({
-      from: `"AAAO GO" <codesvistaaitzaz@gmail.com>`,
+      from: `"AAAO GO" <support@aaaogo.com>`,
       to: email,
       subject: `Booking Confirmed - ${bookingId}`,
       text: `Your booking ${bookingId} has been confirmed.`,

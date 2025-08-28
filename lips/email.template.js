@@ -530,87 +530,122 @@ export const OTP_Email_Template = `
   <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Your OTP Code</title>
+      <title>Your AAAO GO Security Code</title>
       <style>
           body {
-              font-family: Arial, sans-serif;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
               margin: 0;
               padding: 0;
-              background-color: #f4f4f4;
+              background-color: #f8f9fa;
+              color: #333;
           }
           .container {
               max-width: 600px;
-              margin: 30px auto;
+              margin: 20px auto;
               background: #ffffff;
-              border-radius: 8px;
-              box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+              border-radius: 12px;
+              box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
               overflow: hidden;
-              border: 1px solid #ddd;
+              border: 1px solid #e9ecef;
           }
           .header {
-              background-color: #013220;
+              background: linear-gradient(135deg, #013220 0%, #025a3a 100%);
               color: white;
-              padding: 20px;
+              padding: 25px 20px;
               text-align: center;
-              font-size: 26px;
-              font-weight: bold;
+              font-size: 24px;
+              font-weight: 600;
           }
           .content {
-              padding: 25px;
+              padding: 30px 25px;
               color: #333;
-              line-height: 1.8;
+              line-height: 1.6;
           }
           .otp-code {
               display: block;
-              margin: 20px 0;
-              font-size: 28px;
+              margin: 25px 0;
+              font-size: 32px;
               color: #013220;
-              background: #fff8e1;
-              border: 2px solid #FFB800;
-              padding: 15px;
+              background: linear-gradient(135deg, #fff8e1 0%, #fff3cd 100%);
+              border: 3px solid #FFB800;
+              padding: 20px;
               text-align: center;
-              border-radius: 8px;
-              font-weight: bold;
-              letter-spacing: 3px;
+              border-radius: 12px;
+              font-weight: 700;
+              letter-spacing: 4px;
+              font-family: 'Courier New', monospace;
           }
           .expiry-notice {
-              background: #fff3cd;
-              border: 1px solid #ffeaa7;
-              padding: 10px;
-              border-radius: 5px;
-              margin: 15px 0;
-              color: #856404;
+              background: #e3f2fd;
+              border: 1px solid #bbdefb;
+              padding: 15px;
+              border-radius: 8px;
+              margin: 20px 0;
+              color: #1565c0;
               text-align: center;
-              font-weight: bold;
+              font-weight: 600;
+          }
+          .security-notice {
+              background: #fff3e0;
+              border: 1px solid #ffcc02;
+              padding: 15px;
+              border-radius: 8px;
+              margin: 20px 0;
+              color: #e65100;
           }
           .footer {
-              background-color: #f4f4f4;
-              padding: 15px;
+              background-color: #f8f9fa;
+              padding: 20px;
               text-align: center;
-              color: #777;
-              font-size: 12px;
-              border-top: 1px solid #ddd;
+              color: #6c757d;
+              font-size: 13px;
+              border-top: 1px solid #e9ecef;
+          }
+          .company-info {
+              margin-top: 15px;
+              font-size: 11px;
+              color: #adb5bd;
           }
           p {
               margin: 0 0 15px;
+          }
+          .highlight {
+              color: #013220;
+              font-weight: 600;
           }
       </style>
   </head>
   <body>
       <div class="container">
-          <div class="header">Your OTP Code</div>
+          <div class="header">
+              🔐 AAAO GO Security Code
+          </div>
           <div class="content">
               <p>Hello,</p>
-              <p>You have requested an OTP for {purpose}. Please use the code below:</p>
+              <p>You have requested a security code for <span class="highlight">{purpose}</span>. Please use the code below to complete your verification:</p>
+              
               <span class="otp-code">{otpCode}</span>
+              
               <div class="expiry-notice">
-                  ⏰ This code will expire in 10 minutes
+                  ⏰ This security code will expire in 10 minutes
               </div>
-              <p>If you did not request this code, please ignore this email or contact our support team immediately.</p>
-              <p><strong>Important:</strong> Never share this code with anyone. AAAO GO will never ask for your OTP via phone or email.</p>
+              
+              <div class="security-notice">
+                  <strong>🔒 Security Notice:</strong><br>
+                  • Never share this code with anyone<br>
+                  • AAAO GO will never ask for your code via phone or email<br>
+                  • If you didn't request this code, please ignore this email
+              </div>
+              
+              <p>If you need assistance, please contact our support team at <a href="mailto:support@aaaogo.com">support@aaaogo.com</a></p>
           </div>
           <div class="footer">
               <p>&copy; ${new Date().getFullYear()} AAAO GO. All rights reserved.</p>
+              <div class="company-info">
+                  AAAO GO<br>
+                  Transportation Services<br>
+                  <a href="mailto:support@aaaogo.com">support@aaaogo.com</a>
+              </div>
           </div>
       </div>
   </body>
