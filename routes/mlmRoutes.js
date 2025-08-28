@@ -58,7 +58,9 @@ import {
    getAdminCRROverview,
    getCRRRankAnalysis,
    getCRRRankConfig,
-   testCRRRankSystem
+   testCRRRankSystem,
+   // User Dashboard Functions
+   getUserMLMDashboard
 } from "../controllers/mlmController.js";
 import adminHandler from '../middlewares/adminMiddleware.js';
 
@@ -107,6 +109,9 @@ router.get("/user-tree/:userId", getUserDDRTree);
 
 // Get user's MLM earnings summary (Dual-Tree System)
 router.get("/user-earnings/:userId", getUserMLMEarningsSummary);
+
+// Get comprehensive user MLM dashboard with all earnings breakdown
+router.get("/user-dashboard/:userId", getUserMLMDashboard);
 
 // Get MLM earnings statistics for admin (Dual-Tree System)
 router.get("/earnings-stats", getMLMEarningsStats);

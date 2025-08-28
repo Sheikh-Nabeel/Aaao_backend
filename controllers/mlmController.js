@@ -351,8 +351,15 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
         });
       }
       
-      // Add driver payment to driver's wallet
-      await driver.addToWallet(driverPayment);
+      // Add driver payment to driver's wallet with transaction record
+      driver.wallet.balance += driverPayment;
+      driver.wallet.transactions.push({
+        type: 'credit',
+        amount: driverPayment,
+        description: `Driver payment for ride ${rideId}`,
+        timestamp: new Date()
+      });
+      await driver.save();
       
       // Add PGP to driver
       await driver.addQualificationPoints({
@@ -423,8 +430,15 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
         const driverDdrAmount = (driverMlmAmount * levelPercentage) / 100;
         const ddrLevelAmount = userDdrAmount + driverDdrAmount;
         
-        // Add to sponsor's wallet
-        await sponsor.addToWallet(ddrLevelAmount);
+        // Add to sponsor's wallet with transaction record
+        sponsor.wallet.balance += ddrLevelAmount;
+        sponsor.wallet.transactions.push({
+          type: 'credit',
+          amount: ddrLevelAmount,
+          description: `DDR Level ${level} earnings from ride completion`,
+          timestamp: new Date()
+        });
+        await sponsor.save();
         
         ddrDistributions.push({
           sponsorId: sponsor._id,
@@ -482,8 +496,15 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           const driverDdrAmount = (driverMlmAmount * levelPercentage) / 100;
           const ddrLevelAmount = userDdrAmount + driverDdrAmount;
           
-          // Add to sponsor's wallet
-          await sponsor.addToWallet(ddrLevelAmount);
+          // Add to sponsor's wallet with transaction record
+          sponsor.wallet.balance += ddrLevelAmount;
+          sponsor.wallet.transactions.push({
+            type: 'credit',
+            amount: ddrLevelAmount,
+            description: `DDR Level ${level} earnings from driver ride completion`,
+            timestamp: new Date()
+          });
+          await sponsor.save();
           
           ddrDistributions.push({
             sponsorId: sponsor._id,
@@ -570,7 +591,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             if (!sponsor.bbrParticipation) {
               sponsor.bbrParticipation = {
                 currentCampaign: {
-                  campaignId: activeBBRCampaign._id,
+                  campaignId: activeBBRCampaign.startDate,
                   totalRides: 0,
                   achieved: false,
                   joinedAt: new Date(),
@@ -583,9 +604,11 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             }
             
             if (!sponsor.bbrParticipation.currentCampaign || 
-                sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+                !sponsor.bbrParticipation.currentCampaign.campaignId ||
+                !activeBBRCampaign.startDate ||
+                sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign.startDate.toString()) {
               sponsor.bbrParticipation.currentCampaign = {
-                campaignId: activeBBRCampaign._id,
+                campaignId: activeBBRCampaign.startDate,
                 totalRides: 0,
                 achieved: false,
                 joinedAt: new Date(),
@@ -617,7 +640,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             if (!sponsor.bbrParticipation) {
               sponsor.bbrParticipation = {
                 currentCampaign: {
-                  campaignId: activeBBRCampaign._id,
+                  campaignId: activeBBRCampaign.startDate,
                   totalRides: 0,
                   achieved: false,
                   joinedAt: new Date(),
@@ -630,9 +653,11 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             }
             
             if (!sponsor.bbrParticipation.currentCampaign || 
-                sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+                !sponsor.bbrParticipation.currentCampaign.campaignId ||
+                !activeBBRCampaign.startDate ||
+                sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign.startDate.toString()) {
               sponsor.bbrParticipation.currentCampaign = {
-                campaignId: activeBBRCampaign._id,
+                campaignId: activeBBRCampaign.startDate,
                 totalRides: 0,
                 achieved: false,
                 joinedAt: new Date(),
@@ -659,7 +684,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       if (!user.bbrParticipation) {
         user.bbrParticipation = {
           currentCampaign: {
-            campaignId: activeBBRCampaign._id,
+            campaignId: activeBBRCampaign.startDate,
             totalRides: 0,
             soloRides: 0,
             teamRides: 0,
@@ -675,9 +700,10 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       
       if (!user.bbrParticipation.currentCampaign || 
           !user.bbrParticipation.currentCampaign.campaignId ||
-          user.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+          !activeBBRCampaign.startDate ||
+          user.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign.startDate.toString()) {
         user.bbrParticipation.currentCampaign = {
-          campaignId: activeBBRCampaign._id,
+          campaignId: activeBBRCampaign.startDate,
           totalRides: 0,
           soloRides: 0,
           teamRides: 0,
@@ -4983,6 +5009,280 @@ export const getCRRRankConfig = asyncHandler(async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message
+    });
+  }
+});
+
+// Get comprehensive user MLM dashboard with all earnings breakdown
+export const getUserMLMDashboard = asyncHandler(async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required"
+      });
+    }
+
+    // Validate ObjectId format
+    const mongoose = await import('mongoose');
+    if (!mongoose.default.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid userId format. Must be a valid MongoDB ObjectId."
+      });
+    }
+
+    // Get user with all MLM data
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Get MLM system data
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Calculate DDR earnings by level
+    const ddrEarnings = {
+      level1: 0,
+      level2: 0,
+      level3: 0,
+      level4: 0,
+      total: 0
+    };
+
+    // Get DDR transactions from wallet
+    if (user.wallet && user.wallet.transactions) {
+      user.wallet.transactions.forEach(transaction => {
+        if (transaction.description && transaction.description.includes('DDR')) {
+          const levelMatch = transaction.description.match(/Level (\d+)/);
+          if (levelMatch) {
+            const level = parseInt(levelMatch[1]);
+            if (level >= 1 && level <= 4) {
+              ddrEarnings[`level${level}`] += transaction.amount;
+              ddrEarnings.total += transaction.amount;
+            }
+          }
+        }
+      });
+    }
+
+    // Get qualification points stats
+    const qualificationStats = user.getQualificationPointsStats ? user.getQualificationPointsStats() : {
+      pgp: { accumulated: 0, current: 0 },
+      tgp: { accumulated: 0, current: 0 },
+      total: { accumulated: 0, current: 0 }
+    };
+
+    // Calculate CRR earnings (1 PGP = 1 AED, 1 TGP = 1 AED)
+    const crrEarnings = {
+      pgpEarnings: qualificationStats.pgp.accumulated,
+      tgpEarnings: qualificationStats.tgp.accumulated,
+      totalEarnings: qualificationStats.total.accumulated,
+      currentRank: user.crrRank?.current || 'Bronze',
+      nextRank: null,
+      progressToNext: 0
+    };
+
+    // Calculate progress to next rank
+    const rankThresholds = mlm.rankThresholds || {
+      Bronze: { min: 0, max: 999 },
+      Silver: { min: 1000, max: 4999 },
+      Gold: { min: 5000, max: 19999 },
+      Platinum: { min: 20000, max: 49999 },
+      Diamond: { min: 50000, max: Infinity }
+    };
+
+    const currentRankData = rankThresholds[crrEarnings.currentRank];
+    if (currentRankData) {
+      const nextRanks = Object.keys(rankThresholds);
+      const currentIndex = nextRanks.indexOf(crrEarnings.currentRank);
+      if (currentIndex < nextRanks.length - 1) {
+        const nextRank = nextRanks[currentIndex + 1];
+        const nextRankData = rankThresholds[nextRank];
+        crrEarnings.nextRank = nextRank;
+        crrEarnings.progressToNext = Math.min(100, ((qualificationStats.total.accumulated - currentRankData.min) / (nextRankData.min - currentRankData.min)) * 100);
+      }
+    }
+
+    // Get BBR earnings and progress
+    const bbrEarnings = {
+      currentCampaign: null,
+      totalWins: user.bbrParticipation?.totalWins || 0,
+      totalRewardsEarned: user.bbrParticipation?.totalRewardsEarned || 0,
+      currentProgress: {
+        totalRides: 0,
+        soloRides: 0,
+        teamRides: 0,
+        achieved: false
+      }
+    };
+
+    if (user.bbrParticipation?.currentCampaign) {
+      bbrEarnings.currentCampaign = {
+        campaignId: user.bbrParticipation.currentCampaign.campaignId,
+        totalRides: user.bbrParticipation.currentCampaign.totalRides || 0,
+        soloRides: user.bbrParticipation.currentCampaign.soloRides || 0,
+        teamRides: user.bbrParticipation.currentCampaign.teamRides || 0,
+        achieved: user.bbrParticipation.currentCampaign.achieved || false,
+        joinedAt: user.bbrParticipation.currentCampaign.joinedAt
+      };
+      bbrEarnings.currentProgress = {
+        totalRides: user.bbrParticipation.currentCampaign.totalRides || 0,
+        soloRides: user.bbrParticipation.currentCampaign.soloRides || 0,
+        teamRides: user.bbrParticipation.currentCampaign.teamRides || 0,
+        achieved: user.bbrParticipation.currentCampaign.achieved || false
+      };
+    }
+
+    // Get HLR earnings and qualification
+    const hlrEarnings = {
+      isQualified: user.hlrQualification?.isQualified || false,
+      qualifiedAt: user.hlrQualification?.qualifiedAt,
+      totalEarnings: user.hlrQualification?.totalEarnings || 0,
+      progress: {
+        pgpPoints: user.hlrQualification?.progress?.pgpPoints || 0,
+        tgpPoints: user.hlrQualification?.progress?.tgpPoints || 0,
+        overallProgress: user.hlrQualification?.progress?.overallProgress || 0
+      },
+      requirements: {
+        requiredPGP: mlm.hlrConfig?.requiredPGP || 50000,
+        requiredTGP: mlm.hlrConfig?.requiredTGP || 50000
+      }
+    };
+
+    // Get Regional Ambassador earnings and status
+    const regionalAmbassadorEarnings = {
+      currentRank: user.regionalAmbassador?.currentRank || 'Challenger',
+      totalEarnings: user.regionalAmbassador?.totalEarnings || 0,
+      isAmbassador: user.regionalAmbassador?.isAmbassador || false,
+      isPermanent: user.regionalAmbassador?.isPermanent || false,
+      lastUpdated: user.regionalAmbassador?.lastUpdated,
+      nextRank: null,
+      progressToNext: 0
+    };
+
+    // Calculate Regional Ambassador progress
+    if (mlm.regionalAmbassadorConfig?.ranks) {
+      const ranks = Array.from(mlm.regionalAmbassadorConfig.ranks.entries());
+      const currentRank = ranks.find(([name]) => name === regionalAmbassadorEarnings.currentRank);
+      const nextRank = ranks.find(([name, details]) => details.level === (currentRank[1].level + 1));
+      
+      if (nextRank) {
+        regionalAmbassadorEarnings.nextRank = nextRank[0];
+        regionalAmbassadorEarnings.progressToNext = Math.min(100, (regionalAmbassadorEarnings.totalEarnings / nextRank[1].minProgress) * 100);
+      }
+    }
+
+    // Get recent transactions (last 10)
+    const recentTransactions = user.wallet?.transactions?.slice(-10).reverse() || [];
+
+    // Calculate total earnings
+    const totalEarnings = {
+      ddr: ddrEarnings.total,
+      crr: crrEarnings.totalEarnings,
+      bbr: bbrEarnings.totalRewardsEarned,
+      hlr: hlrEarnings.totalEarnings,
+      regionalAmbassador: regionalAmbassadorEarnings.totalEarnings,
+      total: ddrEarnings.total + crrEarnings.totalEarnings + bbrEarnings.totalRewardsEarned + hlrEarnings.totalEarnings + regionalAmbassadorEarnings.totalEarnings
+    };
+
+    // Prepare response
+    const dashboardData = {
+      user: {
+        id: user._id,
+        username: user.username,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        country: user.country,
+        sponsorId: user.sponsorId,
+        joinedAt: user.createdAt
+      },
+      wallet: {
+        currentBalance: user.wallet?.balance || 0,
+        totalEarnings: totalEarnings.total
+      },
+      ddr: {
+        earnings: ddrEarnings,
+        levelBreakdown: {
+          level1: { amount: ddrEarnings.level1, percentage: ddrEarnings.total > 0 ? (ddrEarnings.level1 / ddrEarnings.total * 100).toFixed(2) : 0 },
+          level2: { amount: ddrEarnings.level2, percentage: ddrEarnings.total > 0 ? (ddrEarnings.level2 / ddrEarnings.total * 100).toFixed(2) : 0 },
+          level3: { amount: ddrEarnings.level3, percentage: ddrEarnings.total > 0 ? (ddrEarnings.level3 / ddrEarnings.total * 100).toFixed(2) : 0 },
+          level4: { amount: ddrEarnings.level4, percentage: ddrEarnings.total > 0 ? (ddrEarnings.level4 / ddrEarnings.total * 100).toFixed(2) : 0 }
+        }
+      },
+      crr: {
+        earnings: crrEarnings,
+        qualificationPoints: qualificationStats,
+        rankProgress: {
+          current: crrEarnings.currentRank,
+          next: crrEarnings.nextRank,
+          progress: crrEarnings.progressToNext
+        }
+      },
+      bbr: {
+        earnings: bbrEarnings,
+        currentCampaign: bbrEarnings.currentCampaign
+      },
+      hlr: {
+        earnings: hlrEarnings,
+        qualification: {
+          isQualified: hlrEarnings.isQualified,
+          qualifiedAt: hlrEarnings.qualifiedAt
+        }
+      },
+      regionalAmbassador: {
+        earnings: regionalAmbassadorEarnings,
+        status: {
+          currentRank: regionalAmbassadorEarnings.currentRank,
+          nextRank: regionalAmbassadorEarnings.nextRank,
+          progress: regionalAmbassadorEarnings.progressToNext,
+          isAmbassador: regionalAmbassadorEarnings.isAmbassador,
+          isPermanent: regionalAmbassadorEarnings.isPermanent
+        }
+      },
+      summary: {
+        totalEarnings: totalEarnings,
+        earningsBreakdown: {
+          ddr: { amount: totalEarnings.ddr, percentage: totalEarnings.total > 0 ? (totalEarnings.ddr / totalEarnings.total * 100).toFixed(2) : 0 },
+          crr: { amount: totalEarnings.crr, percentage: totalEarnings.total > 0 ? (totalEarnings.crr / totalEarnings.total * 100).toFixed(2) : 0 },
+          bbr: { amount: totalEarnings.bbr, percentage: totalEarnings.total > 0 ? (totalEarnings.bbr / totalEarnings.total * 100).toFixed(2) : 0 },
+          hlr: { amount: totalEarnings.hlr, percentage: totalEarnings.total > 0 ? (totalEarnings.hlr / totalEarnings.total * 100).toFixed(2) : 0 },
+          regionalAmbassador: { amount: totalEarnings.regionalAmbassador, percentage: totalEarnings.total > 0 ? (totalEarnings.regionalAmbassador / totalEarnings.total * 100).toFixed(2) : 0 }
+        }
+      },
+      recentTransactions: recentTransactions.map(tx => ({
+        amount: tx.amount,
+        type: tx.type,
+        description: tx.description,
+        timestamp: tx.timestamp
+      }))
+    };
+
+    res.status(200).json({
+      success: true,
+      message: "User MLM dashboard retrieved successfully",
+      data: dashboardData
+    });
+
+  } catch (error) {
+    console.error("Error getting user MLM dashboard:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting user MLM dashboard",
+      error: error.message
     });
   }
 });
