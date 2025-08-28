@@ -22,10 +22,11 @@ import {
   getUserCRREarnings,
   getCRRTransactionHistory,
   getCRRLeaderboard,
+  getUserCRRRankTracking,
   getMotivationalQuotes,
   updateMotivationalQuotes,
-  getRankThresholds,
-  updateRankThresholds,
+  getCRRRankConfig,
+  updateCRRRankConfig,
   getDDRCRRStats,
   // BBR Controller Functions
   getCurrentBBRCampaign,
@@ -33,8 +34,11 @@ import {
   getBBRLeaderboard,
   getPastBBRWins,
   getBBRTips,
+  getBBRDashboard,
   createBBRCampaign,
   updateBBRTips,
+  getBBRCampaignManagement,
+  endBBRCampaign,
   // HLR Controller Functions
   getUserHLRProgress,
   getHLRQualifiedMembers,
@@ -57,7 +61,6 @@ import {
   // CRR Admin Functions
    getAdminCRROverview,
    getCRRRankAnalysis,
-   getCRRRankConfig,
    testCRRRankSystem,
    // User Dashboard Functions
    getUserMLMDashboard
@@ -136,6 +139,9 @@ router.get("/crr/transactions/:userId", getCRRTransactionHistory);
 // Get CRR leaderboard with rank-based grouping
 router.get("/crr/leaderboard", getCRRLeaderboard);
 
+// Get user's CRR rank tracking (all ranks with achievement status)
+router.get("/crr/rank-tracking/:userId", getUserCRRRankTracking);
+
 // Admin Management Routes
 // Get motivational quotes for DDR/CRR dashboards
 router.get("/admin/quotes", adminHandler, getMotivationalQuotes);
@@ -143,14 +149,14 @@ router.get("/admin/quotes", adminHandler, getMotivationalQuotes);
 // Update motivational quotes
 router.put("/admin/quotes", adminHandler, updateMotivationalQuotes);
 
-// Get rank qualification thresholds
-router.get("/admin/rank-thresholds", adminHandler, getRankThresholds);
+// Get CRR rank configuration
+router.get("/admin/crr/config",  getCRRRankConfig);
 
-// Update rank qualification thresholds
-router.put("/admin/rank-thresholds", adminHandler, updateRankThresholds);
+// Update CRR rank configuration
+router.put("/admin/crr/config",  updateCRRRankConfig);
 
 // Get DDR/CRR system statistics for admin
-router.get("/admin/ddr-crr-stats", adminHandler, getDDRCRRStats);
+router.get("/admin/ddr-crr-stats",  getDDRCRRStats);
 
 // BBR (Bonus Booster Rewards) Routes
 // Get current BBR campaign details
@@ -168,12 +174,21 @@ router.get("/bbr/past-wins/:userId", getPastBBRWins);
 // Get BBR tips and motivational content
 router.get("/bbr/tips", getBBRTips);
 
+// Get comprehensive BBR dashboard for user
+router.get("/bbr/dashboard/:userId", getBBRDashboard);
+
 // Admin BBR Routes
 // Create new BBR campaign (Admin only)
 router.post("/admin/bbr/campaign", adminHandler, createBBRCampaign);
 
 // Update BBR tips (Admin only)
 router.put("/admin/bbr/tips", adminHandler, updateBBRTips);
+
+// Get BBR campaign management (Admin only)
+router.get("/admin/bbr/management", adminHandler, getBBRCampaignManagement);
+
+// End current BBR campaign (Admin only)
+router.post("/admin/bbr/end-campaign", adminHandler, endBBRCampaign);
 
 // HLR (HonorPay Loyalty Rewards) Routes
 // Get user's HLR progress and qualification status

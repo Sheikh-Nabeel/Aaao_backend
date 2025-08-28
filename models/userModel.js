@@ -166,13 +166,18 @@ const userSchema = new mongoose.Schema(
       }
     },
     crrRank: {
-      current: { type: String, enum: ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond'], default: 'Bronze' },
+      current: { type: String, enum: ['None', 'Challenger', 'Warrior', 'Tycoon', 'CHAMPION', 'BOSS'], default: 'None' },
       lastUpdated: { type: Date, default: Date.now },
+      rewardClaimed: { type: Boolean, default: false },
+      rewardAmount: { type: Number, default: 0 },
       history: {
         type: [{
-          rank: { type: String, enum: ['Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond'], required: true },
+          rank: { type: String, enum: ['Challenger', 'Warrior', 'Tycoon', 'CHAMPION', 'BOSS'], required: true },
           achievedAt: { type: Date, default: Date.now },
-          qualificationPoints: { type: Number, required: true }
+          pgpPoints: { type: Number, required: true, default: 0 },
+          tgpPoints: { type: Number, required: true, default: 0 },
+          rewardAmount: { type: Number, default: 0 },
+          rewardClaimed: { type: Boolean, default: false }
         }],
         default: []
       }
@@ -192,7 +197,7 @@ const userSchema = new mongoose.Schema(
     },
     bbrParticipation: {
       currentCampaign: {
-        campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MLM' },
+        campaignId: { type: mongoose.Schema.Types.ObjectId },
         totalRides: { type: Number, default: 0 },
         soloRides: { type: Number, default: 0 },
         teamRides: { type: Number, default: 0 },
@@ -204,14 +209,16 @@ const userSchema = new mongoose.Schema(
       totalRewardsEarned: { type: Number, default: 0 },
       history: {
         type: [{
-          campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MLM' },
+          campaignId: { type: mongoose.Schema.Types.ObjectId },
+          campaignName: { type: String },
           totalRides: { type: Number },
           soloRides: { type: Number },
           teamRides: { type: Number },
           achieved: { type: Boolean },
           isWinner: { type: Boolean },
           rewardAmount: { type: Number },
-          participatedAt: { type: Date }
+          participatedAt: { type: Date },
+          completedAt: { type: Date }
         }],
         default: []
       }
@@ -459,52 +466,66 @@ userSchema.methods.checkMLMQualification = function () {
 };
 
 // CRR Rank Management Methods
-userSchema.methods.updateCRRRank = async function(rankThresholds) {
-  // If rankThresholds is not provided, get them from MLM model
-  if (!rankThresholds) {
+userSchema.methods.updateCRRRank = async function(crrRanks) {
+  // If crrRanks is not provided, get them from MLM model
+  if (!crrRanks) {
     const MLM = mongoose.model('MLM');
     const mlm = await MLM.findOne();
-    if (mlm && mlm.rankThresholds) {
-      rankThresholds = mlm.rankThresholds;
+    if (mlm && mlm.crrRanks) {
+      crrRanks = mlm.crrRanks;
     } else {
-      // Default rank thresholds if MLM is not available
-      rankThresholds = {
-        Bronze: { min: 0, max: 999 },
-        Silver: { min: 1000, max: 2499 },
-        Gold: { min: 2500, max: 4999 },
-        Platinum: { min: 5000, max: 9999 },
-        Diamond: { min: 10000, max: null }
+      // Default CRR ranks if MLM is not available
+      crrRanks = {
+        Challenger: { requirements: { pgp: 2500, tgp: 50000 }, reward: 1000 },
+        Warrior: { requirements: { pgp: 5000, tgp: 100000 }, reward: 5000 },
+        Tycoon: { requirements: { pgp: 10000, tgp: 200000 }, reward: 20000 },
+        CHAMPION: { requirements: { pgp: 25000, tgp: 500000 }, reward: 50000 },
+        BOSS: { requirements: { pgp: 50000, tgp: 1000000 }, reward: 200000 }
       };
     }
   }
+
   const stats = this.getQualificationPointsStats();
   const tgpPoints = stats.tgp.accumulated;
   const pgpPoints = stats.pgp.accumulated;
-  const totalPoints = stats.total.accumulated;
   
-  let newRank = 'Bronze';
+  // Determine new rank based on PGP and TGP requirements (progressive system)
+  let newRank = 'None';
+  let rewardAmount = 0;
   
-  // Determine rank based on total qualification points
-  if (totalPoints >= rankThresholds.Diamond.min) {
-    newRank = 'Diamond';
-  } else if (totalPoints >= rankThresholds.Platinum.min) {
-    newRank = 'Platinum';
-  } else if (totalPoints >= rankThresholds.Gold.min) {
-    newRank = 'Gold';
-  } else if (totalPoints >= rankThresholds.Silver.min) {
-    newRank = 'Silver';
+  // Check ranks in order - user must achieve each rank sequentially
+  if (pgpPoints >= crrRanks.BOSS.requirements.pgp && tgpPoints >= crrRanks.BOSS.requirements.tgp) {
+    newRank = 'BOSS';
+    rewardAmount = crrRanks.BOSS.reward;
+  } else if (pgpPoints >= crrRanks.CHAMPION.requirements.pgp && tgpPoints >= crrRanks.CHAMPION.requirements.tgp) {
+    newRank = 'CHAMPION';
+    rewardAmount = crrRanks.CHAMPION.reward;
+  } else if (pgpPoints >= crrRanks.Tycoon.requirements.pgp && tgpPoints >= crrRanks.Tycoon.requirements.tgp) {
+    newRank = 'Tycoon';
+    rewardAmount = crrRanks.Tycoon.reward;
+  } else if (pgpPoints >= crrRanks.Warrior.requirements.pgp && tgpPoints >= crrRanks.Warrior.requirements.tgp) {
+    newRank = 'Warrior';
+    rewardAmount = crrRanks.Warrior.reward;
+  } else if (pgpPoints >= crrRanks.Challenger.requirements.pgp && tgpPoints >= crrRanks.Challenger.requirements.tgp) {
+    newRank = 'Challenger';
+    rewardAmount = crrRanks.Challenger.reward;
   }
   
-  // Update rank if it has changed
-  if (this.crrRank.current !== newRank) {
+  // Update rank if it has changed and user has achieved a rank
+  if (this.crrRank.current !== newRank && newRank !== 'None') {
     // Add to history
     this.crrRank.history.push({
       rank: newRank,
       achievedAt: new Date(),
-      qualificationPoints: totalPoints
+      pgpPoints: pgpPoints,
+      tgpPoints: tgpPoints,
+      rewardAmount: rewardAmount,
+      rewardClaimed: false
     });
     
     this.crrRank.current = newRank;
+    this.crrRank.rewardAmount = rewardAmount;
+    this.crrRank.rewardClaimed = false;
     this.crrRank.lastUpdated = new Date();
     
     return this.save();
@@ -513,52 +534,91 @@ userSchema.methods.updateCRRRank = async function(rankThresholds) {
   return Promise.resolve(this);
 };
 
-userSchema.methods.getCRRRankProgress = function(rankThresholds) {
+userSchema.methods.getCRRRankProgress = function(crrRanks) {
   const stats = this.getQualificationPointsStats();
   const tgpPoints = stats.tgp.accumulated;
   const pgpPoints = stats.pgp.accumulated;
-  const totalPoints = stats.total.accumulated;
   const currentRank = this.crrRank.current;
   
-  let nextRank = null;
-  let pointsToNext = 0;
-  let progressPercentage = 0;
-  
-  // Determine next rank and progress
-  switch (currentRank) {
-    case 'Bronze':
-      nextRank = 'Silver';
-      pointsToNext = rankThresholds.Silver.min - totalPoints;
-      progressPercentage = (totalPoints / rankThresholds.Silver.min) * 100;
-      break;
-    case 'Silver':
-      nextRank = 'Gold';
-      pointsToNext = rankThresholds.Gold.min - totalPoints;
-      progressPercentage = ((totalPoints - rankThresholds.Silver.min) / (rankThresholds.Gold.min - rankThresholds.Silver.min)) * 100;
-      break;
-    case 'Gold':
-      nextRank = 'Platinum';
-      pointsToNext = rankThresholds.Platinum.min - totalPoints;
-      progressPercentage = ((totalPoints - rankThresholds.Gold.min) / (rankThresholds.Platinum.min - rankThresholds.Gold.min)) * 100;
-      break;
-    case 'Platinum':
-      nextRank = 'Diamond';
-      pointsToNext = rankThresholds.Diamond.min - totalPoints;
-      progressPercentage = ((totalPoints - rankThresholds.Platinum.min) / (rankThresholds.Diamond.min - rankThresholds.Platinum.min)) * 100;
-      break;
-    case 'Diamond':
-      nextRank = null;
-      pointsToNext = 0;
-      progressPercentage = 100;
-      break;
+  // If crrRanks is not provided, use default values
+  if (!crrRanks) {
+    crrRanks = {
+      Challenger: { requirements: { pgp: 2500, tgp: 50000 }, reward: 1000, icon: "🥇" },
+      Warrior: { requirements: { pgp: 5000, tgp: 100000 }, reward: 5000, icon: "🥈" },
+      Tycoon: { requirements: { pgp: 10000, tgp: 200000 }, reward: 20000, icon: "🥉" },
+      CHAMPION: { requirements: { pgp: 25000, tgp: 500000 }, reward: 50000, icon: "🏅" },
+      BOSS: { requirements: { pgp: 50000, tgp: 1000000 }, reward: 200000, icon: "🎖" }
+    };
   }
-
+  
+  let nextRank = null;
+  let pgpProgress = 0;
+  let tgpProgress = 0;
+  let overallProgress = 0;
+  let pgpToNext = 0;
+  let tgpToNext = 0;
+  
+  // Determine next rank and progress based on current rank
+  if (currentRank === 'None') {
+    // User has no rank yet - working towards Challenger
+    nextRank = 'Challenger';
+    pgpProgress = Math.min(100, (pgpPoints / crrRanks.Challenger.requirements.pgp) * 100);
+    tgpProgress = Math.min(100, (tgpPoints / crrRanks.Challenger.requirements.tgp) * 100);
+    pgpToNext = Math.max(0, crrRanks.Challenger.requirements.pgp - pgpPoints);
+    tgpToNext = Math.max(0, crrRanks.Challenger.requirements.tgp - tgpPoints);
+  } else if (currentRank === 'Challenger') {
+    nextRank = 'Warrior';
+    pgpProgress = Math.min(100, (pgpPoints / crrRanks.Warrior.requirements.pgp) * 100);
+    tgpProgress = Math.min(100, (tgpPoints / crrRanks.Warrior.requirements.tgp) * 100);
+    pgpToNext = Math.max(0, crrRanks.Warrior.requirements.pgp - pgpPoints);
+    tgpToNext = Math.max(0, crrRanks.Warrior.requirements.tgp - tgpPoints);
+  } else if (currentRank === 'Warrior') {
+    nextRank = 'Tycoon';
+    pgpProgress = Math.min(100, (pgpPoints / crrRanks.Tycoon.requirements.pgp) * 100);
+    tgpProgress = Math.min(100, (tgpPoints / crrRanks.Tycoon.requirements.tgp) * 100);
+    pgpToNext = Math.max(0, crrRanks.Tycoon.requirements.pgp - pgpPoints);
+    tgpToNext = Math.max(0, crrRanks.Tycoon.requirements.tgp - tgpPoints);
+  } else if (currentRank === 'Tycoon') {
+    nextRank = 'CHAMPION';
+    pgpProgress = Math.min(100, (pgpPoints / crrRanks.CHAMPION.requirements.pgp) * 100);
+    tgpProgress = Math.min(100, (tgpPoints / crrRanks.CHAMPION.requirements.tgp) * 100);
+    pgpToNext = Math.max(0, crrRanks.CHAMPION.requirements.pgp - pgpPoints);
+    tgpToNext = Math.max(0, crrRanks.CHAMPION.requirements.tgp - tgpPoints);
+  } else if (currentRank === 'CHAMPION') {
+    nextRank = 'BOSS';
+    pgpProgress = Math.min(100, (pgpPoints / crrRanks.BOSS.requirements.pgp) * 100);
+    tgpProgress = Math.min(100, (tgpPoints / crrRanks.BOSS.requirements.tgp) * 100);
+    pgpToNext = Math.max(0, crrRanks.BOSS.requirements.pgp - pgpPoints);
+    tgpToNext = Math.max(0, crrRanks.BOSS.requirements.tgp - tgpPoints);
+  } else if (currentRank === 'BOSS') {
+    nextRank = null;
+    pgpProgress = 100;
+    tgpProgress = 100;
+    pgpToNext = 0;
+    tgpToNext = 0;
+  }
+  
+  overallProgress = (pgpProgress + tgpProgress) / 2;
+  
   return {
     currentRank,
-    nextRank: threshold.next,
-    currentPoints: { total: totalPoints, tgp: tgpPoints, pgp: pgpPoints },
-    pointsToNext: { tgp: tgpPointsToNext, pgp: pgpPointsToNext },
-    progressPercentage: Math.min(100, Math.max(0, progressPercentage)),
+    nextRank,
+    currentPoints: { pgp: pgpPoints, tgp: tgpPoints },
+    pointsToNext: { pgp: pgpToNext, tgp: tgpToNext },
+    progress: {
+      pgp: Math.round(pgpProgress),
+      tgp: Math.round(tgpProgress),
+      overall: Math.round(overallProgress)
+    },
+    requirements: {
+      current: currentRank !== 'None' ? crrRanks[currentRank]?.requirements : { pgp: 0, tgp: 0 },
+      next: nextRank ? crrRanks[nextRank]?.requirements : null
+    },
+    reward: {
+      current: currentRank !== 'None' ? crrRanks[currentRank]?.reward : 0,
+      next: nextRank ? crrRanks[nextRank]?.reward : 0
+    },
+    icon: currentRank !== 'None' ? crrRanks[currentRank]?.icon : "🔒",
     rankHistory: this.crrRank.history.sort((a, b) => new Date(b.achievedAt) - new Date(a.achievedAt))
   };
 };

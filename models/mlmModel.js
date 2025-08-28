@@ -214,33 +214,72 @@ const mlmSchema = new mongoose.Schema({
     }
   },
   
-  // Rank Qualification Thresholds
-  rankThresholds: {
-    Bronze: {
-      min: { type: Number, default: 0 },
-      max: { type: Number, default: 999 }
+  // CRR Rank System Configuration
+  crrRanks: {
+    Challenger: {
+      name: { type: String, default: "Challenger" },
+      icon: { type: String, default: "🥇" },
+      reward: { type: Number, default: 1000 },
+      status: { type: String, default: "Achieved" },
+      requirements: {
+        pgp: { type: Number, default: 2500 },
+        tgp: { type: Number, default: 50000 }
+      }
     },
-    Silver: {
-      min: { type: Number, default: 1000 },
-      max: { type: Number, default: 2499 }
+    Warrior: {
+      name: { type: String, default: "Warrior" },
+      icon: { type: String, default: "🥈" },
+      reward: { type: Number, default: 5000 },
+      status: { type: String, default: "Achieved" },
+      requirements: {
+        pgp: { type: Number, default: 5000 },
+        tgp: { type: Number, default: 100000 }
+      }
     },
-    Gold: {
-      min: { type: Number, default: 2500 },
-      max: { type: Number, default: 4999 }
+    Tycoon: {
+      name: { type: String, default: "Tycoon" },
+      icon: { type: String, default: "🥉" },
+      reward: { type: Number, default: 20000 },
+      status: { type: String, default: "Locked" },
+      requirements: {
+        pgp: { type: Number, default: 10000 },
+        tgp: { type: Number, default: 200000 }
+      }
     },
-    Platinum: {
-      min: { type: Number, default: 5000 },
-      max: { type: Number, default: 9999 }
+    CHAMPION: {
+      name: { type: String, default: "CHAMPION" },
+      icon: { type: String, default: "🏅" },
+      reward: { type: Number, default: 50000 },
+      status: { type: String, default: "Locked" },
+      requirements: {
+        pgp: { type: Number, default: 25000 },
+        tgp: { type: Number, default: 500000 }
+      }
     },
-    Diamond: {
-      min: { type: Number, default: 10000 },
-      max: { type: Number, default: null }
+    BOSS: {
+      name: { type: String, default: "BOSS" },
+      icon: { type: String, default: "🎖" },
+      reward: { type: Number, default: 200000 },
+      status: { type: String, default: "Locked" },
+      requirements: {
+        pgp: { type: Number, default: 50000 },
+        tgp: { type: Number, default: 1000000 }
+      }
     }
+  },
+
+  // CRR System Configuration
+  crrConfig: {
+    monthlyReset: { type: Boolean, default: true },
+    resetDay: { type: Number, default: 1 }, // 1st of each month
+    pointValue: { type: Number, default: 1 }, // 1 PGP/TGP = 1 AED
+    leaderboardUpdateInterval: { type: Number, default: 300000 } // 5 minutes
   },
 
   // BBR (Bonus Booster Rewards) Campaign Management
   bbrCampaigns: {
     current: {
+      _id: { type: mongoose.Schema.Types.ObjectId, auto: true },
       name: { type: String, default: "Weekly Turbo Booster" },
       requirement: { type: Number, default: 100 }, // rides count
       duration: { type: Number, default: 7 }, // days
@@ -268,9 +307,13 @@ const mlmSchema = new mongoose.Schema({
         achieved: { type: Boolean, default: false },
         rewardClaimed: { type: Boolean, default: false },
         joinedAt: { type: Date, default: Date.now }
-      }]
+      }],
+      totalParticipants: { type: Number, default: 0 },
+      totalWinners: { type: Number, default: 0 },
+      totalRewardDistributed: { type: Number, default: 0 }
     },
     past: [{
+      _id: { type: mongoose.Schema.Types.ObjectId, auto: true },
       name: { type: String, required: true },
       requirement: { type: Number, required: true },
       duration: { type: Number, required: true },

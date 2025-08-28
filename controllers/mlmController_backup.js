@@ -299,21 +299,21 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     console.log('getUplineMembers function:', typeof getUplineMembers);
     
     try {
-    if (!mlm.transactions) {
-      mlm.transactions = [];
-      mlm.markModified('transactions');
-      await mlm.save();
-      // Reload the MLM from database to ensure it's properly initialized
-      mlm = await MLM.findOne();
-      if (!mlm || !mlm.transactions) {
-        throw new Error('Failed to initialize MLM transactions properly');
+      if (!mlm.transactions) {
+        mlm.transactions = [];
+        mlm.markModified('transactions');
+        await mlm.save();
+        // Reload the MLM from database to ensure it's properly initialized
+        mlm = await MLM.findOne();
+        if (!mlm || !mlm.transactions) {
+          throw new Error('Failed to initialize MLM transactions properly');
+        }
       }
-    }
-    
-    if (!mlm.currentBalances) {
-      mlm.currentBalances = {};
-      mlm.markModified('currentBalances');
-      await mlm.save();
+      
+      if (!mlm.currentBalances) {
+        mlm.currentBalances = {};
+        mlm.markModified('currentBalances');
+        await mlm.save();
       }
     } catch (error) {
       console.error('Error in MLM initialization:', error);
@@ -1081,12 +1081,12 @@ export const getDDRLeaderboard = asyncHandler(async (req, res) => {
       // Only include users who have DDR earnings
       if (totalDDR > 0) {
         userEarnings.push({
-        userId: user._id,
-        name: `${user.firstName} ${user.lastName}`,
-        username: user.username,
-        profilePicture: user.profilePicture,
+          userId: user._id,
+          name: `${user.firstName} ${user.lastName}`,
+          username: user.username,
+          profilePicture: user.profilePicture,
           totalEarnings: totalDDR,
-        levelBreakdown: {
+          levelBreakdown: {
             level1: level1,
             level2: level2,
             level3: level3,
@@ -1144,9 +1144,9 @@ export const getDDRLeaderboard = asyncHandler(async (req, res) => {
             isHighlighted: true,
             isInTopList: currentUserPosition.isInTopList
           } : null,
-        totalParticipants: rankedLeaderboard.length,
-        lastUpdated: new Date(),
-        tip: "Active L1-L4 growth boosts all levels and increases your DDR income"
+          totalParticipants: rankedLeaderboard.length,
+          lastUpdated: new Date(),
+          tip: "Active L1-L4 growth boosts all levels and increases your DDR income"
         }
       }
     });
@@ -1212,7 +1212,7 @@ export const getUserCRREarnings = asyncHandler(async (req, res) => {
           currentRank: crrRankProgress.currentRank,
           rankIcon: crrRankProgress.icon,
           nextRank: crrRankProgress.nextRank,
-        totalCRREarnings,
+          totalCRREarnings,
           availableBalance: totalCRREarnings,
           lastUpdated: new Date()
         },
@@ -1314,7 +1314,7 @@ export const getCRRTransactionHistory = asyncHandler(async (req, res) => {
         date: data.timestamp,
         crrAmount: 0, // CRR amount would need to be calculated or stored separately
         totalRideAmount: 0, // Total ride amount would need to be stored separately
-      qualificationPointsEarned: {
+        qualificationPointsEarned: {
           PGP: data.pgp,
           TGP: data.tgp
         },
@@ -1375,7 +1375,7 @@ export const getUserCRRRankTracking = asyncHandler(async (req, res) => {
         message: "User not found"
       });
     }
-    
+
     const mlm = await MLM.findOne();
     if (!mlm) {
       return res.status(404).json({
@@ -1589,9 +1589,9 @@ export const getCRRLeaderboard = asyncHandler(async (req, res) => {
             isHighlighted: true,
             isInTopList: currentUserPosition.isInTopList
           } : null,
-        totalParticipants: rankedLeaderboard.length,
-        lastUpdated: new Date(),
-        tip: "Maintain consistent TGP and PGP growth to advance ranks and increase CRR rewards"
+          totalParticipants: rankedLeaderboard.length,
+          lastUpdated: new Date(),
+          tip: "Maintain consistent TGP and PGP growth to advance ranks and increase CRR rewards"
         }
       }
     });
@@ -3377,7 +3377,7 @@ export const getBBRTips = asyncHandler(async (req, res) => {
 // Admin: Create new BBR campaign
 export const createBBRCampaign = asyncHandler(async (req, res) => {
   try {
-    const { name, requirement, duration, reward, type, newbieRidesOnly, description } = req.body;
+    const { name, requirement, duration, reward, type, newbieRidesOnly } = req.body;
     
     if (!name || !requirement || !duration || !reward || !type) {
       return res.status(400).json({
@@ -3418,7 +3418,6 @@ export const createBBRCampaign = asyncHandler(async (req, res) => {
       },
       type,
       newbieRidesOnly: newbieRidesOnly !== undefined ? newbieRidesOnly : true,
-      description: description || '',
       isActive: true,
       participants: [],
       totalParticipants: 0,
@@ -5697,7 +5696,7 @@ export const getBBRDashboard = asyncHandler(async (req, res) => {
       {
         $addFields: {
           totalRides: {
-              $add: [
+            $add: [
               { $ifNull: ["$bbrParticipation.currentCampaign.soloRides", 0] },
               { $ifNull: ["$bbrParticipation.currentCampaign.teamRides", 0] }
             ]
@@ -5790,7 +5789,7 @@ export const getBBRDashboard = asyncHandler(async (req, res) => {
       reward: currentCampaign.reward,
       period: `${new Date(currentCampaign.startDate).toLocaleDateString()} – ${new Date(currentCampaign.endDate).toLocaleDateString()}`
     };
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -5823,6 +5822,311 @@ export const getBBRDashboard = asyncHandler(async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error getting BBR dashboard",
+      error: error.message
+    });
+  }
+});
+
+// Simplified BBR Campaign Management - Update Campaign (Admin only)
+export const updateBBRCampaign = asyncHandler(async (req, res) => {
+  try {
+    const { campaignId, name, requirement, duration, reward, type, newbieRidesOnly } = req.body;
+
+    if (!campaignId) {
+      return res.status(400).json({
+        success: false,
+        message: "Campaign ID is required"
+      });
+    }
+
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Find the campaign to update
+    const campaignIndex = mlm.bbrCampaigns.findIndex(
+      campaign => campaign._id.toString() === campaignId
+    );
+
+    if (campaignIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found"
+      });
+    }
+
+    const campaign = mlm.bbrCampaigns[campaignIndex];
+
+    // Update campaign fields
+    if (name !== undefined) campaign.name = name;
+    if (requirement !== undefined) campaign.requirement = requirement;
+    if (duration !== undefined) campaign.duration = duration;
+    if (reward !== undefined) campaign.reward = reward;
+    if (type !== undefined) campaign.type = type;
+    if (newbieRidesOnly !== undefined) campaign.newbieRidesOnly = newbieRidesOnly;
+
+    // Recalculate end date if duration changed
+    if (duration !== undefined) {
+      campaign.endDate = new Date(campaign.startDate.getTime() + (duration * 24 * 60 * 60 * 1000));
+    }
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: "BBR campaign updated successfully",
+      data: {
+        campaignId: campaign._id,
+        name: campaign.name,
+        requirement: campaign.requirement,
+        duration: campaign.duration,
+        reward: campaign.reward,
+        type: campaign.type,
+        newbieRidesOnly: campaign.newbieRidesOnly,
+        startDate: campaign.startDate,
+        endDate: campaign.endDate
+      }
+    });
+  } catch (error) {
+    console.error("Error updating BBR campaign:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating BBR campaign",
+      error: error.message
+    });
+  }
+});
+
+// Simplified BBR Campaign Management - Delete Campaign (Admin only)
+export const deleteBBRCampaign = asyncHandler(async (req, res) => {
+  try {
+    const { campaignId } = req.body;
+
+    if (!campaignId) {
+      return res.status(400).json({
+        success: false,
+        message: "Campaign ID is required"
+      });
+    }
+
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Find and remove the campaign
+    const campaignIndex = mlm.bbrCampaigns.findIndex(
+      campaign => campaign._id.toString() === campaignId
+    );
+
+    if (campaignIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found"
+      });
+    }
+
+    const deletedCampaign = mlm.bbrCampaigns.splice(campaignIndex, 1)[0];
+
+    // If this was the active campaign, clear it
+    if (mlm.activeBBRCampaign && mlm.activeBBRCampaign._id.toString() === campaignId) {
+      mlm.activeBBRCampaign = null;
+    }
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: "BBR campaign deleted successfully",
+      data: {
+        campaignId: deletedCampaign._id,
+        name: deletedCampaign.name
+      }
+    });
+  } catch (error) {
+    console.error("Error deleting BBR campaign:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting BBR campaign",
+      error: error.message
+    });
+  }
+});
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Get past wins from user's BBR history
+    const pastWins = user.bbrParticipation?.history
+      ?.filter(campaign => campaign.isWinner)
+      .sort((a, b) => new Date(b.completedAt || b.participatedAt) - new Date(a.completedAt || a.participatedAt))
+      .slice(skip, skip + limit) || [];
+
+    res.status(200).json({
+      success: true,
+      data: {
+        pastWins: pastWins.map(win => ({
+          name: win.campaignName || 'BBR Campaign',
+          status: 'Achieved',
+          reward: win.rewardAmount,
+          date: win.completedAt || win.participatedAt
+        })),
+        pagination: {
+          page,
+          limit,
+          total: user.bbrParticipation?.history?.filter(c => c.isWinner)?.length || 0,
+          hasMore: pastWins.length === limit
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error getting past BBR wins:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting past BBR wins",
+      error: error.message
+    });
+  }
+});
+
+// Simplified BBR Campaign Management - Update Campaign (Admin only)
+export const updateBBRCampaign = asyncHandler(async (req, res) => {
+  try {
+    const { campaignId, name, requirement, duration, reward, type, newbieRidesOnly } = req.body;
+
+    if (!campaignId) {
+      return res.status(400).json({
+        success: false,
+        message: "Campaign ID is required"
+      });
+    }
+
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Find the campaign to update
+    const campaignIndex = mlm.bbrCampaigns.findIndex(
+      campaign => campaign._id.toString() === campaignId
+    );
+
+    if (campaignIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found"
+      });
+    }
+
+    const campaign = mlm.bbrCampaigns[campaignIndex];
+
+    // Update campaign fields
+    if (name !== undefined) campaign.name = name;
+    if (requirement !== undefined) campaign.requirement = requirement;
+    if (duration !== undefined) campaign.duration = duration;
+    if (reward !== undefined) campaign.reward = reward;
+    if (type !== undefined) campaign.type = type;
+    if (newbieRidesOnly !== undefined) campaign.newbieRidesOnly = newbieRidesOnly;
+
+    // Recalculate end date if duration changed
+    if (duration !== undefined) {
+      campaign.endDate = new Date(campaign.startDate.getTime() + (duration * 24 * 60 * 60 * 1000));
+    }
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: "BBR campaign updated successfully",
+      data: {
+        campaignId: campaign._id,
+        name: campaign.name,
+        requirement: campaign.requirement,
+        duration: campaign.duration,
+        reward: campaign.reward,
+        type: campaign.type,
+        newbieRidesOnly: campaign.newbieRidesOnly,
+        startDate: campaign.startDate,
+        endDate: campaign.endDate
+      }
+    });
+  } catch (error) {
+    console.error("Error updating BBR campaign:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating BBR campaign",
+      error: error.message
+    });
+  }
+});
+
+// Simplified BBR Campaign Management - Delete Campaign (Admin only)
+export const deleteBBRCampaign = asyncHandler(async (req, res) => {
+  try {
+    const { campaignId } = req.body;
+
+    if (!campaignId) {
+      return res.status(400).json({
+        success: false,
+        message: "Campaign ID is required"
+      });
+    }
+
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Find and remove the campaign
+    const campaignIndex = mlm.bbrCampaigns.findIndex(
+      campaign => campaign._id.toString() === campaignId
+    );
+
+    if (campaignIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Campaign not found"
+      });
+    }
+
+    const deletedCampaign = mlm.bbrCampaigns.splice(campaignIndex, 1)[0];
+
+    // If this was the active campaign, clear it
+    if (mlm.activeBBRCampaign && mlm.activeBBRCampaign._id.toString() === campaignId) {
+      mlm.activeBBRCampaign = null;
+    }
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: "BBR campaign deleted successfully",
+      data: {
+        campaignId: deletedCampaign._id,
+        name: deletedCampaign.name
+      }
+    });
+  } catch (error) {
+    console.error("Error deleting BBR campaign:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error deleting BBR campaign",
       error: error.message
     });
   }
