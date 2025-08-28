@@ -3952,6 +3952,179 @@ async function distributeRegionalAmbassadorEarnings(totalAmount, rideId) {
   }
 }
 
+// Claim CRR Rank Reward
+export const claimCRRReward = asyncHandler(async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Check if user has unclaimed CRR reward
+    if (!user.crrRank.rewardAmount || user.crrRank.rewardClaimed) {
+      return res.status(400).json({
+        success: false,
+        message: "No unclaimed CRR reward available"
+      });
+    }
+
+    const rewardAmount = user.crrRank.rewardAmount;
+
+    // Initialize wallet if it doesn't exist
+    if (!user.wallet) {
+      user.wallet = {
+        balance: 0,
+        transactions: []
+      };
+    }
+
+    // Add reward to wallet
+    user.wallet.balance += rewardAmount;
+    user.wallet.transactions.push({
+      amount: rewardAmount,
+      type: 'credit',
+      description: `CRR Rank Reward - ${user.crrRank.current}`,
+      timestamp: new Date()
+    });
+
+    // Mark reward as claimed
+    user.crrRank.rewardClaimed = true;
+    user.crrRank.rewardClaimedAt = new Date();
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "CRR reward claimed successfully",
+      data: {
+        rewardAmount,
+        newBalance: user.wallet.balance,
+        rank: user.crrRank.current,
+        claimedAt: user.crrRank.rewardClaimedAt
+      }
+    });
+  } catch (error) {
+    console.error("Error claiming CRR reward:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error claiming CRR reward",
+      error: error.message
+    });
+  }
+});
+
+// Distribute BBR Campaign Rewards
+export const distributeBBRRewards = asyncHandler(async (req, res) => {
+  try {
+    const { campaignId } = req.params;
+    
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Find the campaign
+    const campaign = mlm.bbrCampaigns.find(c => c._id.toString() === campaignId);
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: "BBR campaign not found"
+      });
+    }
+
+    // Check if campaign is ended
+    if (!campaign.isEnded) {
+      return res.status(400).json({
+        success: false,
+        message: "Campaign is still active"
+      });
+    }
+
+    // Get all users who achieved the campaign
+    const users = await User.find({
+      'bbrParticipation.history.campaignId': campaignId,
+      'bbrParticipation.history.achieved': true,
+      'bbrParticipation.history.isWinner': false // Not already processed
+    });
+
+    let totalDistributed = 0;
+    const distributionResults = [];
+
+    for (const user of users) {
+      try {
+        // Find the campaign participation record
+        const participation = user.bbrParticipation.history.find(
+          h => h.campaignId.toString() === campaignId && h.achieved && !h.isWinner
+        );
+
+        if (participation) {
+          // Initialize wallet if it doesn't exist
+          if (!user.wallet) {
+            user.wallet = {
+              balance: 0,
+              transactions: []
+            };
+          }
+
+          // Add reward to wallet
+          user.wallet.balance += campaign.rewardAmount;
+          user.wallet.transactions.push({
+            amount: campaign.rewardAmount,
+            type: 'credit',
+            description: `BBR Campaign Reward - ${campaign.name}`,
+            timestamp: new Date()
+          });
+
+          // Mark as winner and update total rewards
+          participation.isWinner = true;
+          participation.completedAt = new Date();
+          user.bbrParticipation.totalWins += 1;
+          user.bbrParticipation.totalRewardsEarned += campaign.rewardAmount;
+
+          await user.save();
+          totalDistributed += campaign.rewardAmount;
+
+          distributionResults.push({
+            userId: user._id,
+            name: `${user.firstName} ${user.lastName}`,
+            rewardAmount: campaign.rewardAmount,
+            totalRides: participation.totalRides
+          });
+        }
+      } catch (error) {
+        console.error(`Error distributing BBR reward to user ${user._id}:`, error);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "BBR rewards distributed successfully",
+      data: {
+        campaignId,
+        campaignName: campaign.name,
+        totalDistributed,
+        totalWinners: distributionResults.length,
+        distributionResults
+      }
+    });
+  } catch (error) {
+    console.error("Error distributing BBR rewards:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error distributing BBR rewards",
+      error: error.message
+    });
+  }
+});
+
 // Admin: Update HLR configuration
 export const updateHLRConfig = asyncHandler(async (req, res) => {
   try {

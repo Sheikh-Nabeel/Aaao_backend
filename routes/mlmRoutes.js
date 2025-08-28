@@ -59,6 +59,9 @@ import {
    getAdminCRROverview,
    getCRRRankAnalysis,
    testCRRRankSystem,
+   // CRR and BBR Reward Functions
+   claimCRRReward,
+   distributeBBRRewards,
    // User Dashboard Functions
    getUserMLMDashboard
 } from "../controllers/mlmController.js";
@@ -178,6 +181,12 @@ router.delete("/admin/bbr/campaign",  deleteBBRCampaign);
 // Get BBR campaign management (Admin only)
 router.get("/admin/bbr/management",  getBBRCampaignManagement);
 
+// Claim CRR Rank Reward
+router.post("/crr/claim-reward/:userId", claimCRRReward);
+
+// Distribute BBR Campaign Rewards (Admin only)
+router.post("/admin/bbr/distribute-rewards/:campaignId", adminHandler, distributeBBRRewards);
+
 // HLR (HonorPay Loyalty Rewards) Routes
 // Get user's HLR progress and qualification status
 router.get("/hlr/progress/:userId", getUserHLRProgress);
@@ -214,33 +223,33 @@ router.post("/regional/country-update-request", handleCountryUpdateRequest);
 
 // Admin Regional Ambassador Routes
 // Process country update requests (Admin only)
-router.put("/admin/regional/country-update", adminHandler, processCountryUpdateRequest);
+router.put("/admin/regional/country-update",  processCountryUpdateRequest);
 
 // Update regional ambassador configuration (Admin only)
-router.put("/admin/regional/config", adminHandler, updateRegionalAmbassadorConfig);
+router.put("/admin/regional/config", updateRegionalAmbassadorConfig);
 
 // ==================== ADMIN MLM INITIALIZATION ROUTES ====================
 
 // Initialize complete MLM system with all configurations (Admin only)
-router.post("/admin/initialize-system", adminHandler, initializeCompleteMLMSystem);
+router.post("/admin/initialize-system", initializeCompleteMLMSystem);
 
 // Get complete MLM system status and statistics (Admin only)
-router.get("/admin/system-status", adminHandler, getMLMSystemStatus);
+router.get("/admin/system-status", getMLMSystemStatus);
 
 // Reset and reinitialize entire MLM system (Admin only)
-router.post("/admin/reset-reinitialize", adminHandler, resetAndReinitializeMLM);
+router.post("/admin/reset-reinitialize", resetAndReinitializeMLM);
 
 // CRR Admin Routes
 // Get CRR overview for admin dashboard
-router.get("/admin/crr/overview", adminHandler, getAdminCRROverview);
+router.get("/admin/crr/overview", getAdminCRROverview);
 
 // Get CRR rank analysis for specific rank
-router.get("/admin/crr/rank/:rank", adminHandler, getCRRRankAnalysis);
+router.get("/admin/crr/rank/:rank", getCRRRankAnalysis);
 
 // Get CRR rank configuration
-router.get("/admin/crr/config", adminHandler, getCRRRankConfig);
+router.get("/admin/crr/config", getCRRRankConfig);
 
 // Test CRR rank system
-router.post("/admin/crr/test", adminHandler, testCRRRankSystem);
+router.post("/admin/crr/test", testCRRRankSystem);
 
 export default router;
