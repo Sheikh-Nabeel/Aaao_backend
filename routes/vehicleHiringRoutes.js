@@ -15,7 +15,8 @@ import {
   rejectDriverHiring,
   applyForDriverHiring,
   getDriverApplications,
-  acceptDriverApplication
+  acceptDriverApplication,
+  getAllDriverHirings
 } from "../controllers/vehicleHiringController.js";
 
 const storage = multer.diskStorage({
@@ -81,5 +82,6 @@ router.get("/driver-applications/:driverHiringId", authHandler, getDriverApplica
 
 // API 12: Accept Driver Application
 router.post("/accept-driver-application/:driverHiringId/:driverId", authHandler, acceptDriverApplication);
+router.get("/all-driver-hirings",  getAllDriverHirings);
 
 export default router;
