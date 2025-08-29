@@ -814,15 +814,20 @@ export const getAdminMLMDashboard = asyncHandler(async (req, res) => {
         timestamp: transaction.timestamp
       }));
 
+    // Calculate total earnings from all sources
+    const totalEarnings = Object.values(sectionTotals).reduce((sum, value) => sum + value, 0);
+
     res.status(200).json({
       success: true,
       data: {
         totalMLMAmount: mlm.totalAmount,
+        totalEarnings,
         sectionTotals,
         ddrLevelTotals,
         totalTransactions: mlm.transactions.length,
         recentTransactions,
         percentageConfiguration: {
+          // Main distribution percentages
           ddr: mlm.ddr,
           crr: mlm.crr,
           bbr: mlm.bbr,
@@ -834,7 +839,76 @@ export const getAdminMLMDashboard = asyncHandler(async (req, res) => {
           technologyPool: mlm.technologyPool,
           foundationPool: mlm.foundationPool,
           publicShare: mlm.publicShare,
-          netProfit: mlm.netProfit
+          netProfit: mlm.netProfit,
+          
+          // DDR sub-distributions
+          ddrSubDistribution: {
+            level1: mlm.ddrLevel1,
+            level2: mlm.ddrLevel2,
+            level3: mlm.ddrLevel3,
+            level4: mlm.ddrLevel4
+          },
+          
+          // CRR sub-distributions (based on rank system)
+          crrSubDistribution: {
+            Challenger: mlm.crrRanks?.Challenger?.reward || 1000,
+            Warrior: mlm.crrRanks?.Warrior?.reward || 5000,
+            Tycoon: mlm.crrRanks?.Tycoon?.reward || 20000,
+            Champion: mlm.crrRanks?.CHAMPION?.reward || 50000,
+            Boss: mlm.crrRanks?.BOSS?.reward || 200000
+          },
+          
+          // BBR sub-distributions (based on campaigns)
+          bbrSubDistribution: {
+            weeklyTurboBooster: mlm.bbrCampaigns?.current?.reward?.amount || 550
+          },
+          
+          // HLR sub-distributions
+          hlrSubDistribution: {
+            retirementReward: mlm.hlrConfig?.rewardAmount || 60000
+          },
+          
+          // Regional Ambassador sub-distributions
+          regionalAmbassadorSubDistribution: {
+            Challenger: 'Level 1',
+            Warrior: 'Level 2',
+            Tycoon: 'Level 3',
+            Champion: 'Level 4',
+            Boss: 'Level 5'
+          },
+          
+          // Porparle Team sub-distributions
+          porparleTeamSubDistribution: {
+            gc: mlm.gc,
+            la: mlm.la,
+            ceo: mlm.ceo,
+            coo: mlm.coo,
+            cmo: mlm.cmo,
+            cfo: mlm.cfo,
+            cto: mlm.cto,
+            chro: mlm.chro,
+            topTeamPerform: mlm.topTeamPerform
+          },
+          
+          // Top Team Performance sub-distributions
+          topTeamPerformSubDistribution: {
+            winner: mlm.winner,
+            fighter: mlm.fighter
+          },
+          
+          // Company Operations sub-distributions
+          companyOperationsSubDistribution: {
+            operationExpense: mlm.operationExpense,
+            organizationEvent: mlm.organizationEvent
+          },
+          
+          // Public Share sub-distributions
+          publicShareSubDistribution: {
+            chairmanFounder: mlm.chairmanFounder,
+            shareholder1: mlm.shareholder1,
+            shareholder2: mlm.shareholder2,
+            shareholder3: mlm.shareholder3
+          }
         }
       }
     });
@@ -5861,12 +5935,12 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
       total: { accumulated: 0, current: 0 }
     };
 
-    // Calculate CRR earnings (1 PGP = 1 AED, 1 TGP = 1 AED)
+    // Calculate CRR earnings based on rank achievement, not qualification points
     const crrEarnings = {
-      pgpEarnings: qualificationStats.pgp.accumulated,
-      tgpEarnings: qualificationStats.tgp.accumulated,
-      totalEarnings: qualificationStats.total.accumulated,
-      currentRank: user.crrRank?.current || 'Bronze',
+      pgpEarnings: qualificationStats.pgp.accumulated, // Keep for reference
+      tgpEarnings: qualificationStats.tgp.accumulated, // Keep for reference
+      totalEarnings: user.crrRank?.rewardAmount || 0, // Use rank-based reward amount instead of points
+      currentRank: user.crrRank?.current || 'None',
       nextRank: null,
       progressToNext: 0
     };
@@ -5967,7 +6041,7 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
     // Calculate total earnings
     const totalEarnings = {
       ddr: ddrEarnings.total,
-      crr: crrEarnings.totalEarnings,
+      crr: crrEarnings.totalEarnings, // Now using rank-based reward amount
       bbr: bbrEarnings.totalRewardsEarned,
       hlr: hlrEarnings.totalEarnings,
       regionalAmbassador: regionalAmbassadorEarnings.totalEarnings,
@@ -5989,7 +6063,8 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
       },
       wallet: {
         currentBalance: user.wallet?.balance || 0,
-        totalEarnings: totalEarnings.total
+        totalEarnings: totalEarnings.total,
+        totalEarned: totalEarnings.total
       },
       ddr: {
         earnings: ddrEarnings,
@@ -6001,10 +6076,18 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
         }
       },
       crr: {
-        earnings: crrEarnings,
+        earnings: {
+          pgpEarnings: qualificationStats.pgp.accumulated, // Points for reference
+          tgpEarnings: qualificationStats.tgp.accumulated, // Points for reference
+          totalEarnings: user.crrRank?.rewardAmount || 0, // Rank-based reward amount
+          currentRank: user.crrRank?.current || 'None',
+          nextRank: crrEarnings.nextRank,
+          progressToNext: crrEarnings.progressToNext,
+          rewardClaimed: user.crrRank?.rewardClaimed || false // Add reward claim status
+        },
         qualificationPoints: qualificationStats,
         rankProgress: {
-          current: crrEarnings.currentRank,
+          current: user.crrRank?.current || 'None',
           next: crrEarnings.nextRank,
           progress: crrEarnings.progressToNext
         }
@@ -6032,6 +6115,7 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
       },
       summary: {
         totalEarnings: totalEarnings,
+        totalEarned: totalEarnings.total,
         earningsBreakdown: {
           ddr: { amount: totalEarnings.ddr, percentage: totalEarnings.total > 0 ? (totalEarnings.ddr / totalEarnings.total * 100).toFixed(2) : 0 },
           crr: { amount: totalEarnings.crr, percentage: totalEarnings.total > 0 ? (totalEarnings.crr / totalEarnings.total * 100).toFixed(2) : 0 },
