@@ -28,6 +28,7 @@ const signupUser = asyncHandler(async (req, res) => {
     password,
     sponsorBy,
     gender,
+    otp // New field for OTP verification
   } = req.body;
   const referralUsername = req.query.ref;
 
@@ -37,7 +38,8 @@ const signupUser = asyncHandler(async (req, res) => {
     !email ||
     !phoneNumber ||
     !password ||
-    !gender
+    !gender ||
+    !otp // OTP is now required
   ) {
     res.status(400);
     throw new Error("All required fields must be provided");
@@ -63,6 +65,34 @@ const signupUser = asyncHandler(async (req, res) => {
     return;
   }
 
+  // Import EmailVerification model
+  const EmailVerification = mongoose.model('EmailVerification');
+  
+  // Check if email is verified with OTP
+  const emailVerification = await EmailVerification.findOne({ email: normalizedEmail });
+  if (!emailVerification) {
+    res.status(400);
+    throw new Error("Email not verified. Please request OTP verification first.");
+  }
+  
+  // Verify OTP
+  if (!emailVerification.isVerified) {
+    // Check if OTP is valid
+    if (Date.now() > emailVerification.otpExpires) {
+      res.status(400);
+      throw new Error("OTP has expired. Please request a new OTP.");
+    }
+    
+    if (emailVerification.otp !== otp) {
+      res.status(400);
+      throw new Error("Invalid OTP. Please try again.");
+    }
+    
+    // Mark email as verified
+    emailVerification.isVerified = true;
+    await emailVerification.save();
+  }
+
   let finalSponsorBy = sponsorBy;
   if (referralUsername) {
     const sponsor = await User.findOne({ username: referralUsername });
@@ -83,64 +113,66 @@ const signupUser = asyncHandler(async (req, res) => {
     finalSponsorBy = sponsorBy;
   }
 
-  const existingUser = await User.findOne({
-    $or: [{ email: normalizedEmail }, { phoneNumber }, { username }],
+  // Create new user with verified email
+  const user = await User.create({
+    username,
+    firstName,
+    lastName: lastName || "",
+    email: normalizedEmail,
+    phoneNumber,
+    password,
+    sponsorBy: finalSponsorBy || null,
+    gender,
+    isVerified: true, // User is already verified through email OTP
+    role: "customer",
+    sponsorId: `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`,
+    pendingVehicleData: null,
   });
-  let otp;
-  if (existingUser) {
-    if (existingUser.isVerified) {
-      res.status(400);
-      throw new Error(
-        "A user with this email, phone number, or username already exists"
-      );
-    }
-    otp = generateOTP();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-    existingUser.otp = otp;
-    existingUser.otpExpires = otpExpires;
-    existingUser.username = username;
-    existingUser.firstName = firstName;
-    existingUser.lastName = lastName || "";
-    existingUser.phoneNumber = phoneNumber;
-    existingUser.password = password;
-    existingUser.sponsorBy = finalSponsorBy || null;
-    existingUser.gender = gender;
-    existingUser.email = normalizedEmail;
-    await existingUser.save();
-    console.log("Updated existing user:", existingUser.email, existingUser.otp);
-  } else {
-    const user = await User.create({
-      username,
-      firstName,
-      lastName: lastName || "",
-      email: normalizedEmail,
-      phoneNumber,
-      password,
-      sponsorBy: finalSponsorBy || null,
-      gender,
-      otp: generateOTP(),
-      otpExpires: new Date(Date.now() + 10 * 60 * 1000),
-      isVerified: false,
-      role: "customer",
-      sponsorId: `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`,
-      pendingVehicleData: null,
+  
+  console.log("Created new user with verified email:", user.email);
+
+  // Process sponsor relationships if applicable
+  let sponsorName = null;
+  if (user.sponsorBy) {
+    const sponsor = await User.findOne({
+      $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
     });
-    otp = user.otp;
-    console.log("Created new user:", user.email, user.otp);
+    if (sponsor) {
+      await updateReferralTree(user._id, user.sponsorBy);
+      sponsorName = `${sponsor.firstName}${
+        sponsor.lastName ? " " + sponsor.lastName : ""
+      }`;
+    }
   }
 
-  try {
-    await sendOTPEmail(normalizedEmail, otp, "account verification");
-    console.log(`Email sent to ${normalizedEmail} with OTP: ${otp}`);
-  } catch (error) {
-    console.error(`Failed to send email to ${normalizedEmail}:`, error.message);
-    res.status(500);
-    throw new Error("Failed to send OTP email");
-  }
-
-  res.status(200).json({
-    message: "OTP sent. Please verify to complete registration.",
-    sponsorBy: finalSponsorBy,
+  // Generate token for automatic login
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRY,
+  });
+  
+  res.cookie("token", token, {
+    httpOnly: true,
+    maxAge: 3600000,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+  
+  res.status(201).json({
+    message: "Registration completed successfully",
+    token,
+    userId: user._id,
+    username: user.username,
+    sponsorId: user.sponsorId,
+    user: {
+      username: user.username,
+      firstName: user.firstName,
+      lastName: user.lastName || "",
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      sponsorBy: user.sponsorBy,
+      gender: user.gender,
+      role: user.role,
+    },
   });
 });
 
@@ -155,78 +187,40 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
   // Normalize email to lowercase
   email = email.trim().toLowerCase();
 
-  const user = await User.findOne({ email });
-  if (!user) {
+  // Import EmailVerification model
+  const EmailVerification = mongoose.model('EmailVerification');
+  
+  // Find email verification record
+  const emailVerification = await EmailVerification.findOne({ email });
+  if (!emailVerification) {
     res.status(404);
-    throw new Error("User not found. Please sign up first.");
+    throw new Error("Email verification not found. Please request OTP first.");
   }
-  if (Date.now() > user.otpExpires || !user.otpExpires) {
+  
+  if (emailVerification.isVerified) {
     res.status(400);
-    throw new Error("OTP has expired. Please sign up again.");
+    throw new Error("Email already verified. You can proceed to registration.");
   }
-  if (user.otp !== otp) {
+  
+  if (Date.now() > emailVerification.otpExpires || !emailVerification.otpExpires) {
+    res.status(400);
+    throw new Error("OTP has expired. Please request a new OTP.");
+  }
+  
+  if (emailVerification.otp !== otp) {
     res.status(400);
     throw new Error("Invalid OTP");
   }
+  
+  // Mark email as verified
+  emailVerification.isVerified = true;
+  await emailVerification.save();
 
-  let sponsorName = null;
-  if (user.sponsorBy) {
-    const sponsor = await User.findOne({
-      $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
-    });
-    if (sponsor) {
-      await updateReferralTree(user._id, user.sponsorBy);
-      sponsorName = `${sponsor.firstName}${
-        sponsor.lastName ? " " + sponsor.lastName : ""
-      }`;
-    }
-  }
-
-  user.isVerified = true;
-  user.otp = null;
-  user.otpExpires = null;
-  await user.save();
-
-  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRY,
-  });
-  res.cookie("token", token, {
-    httpOnly: true,
-    maxAge: 3600000,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-  });
-  const sponsoredUsers = user.sponsorTree
-    .map((s) => `${s.firstName}${s.lastName ? " " + s.lastName : ""}`)
-    .join(", ");
-  res.status(201).json({
-    message: "Registration completed successfully",
-    token,
-    userId: user._id,
-    username: user.username,
-    sponsorId: user.sponsorId,
-    level: user.level,
-    sponsorTree: user.sponsorTree.map((s) => ({
-      id: s._id,
-      name: `${s.firstName}${s.lastName ? " " + s.lastName : ""}`,
-    })),
-    sponsoredUsers: sponsoredUsers || "No sponsored users",
-    sponsorName: sponsorName,
-    user: {
-      username: user.username,
-      firstName: user.firstName,
-      lastName: user.lastName || "",
-      email: user.email,
-      phoneNumber: user.phoneNumber,
-      sponsorBy: user.sponsorBy,
-      country: user.country,
-      kycLevel: user.kycLevel,
-      kycStatus: user.kycStatus,
-      hasVehicle: user.hasVehicle,
-      pendingVehicleData: user.pendingVehicleData,
-      gender: user.gender,
-      role: user.role,
-    },
+  // Return success response
+  res.status(200).json({
+    message: "Email verified successfully. You can now proceed with registration.",
+    email: email,
+    isVerified: true
   });
 });
 

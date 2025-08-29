@@ -20,6 +20,7 @@ import adminComprehensivePricingRoutes from "./routes/adminComprehensivePricingR
 import appointmentRoutes from "./routes/appointmentRoutes.js"; // Added appointment routes
 import fareEstimationRoutes from "./routes/fareEstimationRoutes.js"; // Added fare estimation routes
 import walletRoutes from "./routes/walletRoutes.js"; // Added wallet routes
+import emailVerificationRoutes from "./routes/emailVerificationRoutes.js"; // Added email verification routes
 
 import cloudinary from "cloudinary";
 import "colors";
@@ -101,6 +102,7 @@ app.use("/api/admin/comprehensive-pricing", adminComprehensivePricingRoutes); //
 app.use("/api/appointments", appointmentRoutes); // Added appointment routes
 app.use("/api/fare", fareEstimationRoutes); // Added fare estimation routes
 app.use("/api/wallet", walletRoutes); // Added wallet routes
+app.use("/api/email-verification", emailVerificationRoutes); // Added email verification routes
 
 connectDB();
 
