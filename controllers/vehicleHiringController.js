@@ -924,6 +924,38 @@ const acceptDriverApplication = asyncHandler(async (req, res) => {
   });
 });
 
+const getAllDriverHirings = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 10, status, vehicleType, engagementType } = req.query;
+
+  // Build query object for filtering
+  const query = {};
+  if (status) query.approvalStatus = status;
+  if (vehicleType) query.vehicleType = vehicleType;
+  if (engagementType) query.engagementType = engagementType;
+
+  // Calculate pagination
+  const skip = (Number(page) - 1) * Number(limit);
+
+  // Fetch driver hiring posts
+  const driverHirings = await DriverHiring.find(query)
+    .populate("userId", "username firstName lastName email phoneNumber")
+    .populate("vehicleId", "vehiclePlateNumber vehicleMakeModel vehicleType")
+    .select("-__v")
+    .skip(skip)
+    .limit(Number(limit))
+    .lean();
+
+  // Get total count for pagination
+  const totalPosts = await DriverHiring.countDocuments(query);
+
+  res.status(200).json({
+    message: "Driver hiring posts retrieved successfully",
+    driverHirings,
+    totalPosts,
+    currentPage: Number(page),
+    totalPages: Math.ceil(totalPosts / Number(limit)),
+  });
+});
 export {
   registerVehicle,
   setDriverDecision,
@@ -937,4 +969,5 @@ export {
   applyForDriverHiring,
   getDriverApplications,
   acceptDriverApplication,
+  getAllDriverHirings,
 };
