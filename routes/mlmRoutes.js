@@ -1,4 +1,5 @@
 import express from "express";
+import { validateUserId } from "../middlewares/userIdValidation.js";
 import {
   createMLM,
   getMLM,
@@ -85,7 +86,7 @@ router.put("/update-all", updateAllMLMDistributions);
 router.post("/add-money", addMoneyToMLM);
 
 // Get user's MLM information
-router.get("/user/:userId", getUserMLMInfo);
+router.get("/user/:userId", validateUserId, getUserMLMInfo);
 
 // Get MLM statistics (Admin only)
 router.get("/stats", getMLMStats);
@@ -108,39 +109,39 @@ router.post("/distribute-ride", distributeRideMLM);
 router.get("/admin-dashboard", getAdminMLMDashboard);
 
 // User DDR tree view
-router.get("/user-tree/:userId", getUserDDRTree);
+router.get("/user-tree/:userId", validateUserId, getUserDDRTree);
 
 // Get user's MLM earnings summary (Dual-Tree System)
-router.get("/user-earnings/:userId", getUserMLMEarningsSummary);
+router.get("/user-earnings/:userId", validateUserId, getUserMLMEarningsSummary);
 
 // Get comprehensive user MLM dashboard with all earnings breakdown
-router.get("/user-dashboard/:userId", getUserMLMDashboard);
+router.get("/user-dashboard/:userId", validateUserId, getUserMLMDashboard);
 
 // Get MLM earnings statistics for admin (Dual-Tree System)
 router.get("/earnings-stats", getMLMEarningsStats);
 
 // DDR Dashboard Routes
 // Get user DDR earnings by level
-router.get("/ddr/earnings/:userId", getUserDDREarnings);
+router.get("/ddr/earnings/:userId", validateUserId, getUserDDREarnings);
 
 // Get DDR transaction history with pagination
-router.get("/ddr/transactions/:userId", getDDRTransactionHistory);
+router.get("/ddr/transactions/:userId", validateUserId, getDDRTransactionHistory);
 
 // Get DDR leaderboard
 router.get("/ddr/leaderboard", getDDRLeaderboard);
 
 // CRR Dashboard Routes
 // Get user CRR earnings and qualification status
-router.get("/crr/earnings/:userId", getUserCRREarnings);
+router.get("/crr/earnings/:userId", validateUserId, getUserCRREarnings);
 
 // Get CRR transaction history
-router.get("/crr/transactions/:userId", getCRRTransactionHistory);
+router.get("/crr/transactions/:userId", validateUserId, getCRRTransactionHistory);
 
 // Get CRR leaderboard with rank-based grouping
 router.get("/crr/leaderboard", getCRRLeaderboard);
 
 // Get user's CRR rank tracking (all ranks with achievement status)
-router.get("/crr/rank-tracking/:userId", getUserCRRRankTracking);
+router.get("/crr/rank-tracking/:userId", validateUserId, getUserCRRRankTracking);
 
 // Admin Management Routes
 // Get motivational quotes for DDR/CRR dashboards
@@ -160,13 +161,13 @@ router.get("/admin/ddr-crr-stats",  getDDRCRRStats);
 
 // BBR (Bonus Booster Rewards) Routes
 // Get current BBR campaign with user progress
-router.get("/bbr/current-campaign/:userId", getCurrentBBRCampaign);
+router.get("/bbr/current-campaign/:userId", validateUserId, getCurrentBBRCampaign);
 
 // Get BBR leaderboard
 router.get("/bbr/leaderboard", getBBRLeaderboard);
 
 // Get user's past BBR wins history
-router.get("/bbr/past-wins/:userId", getPastBBRWins);
+router.get("/bbr/past-wins/:userId", validateUserId, getPastBBRWins);
 
 // Admin BBR Routes
 // Create new BBR campaign (Admin only)
@@ -182,14 +183,14 @@ router.delete("/admin/bbr/campaign",  deleteBBRCampaign);
 router.get("/admin/bbr/management",  getBBRCampaignManagement);
 
 // Claim CRR Rank Reward
-router.post("/crr/claim-reward/:userId", claimCRRReward);
+router.post("/crr/claim-reward/:userId", validateUserId, claimCRRReward);
 
 // Distribute BBR Campaign Rewards (Admin only)
 router.post("/admin/bbr/distribute-rewards/:campaignId", adminHandler, distributeBBRRewards);
 
 // HLR (HonorPay Loyalty Rewards) Routes
 // Get user's HLR progress and qualification status
-router.get("/hlr/progress/:userId", getUserHLRProgress);
+router.get("/hlr/progress/:userId", validateUserId, getUserHLRProgress);
 
 // Get HLR leaderboard
 router.get("/hlr/leaderboard", getHLRLeaderboard);
@@ -205,8 +206,8 @@ router.post("/admin/hlr/award", manuallyAwardHLR);
 router.get("/admin/hlr/management", getHLRManagement);
 
 // Regional Ambassador Routes
-// Get user's regional ambassador progress
-router.get("/regional/progress/:userId", getUserRegionalProgress);
+// Get user's Regional Ambassador progress
+router.get("/regional/progress/:userId", validateUserId, getUserRegionalProgress);
 
 // Get regional leaderboard by country
 router.get("/regional/leaderboard", getRegionalLeaderboard);
@@ -216,7 +217,7 @@ router.get("/regional/global-ambassadors", getGlobalAmbassadors);
 
 // Comprehensive Earnings Route
 // Get user's comprehensive earnings and progress from all MLM programs
-router.get("/comprehensive-earnings/:userId", getUserComprehensiveEarnings);
+router.get("/comprehensive-earnings/:userId", validateUserId, getUserComprehensiveEarnings);
 
 // Handle country update request from user
 router.post("/regional/country-update-request", handleCountryUpdateRequest);

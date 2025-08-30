@@ -334,7 +334,6 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       points: pgpPoints,
       rideId,
       type: 'pgp',
-      rideType: 'personal',
       rideFare: totalFare
     });
     
@@ -366,7 +365,6 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
         points: pgpPoints,
         rideId,
         type: 'pgp',
-        rideType: 'personal',
         rideFare: totalFare
       });
       
@@ -399,7 +397,6 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           points: tgpPoints,
           rideId,
           type: 'tgp', // Team members get TGP from downline activity
-          rideType: 'team',
           rideFare: totalFare
         });
         
@@ -465,7 +462,6 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             points: tgpPoints,
             rideId,
             type: 'tgp', // Team members get TGP from downline activity
-            rideType: 'team',
             rideFare: totalFare
           });
           
@@ -563,11 +559,11 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     
     try {
       // Process user MLM distribution
-      userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId, 'user_' + rideType);
+      userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId, rideType || 'personal');
       
       // Add the driver's MLM amount to the MLM system if driver exists
       if (driver) {
-        driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId, 'driver_' + rideType);
+        driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId, rideType || 'personal');
       }
       
       // Save the MLM model
@@ -577,17 +573,57 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       throw new Error(`MLM distribution error: ${error.message}`);
     }
 
-    // Update BBR team rides for sponsors (only count team members who registered after campaign creation)
+    // Update BBR participation for the campaign
     const activeBBRCampaign = mlm.bbrCampaigns?.current;
     if (activeBBRCampaign && activeBBRCampaign.isActive) {
       const campaignStartDate = new Date(activeBBRCampaign.startDate);
       
       // Update BBR participation automatically for all users
       if (activeBBRCampaign) {
-        const campaignStartDate = new Date(activeBBRCampaign.startDate);
+        // Initialize user's BBR participation if not exists
+        if (!user.bbrParticipation) {
+          user.bbrParticipation = {
+            currentCampaign: {
+              campaignId: activeBBRCampaign._id,
+              totalRides: 0,
+              soloRides: 0,
+              teamRides: 0,
+              achieved: false,
+              joinedAt: new Date(),
+              lastRideAt: null
+            },
+            totalWins: 0,
+            totalRewardsEarned: 0,
+            history: []
+          };
+        }
         
-        // Update BBR participation for user's upline sponsors (team rides)
+        // Check if user is participating in current campaign
+        if (!user.bbrParticipation.currentCampaign || 
+            !user.bbrParticipation.currentCampaign.campaignId ||
+            user.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+          user.bbrParticipation.currentCampaign = {
+            campaignId: activeBBRCampaign._id,
+            totalRides: 0,
+            soloRides: 0,
+            teamRides: 0,
+            achieved: false,
+            joinedAt: new Date(),
+            lastRideAt: null
+          };
+        }
+        
+        // Increment solo rides for user (these are the user's own rides)
+        user.bbrParticipation.currentCampaign.soloRides = (user.bbrParticipation.currentCampaign.soloRides || 0) + 1;
+        user.bbrParticipation.currentCampaign.totalRides = 
+          user.bbrParticipation.currentCampaign.soloRides + 
+          (user.bbrParticipation.currentCampaign.teamRides || 0);
+        user.bbrParticipation.currentCampaign.lastRideAt = new Date();
+        
+        // Process newbie rides for sponsors (team members who joined after campaign start date)
+        // Only count as team rides if the user was created after campaign start date
         if (user.createdAt > campaignStartDate) {
+          // Update team rides for user's upline sponsors
           for (let level = 1; level <= 4; level++) {
             const sponsor = userUpline[`level${level}`];
             if (sponsor) {
@@ -624,7 +660,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
                 };
               }
               
-              // Increment team rides for sponsor
+              // Increment team rides for sponsor (newbie rides - team members who joined after campaign start)
               sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
               sponsor.bbrParticipation.currentCampaign.totalRides = 
                 (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
@@ -674,7 +710,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
                 };
               }
               
-              // Increment team rides for sponsor
+              // Increment team rides for sponsor (newbie rides - team members who joined after campaign start)
               sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
               sponsor.bbrParticipation.currentCampaign.totalRides = 
                 (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
@@ -685,46 +721,6 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             }
           }
         }
-        
-        // Update user's own BBR participation for solo rides
-        if (!user.bbrParticipation) {
-          user.bbrParticipation = {
-            currentCampaign: {
-              campaignId: activeBBRCampaign._id,
-              totalRides: 0,
-              soloRides: 0,
-              teamRides: 0,
-              achieved: false,
-              joinedAt: new Date(),
-              lastRideAt: null
-            },
-            totalWins: 0,
-            totalRewardsEarned: 0,
-            history: []
-          };
-        }
-        
-        // Check if participating in current campaign
-        if (!user.bbrParticipation.currentCampaign || 
-            !user.bbrParticipation.currentCampaign.campaignId ||
-            user.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
-          user.bbrParticipation.currentCampaign = {
-            campaignId: activeBBRCampaign._id,
-            totalRides: 0,
-            soloRides: 0,
-            teamRides: 0,
-            achieved: false,
-            joinedAt: new Date(),
-            lastRideAt: null
-          };
-        }
-        
-        // Increment solo rides for user
-        user.bbrParticipation.currentCampaign.soloRides = (user.bbrParticipation.currentCampaign.soloRides || 0) + 1;
-        user.bbrParticipation.currentCampaign.totalRides = 
-          user.bbrParticipation.currentCampaign.soloRides + 
-          (user.bbrParticipation.currentCampaign.teamRides || 0);
-        user.bbrParticipation.currentCampaign.lastRideAt = new Date();
       }
       
       await user.save();
@@ -1206,6 +1202,7 @@ export const getDDRLeaderboard = asyncHandler(async (req, res) => {
     const formattedTopEarners = topEarners.map(user => ({
       rank: user.rank,
       name: user.name,
+      username: user.username, // Ensure username is included
       earnings: user.totalEarnings,
       levelBreakdown: user.levelBreakdown,
       profilePicture: user.profilePicture
@@ -1221,6 +1218,7 @@ export const getDDRLeaderboard = asyncHandler(async (req, res) => {
           currentUser: currentUserPosition ? {
             rank: currentUserPosition.rank,
             name: currentUserPosition.name,
+            username: currentUserPosition.username, // Ensure username is included
             earnings: currentUserPosition.totalEarnings,
             isHighlighted: true,
             isInTopList: currentUserPosition.isInTopList
@@ -1593,8 +1591,14 @@ export const getCRRLeaderboard = asyncHandler(async (req, res) => {
       const stats = user.getQualificationPointsStats();
       const crrRankProgress = user.getCRRRankProgress(mlm.crrRanks);
       
-      // Calculate CRR earnings (1 PGP = 1 AED, 1 TGP = 1 AED)
-      const totalCRREarnings = stats.pgp.accumulated + stats.tgp.accumulated;
+      // Calculate CRR earnings (only count if user has achieved a rank)
+      let totalCRREarnings = 0;
+      
+      // If user has a rank other than 'None', calculate earnings based on qualification points
+      // Otherwise, earnings should be 0 until they achieve a rank
+      if (crrRankProgress.currentRank && crrRankProgress.currentRank !== 'None') {
+        totalCRREarnings = stats.pgp.accumulated + stats.tgp.accumulated;
+      }
       
       return {
         userId: user._id,
@@ -1607,7 +1611,8 @@ export const getCRRLeaderboard = asyncHandler(async (req, res) => {
         qualificationPoints: {
           pgp: stats.pgp.accumulated,
           tgp: stats.tgp.accumulated,
-          total: stats.total.accumulated
+          total: stats.total.accumulated,
+          daysUntilReset: stats.total.daysUntilReset
         },
         rankProgress: {
           currentRank: crrRankProgress.currentRank,
@@ -1644,15 +1649,19 @@ export const getCRRLeaderboard = asyncHandler(async (req, res) => {
     }
 
     // Format the response to match your requirements
-    const formattedTopEarners = topEarners.map(user => ({
-      position: user.position,
-      name: user.name,
-      rank: user.rank,
-      rankIcon: user.rankIcon,
-      earnings: user.totalCRREarnings,
-      qualificationPoints: user.qualificationPoints,
-      progress: user.rankProgress.progress
-    }));
+    const formattedTopEarners = topEarners.map(user => {
+      return {
+        position: user.position,
+        name: user.name,
+        username: user.username, // Include username in the response
+        rank: user.rank,
+        rankIcon: user.rankIcon,
+        earnings: user.totalCRREarnings,
+        qualificationPoints: user.qualificationPoints,
+        progress: user.rankProgress.progress,
+        daysUntilReset: user.qualificationPoints.daysUntilReset // Days left until monthly points reset
+      };
+    });
 
     res.status(200).json({
       success: true,
@@ -1664,11 +1673,13 @@ export const getCRRLeaderboard = asyncHandler(async (req, res) => {
           currentUser: currentUserPosition ? {
             position: currentUserPosition.position,
             name: currentUserPosition.name,
+            username: currentUserPosition.username, // Include username in the response
             rank: currentUserPosition.rank,
             rankIcon: currentUserPosition.rankIcon,
             earnings: currentUserPosition.totalCRREarnings,
             isHighlighted: true,
-            isInTopList: currentUserPosition.isInTopList
+            isInTopList: currentUserPosition.isInTopList,
+            daysUntilReset: currentUserPosition.qualificationPoints.daysUntilReset // Days left until monthly points reset
           } : null,
         totalParticipants: rankedLeaderboard.length,
         lastUpdated: new Date(),
@@ -2637,7 +2648,7 @@ export const getUserMLMInfo = asyncHandler(async (req, res) => {
   try {
     const { userId } = req.params;
 
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).select('_id username firstName lastName level sponsorBy directReferrals level2Referrals level3Referrals level4Referrals nextLevels');
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -3235,7 +3246,7 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
 
     const currentCampaign = mlm.bbrCampaigns.current;
     
-    // Get leaderboard data with better indexing
+    // Get leaderboard data with better indexing - include both customers and drivers
     const leaderboard = await User.aggregate([
       {
         $match: {
@@ -3267,6 +3278,7 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
           firstName: 1,
           lastName: 1,
           profilePicture: 1,
+          role: 1, // Include user role to distinguish between customers and drivers
           totalRides: 1,
           isQualified: { $gte: ["$totalRides", currentCampaign.requirement] }
         }
@@ -3275,7 +3287,14 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
 
     // Get user's position if userId provided
     let userPosition = null;
+    let userRole = null;
     if (userId) {
+      // Get user's role
+      const user = await User.findById(userId).select('role');
+      if (user) {
+        userRole = user.role;
+      }
+      
       const userRank = await User.aggregate([
         {
           $match: {
@@ -3325,19 +3344,33 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
       }
     }
 
+    // Debug log to check user roles in leaderboard
+    console.log('Leaderboard users with roles:', leaderboard.map(user => ({ username: user.username, role: user.role })));
+    if (userRole) {
+      console.log('Current user role:', userRole);
+    }
+    
     res.status(200).json({
       success: true,
       data: {
-        leaderboard: leaderboard.map((user, index) => ({
-          rank: skip + index + 1,
-          name: `${user.firstName} ${user.lastName}`,
-          rides: user.totalRides,
-          status: user.isQualified ? 'Achieved' : 'Locked',
-          reward: currentCampaign.reward.amount
-        })),
+        leaderboard: leaderboard.map((user, index) => {
+          // Debug log for each user
+          console.log(`User ${user.username} has role: ${user.role}`);
+          return {
+            rank: skip + index + 1,
+            name: `${user.firstName} ${user.lastName}`,
+            role: user.role, // Include user role (customer or driver)
+            rides: user.totalRides,
+            rideType: user.role === 'driver' ? 'driver' : 'standard', // Add ride type based on user role
+            status: user.isQualified ? 'Achieved' : 'Locked',
+            reward: currentCampaign.reward.amount
+          };
+        }),
         userPosition: userPosition ? {
           rank: userPosition.position,
+          role: userRole, // Include user role
           rides: userPosition.totalRides,
+          rideType: userRole === 'driver' ? 'driver' : 'standard', // Add ride type based on user role
           status: userPosition.totalRides >= currentCampaign.requirement ? 'Achieved' : 'Locked',
           reward: currentCampaign.reward.amount
         } : null,
@@ -3363,7 +3396,100 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
   }
 });
 
-// Get user's past BBR wins
+// Get user's BBR progress
+export const getUserBBRProgress = asyncHandler(async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Only select the fields we need
+    const user = await User.findById(userId).select('_id bbrParticipation');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const mlm = await MLM.findOne();
+    if (!mlm || !mlm.bbrCampaigns.current || !mlm.bbrCampaigns.current.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: "No active BBR campaign found"
+      });
+    }
+
+    const currentCampaign = mlm.bbrCampaigns.current;
+    const userParticipation = user.bbrParticipation?.currentCampaign;
+    
+    // Handle case where user has no participation in current campaign
+    if (!userParticipation || userParticipation.campaignId?.toString() !== currentCampaign._id.toString()) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          campaign: currentCampaign,
+          progress: {
+            totalRides: 0,
+            soloRides: 0,
+            teamRides: 0,
+            progressPercentage: 0,
+            ridesNeeded: currentCampaign.requirement,
+            dailyTarget: currentCampaign.requirement
+          },
+          timeLeft: {
+            days: Math.max(0, Math.ceil((currentCampaign.endDate - new Date()) / (1000 * 60 * 60 * 24))),
+            hours: Math.max(0, Math.ceil(((currentCampaign.endDate - new Date()) % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)))
+          },
+          isQualified: false
+        }
+      });
+    }
+    
+    // Calculate progress using soloRides and teamRides
+    const soloRides = userParticipation.soloRides || 0;
+    const teamRides = userParticipation.teamRides || 0;
+    const totalRides = soloRides + teamRides;
+    const progressPercentage = Math.min((totalRides / currentCampaign.requirement) * 100, 100);
+    
+    // Calculate time left
+    const now = new Date();
+    const timeLeft = currentCampaign.endDate - now;
+    const daysLeft = Math.max(0, Math.ceil(timeLeft / (1000 * 60 * 60 * 24)));
+    const hoursLeft = Math.max(0, Math.ceil((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
+    
+    // Calculate daily target
+    const ridesNeeded = Math.max(0, currentCampaign.requirement - totalRides);
+    const dailyTarget = daysLeft > 0 ? Math.ceil(ridesNeeded / daysLeft) : ridesNeeded;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        campaign: currentCampaign,
+        progress: {
+          totalRides,
+          soloRides,
+          teamRides,
+          progressPercentage,
+          ridesNeeded,
+          dailyTarget
+        },
+        timeLeft: {
+          days: daysLeft,
+          hours: hoursLeft
+        },
+        isQualified: totalRides >= currentCampaign.requirement
+      }
+    });
+  } catch (error) {
+    console.error("Error getting user BBR progress:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting user BBR progress",
+      error: error.message
+    });
+  }
+});
+
+// Get past BBR wins
 export const getPastBBRWins = asyncHandler(async (req, res) => {
   try {
     const { userId } = req.params;
@@ -6045,7 +6171,8 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
       bbr: bbrEarnings.totalRewardsEarned,
       hlr: hlrEarnings.totalEarnings,
       regionalAmbassador: regionalAmbassadorEarnings.totalEarnings,
-      total: ddrEarnings.total + crrEarnings.totalEarnings + bbrEarnings.totalRewardsEarned + hlrEarnings.totalEarnings + regionalAmbassadorEarnings.totalEarnings
+      countryAmbassador: 0.00, // Added COUNTRY Ambassador field
+      total: ddrEarnings.total + crrEarnings.totalEarnings + bbrEarnings.totalRewardsEarned + hlrEarnings.totalEarnings + regionalAmbassadorEarnings.totalEarnings + 0.00 // Added countryAmbassador to total
     };
 
     // Prepare response
@@ -6113,6 +6240,13 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
           isPermanent: regionalAmbassadorEarnings.isPermanent
         }
       },
+      countryAmbassador: {
+        earnings: 0.00,
+        status: {
+          isAmbassador: false,
+          isPermanent: false
+        }
+      },
       summary: {
         totalEarnings: totalEarnings,
         totalEarned: totalEarnings.total,
@@ -6121,7 +6255,8 @@ export const getUserMLMDashboard = asyncHandler(async (req, res) => {
           crr: { amount: totalEarnings.crr, percentage: totalEarnings.total > 0 ? (totalEarnings.crr / totalEarnings.total * 100).toFixed(2) : 0 },
           bbr: { amount: totalEarnings.bbr, percentage: totalEarnings.total > 0 ? (totalEarnings.bbr / totalEarnings.total * 100).toFixed(2) : 0 },
           hlr: { amount: totalEarnings.hlr, percentage: totalEarnings.total > 0 ? (totalEarnings.hlr / totalEarnings.total * 100).toFixed(2) : 0 },
-          regionalAmbassador: { amount: totalEarnings.regionalAmbassador, percentage: totalEarnings.total > 0 ? (totalEarnings.regionalAmbassador / totalEarnings.total * 100).toFixed(2) : 0 }
+          regionalAmbassador: { amount: totalEarnings.regionalAmbassador, percentage: totalEarnings.total > 0 ? (totalEarnings.regionalAmbassador / totalEarnings.total * 100).toFixed(2) : 0 },
+          countryAmbassador: { amount: totalEarnings.countryAmbassador, percentage: totalEarnings.total > 0 ? (totalEarnings.countryAmbassador / totalEarnings.total * 100).toFixed(2) : 0 }
         }
       },
       recentTransactions: recentTransactions.map(tx => ({

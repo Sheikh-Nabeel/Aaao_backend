@@ -620,7 +620,9 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
     vehicleMatch.model = new RegExp(vehicleModel, 'i'); // Case-insensitive search
   }
 
-  const drivers = await User.find(driverQuery).populate({
+  const drivers = await User.find(driverQuery)
+    .select("firstName lastName phoneNumber rating sponsorBy pendingVehicleData")
+    .populate({
     path: "pendingVehicleData",
     match: vehicleMatch,
   });
@@ -642,7 +644,7 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
                 { sponsorId: driver.sponsorBy },
                 { username: driver.sponsorBy },
               ],
-            });
+            }).select("firstName lastName");
             sponsorName = sponsor
               ? `${sponsor.firstName} ${sponsor.lastName}`
               : null;

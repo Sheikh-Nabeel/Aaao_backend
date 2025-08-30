@@ -95,7 +95,7 @@ const signupUser = asyncHandler(async (req, res) => {
 
   let finalSponsorBy = sponsorBy;
   if (referralUsername) {
-    const sponsor = await User.findOne({ username: referralUsername });
+    const sponsor = await User.findOne({ username: referralUsername }).select("_id");
     if (sponsor) {
       finalSponsorBy = referralUsername;
     } else {
@@ -105,7 +105,7 @@ const signupUser = asyncHandler(async (req, res) => {
   } else if (sponsorBy) {
     const sponsor = await User.findOne({
       $or: [{ sponsorId: sponsorBy }, { username: sponsorBy }],
-    });
+    }).select("_id");
     if (!sponsor) {
       res.status(400);
       throw new Error("Invalid sponsor ID or username");
@@ -136,7 +136,7 @@ const signupUser = asyncHandler(async (req, res) => {
   if (user.sponsorBy) {
     const sponsor = await User.findOne({
       $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
-    });
+    }).select("firstName lastName");
     if (sponsor) {
       await updateReferralTree(user._id, user.sponsorBy);
       sponsorName = `${sponsor.firstName}${
@@ -255,7 +255,7 @@ const loginUser = asyncHandler(async (req, res) => {
   if (user.sponsorBy) {
     const sponsor = await User.findOne({
       $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
-    });
+    }).select("firstName lastName");
     sponsorName = sponsor
       ? `${sponsor.firstName}${sponsor.lastName ? " " + sponsor.lastName : ""}`
       : null;
@@ -281,7 +281,24 @@ const loginUser = asyncHandler(async (req, res) => {
       })),
       sponsoredUsers: sponsoredUsers || "No sponsored users",
       sponsorName: sponsorName,
-      user:user,
+      user: {
+        _id: user._id,
+        username: user.username,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        sponsorId: user.sponsorId,
+        sponsorBy: user.sponsorBy,
+        level: user.level,
+        kycStatus: user.kycStatus,
+        country: user.country,
+        gender: user.gender,
+        isVerified: user.isVerified,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      },
     });
 });
 
@@ -515,7 +532,7 @@ async function updateReferralTree(newUserId, sponsorIdentifier) {
 
   const sponsor = await User.findOne({
     $or: [{ sponsorId: sponsorIdentifier }, { username: sponsorIdentifier }],
-  });
+  }).select("directReferrals sponsorTree");
   if (!sponsor) {
     console.error(
       `Sponsor not found with sponsorId or username: ${sponsorIdentifier}`
@@ -660,7 +677,7 @@ async function checkAndUpdateUserLevel(user) {
 }
 
 const getReferralTree = asyncHandler(async (req, res) => {
-  const targetUserId = req.query.userId || req.user._id;
+  const targetUserId = req.user._id;
   const user = await User.findById(targetUserId);
   if (!user) {
     res.status(404);
@@ -684,6 +701,9 @@ const getReferralTree = asyncHandler(async (req, res) => {
     level4: dynamicCounts.level4 || 0,
     totalReferrals: dynamicTotal,
   };
+  // Get qualification points stats for the main user
+  const userQualificationStats = user.getQualificationPointsStats();
+  
   const referralTree = {
     user: {
       id: user._id,
@@ -695,6 +715,28 @@ const getReferralTree = asyncHandler(async (req, res) => {
       sponsorBy: user.sponsorBy,
       kycStatus: user.kycStatus,
       country: user.country,
+      // Add qualification points data
+      qualificationPoints: {
+        pgp: {
+          monthly: userQualificationStats.pgp.monthly,
+          accumulated: userQualificationStats.pgp.accumulated
+        },
+        tgp: {
+          monthly: userQualificationStats.tgp.monthly,
+          accumulated: userQualificationStats.tgp.accumulated
+        },
+        total: {
+          monthly: userQualificationStats.total.monthly,
+          accumulated: userQualificationStats.total.accumulated
+        }
+      },
+      // Add CRR rank data
+      crrRank: {
+        current: user.crrRank.current || 'None',
+        lastUpdated: user.crrRank.lastUpdated,
+        rewardAmount: user.crrRank.rewardAmount || 0,
+        rewardClaimed: user.crrRank.rewardClaimed || false
+      }
     },
     counts: {
       totalReferrals: stats.totalReferrals,
@@ -738,7 +780,7 @@ const getReferralTree = asyncHandler(async (req, res) => {
         name: {
           $concat: [
             "$firstName",
-            { $cond: { if: "$lastName", then: " $lastName", else: "" } },
+            { $cond: { if: "$lastName", then: { $concat: [" ", "$lastName"] }, else: "" } },
           ],
         },
         email: 1,
@@ -747,6 +789,38 @@ const getReferralTree = asyncHandler(async (req, res) => {
         kycLevel: 1,
         role: 1,
         joinedDate: "$createdAt",
+        // Add qualification points data
+        qualificationPoints: {
+          pgp: {
+            monthly: "$qualificationPoints.pgp.monthly",
+            accumulated: "$qualificationPoints.pgp.accumulated"
+          },
+          tgp: {
+            monthly: "$qualificationPoints.tgp.monthly",
+            accumulated: "$qualificationPoints.tgp.accumulated"
+          },
+          total: {
+            monthly: {
+              $add: [
+                { $ifNull: ["$qualificationPoints.pgp.monthly", 0] },
+                { $ifNull: ["$qualificationPoints.tgp.monthly", 0] }
+              ]
+            },
+            accumulated: {
+              $add: [
+                { $ifNull: ["$qualificationPoints.pgp.accumulated", 0] },
+                { $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }
+              ]
+            }
+          }
+        },
+        // Add CRR rank data
+        crrRank: {
+          current: "$crrRank.current",
+          lastUpdated: "$crrRank.lastUpdated",
+          rewardAmount: "$crrRank.rewardAmount",
+          rewardClaimed: "$crrRank.rewardClaimed"
+        }
       },
     },
     {
@@ -834,7 +908,7 @@ const fixReferralRelationships = asyncHandler(async (req, res) => {
       if (user.sponsorBy) {
         const sponsor = await User.findOne({
           $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
-        });
+        }).select("directReferrals sponsorTree");
         if (sponsor) {
           if (!sponsor.directReferrals.includes(user._id)) {
             sponsor.directReferrals.push(user._id);
@@ -870,7 +944,9 @@ const approveKYC = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error("User ID is required");
   }
-  const user = await User.findById(userId).populate("pendingVehicleData");
+  const user = await User.findById(userId)
+    .select("kycLevel kycStatus pendingVehicleData")
+    .populate("pendingVehicleData");
   if (!user) {
     res.status(404);
     throw new Error("User not found");
@@ -1133,7 +1209,9 @@ const removePinnedDriver = asyncHandler(async (req, res) => {
 const getPinnedDrivers = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
-  const user = await User.findById(userId).populate("pinnedDrivers", "firstName lastName phoneNumber vehicleDetails");
+  const user = await User.findById(userId)
+    .select("pinnedDrivers")
+    .populate("pinnedDrivers", "firstName lastName phoneNumber vehicleDetails");
   
   res.status(200).json({
     success: true,
@@ -1200,7 +1278,9 @@ const removeFavoriteDriver = asyncHandler(async (req, res) => {
 const getFavoriteDrivers = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
-  const user = await User.findById(userId).populate("favoriteDrivers", "firstName lastName phoneNumber vehicleDetails");
+  const user = await User.findById(userId)
+    .select("favoriteDrivers")
+    .populate("favoriteDrivers", "firstName lastName phoneNumber vehicleDetails");
   
   res.status(200).json({
     success: true,

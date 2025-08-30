@@ -615,7 +615,7 @@ const getUserVehicleInfo = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
   const user = await User.findById(userId)
-    .select("-password -__v")
+    .select("username firstName lastName email phoneNumber role kycLevel kycStatus licenseImage hasVehicle pendingVehicleData country gender cnicImages selfieImage createdAt updatedAt")
     .populate("pendingVehicleData");
   if (!user) {
     return res
@@ -662,7 +662,7 @@ const getCurrentUser = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
   const user = await User.findById(userId)
-    .select("-password -__v")
+    .select("username firstName lastName email phoneNumber role kycLevel kycStatus licenseImage hasVehicle pendingVehicleData country gender cnicImages selfieImage createdAt updatedAt")
     .populate("pendingVehicleData");
   if (!user) {
     return res
@@ -676,6 +676,7 @@ const getCurrentUser = asyncHandler(async (req, res) => {
   res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
   res.status(200).json({
     user: {
+      _id: user._id, // Added user ID to the response
       username: user.username,
       firstName: user.firstName,
       lastName: user.lastName,
@@ -762,7 +763,9 @@ const getPendingRequests = asyncHandler(async (req, res) => {
   const driverId = req.user._id;
 
   // Get driver's vehicle information
-  const driver = await User.findById(driverId).populate('pendingVehicleData');
+  const driver = await User.findById(driverId)
+    .select("firstName lastName pendingVehicleData")
+    .populate('pendingVehicleData');
   if (!driver || !driver.pendingVehicleData) {
     return res.status(400).json({
       success: false,
@@ -1102,7 +1105,9 @@ const offerFare = asyncHandler(async (req, res) => {
   }
 
   // Get driver details for the offer
-  const driver = await User.findById(driverId).populate('pendingVehicleData');
+  const driver = await User.findById(driverId)
+    .select("firstName lastName rating pendingVehicleData")
+    .populate('pendingVehicleData');
   
   // Add new driver offer to the array
   const newOffer = {

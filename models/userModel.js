@@ -380,7 +380,7 @@ userSchema.methods.getReferralLink = function () {
 
 // Helper methods for TGP and PGP qualification points management
 userSchema.methods.addQualificationPoints = function (data) {
-  const { points, rideId, type, rideType, rideFare } = data;
+  const { points, rideId, type, rideFare } = data;
   const currentDate = new Date();
   const month = currentDate.getMonth() + 1;
   const year = currentDate.getFullYear();
@@ -390,7 +390,6 @@ userSchema.methods.addQualificationPoints = function (data) {
     points,
     rideId,
     type,
-    rideType,
     rideFare,
     timestamp: currentDate,
     month,
@@ -447,16 +446,39 @@ userSchema.methods.checkAndResetMonthlyQualificationPoints = function () {
 };
 
 userSchema.methods.getQualificationPointsStats = function () {
+  // Calculate days left until monthly reset
+  const calculateDaysUntilReset = (lastResetDate) => {
+    const currentDate = new Date();
+    const lastReset = new Date(lastResetDate);
+    
+    // Get the next reset date (1st day of next month after last reset)
+    const nextResetDate = new Date(lastReset);
+    nextResetDate.setMonth(nextResetDate.getMonth() + 1);
+    nextResetDate.setDate(1); // First day of next month
+    nextResetDate.setHours(0, 0, 0, 0); // Start of the day
+    
+    // Calculate days left
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const daysLeft = Math.ceil((nextResetDate - currentDate) / msPerDay);
+    
+    return daysLeft > 0 ? daysLeft : 0; // Ensure non-negative
+  };
+  
+  const pgpDaysUntilReset = calculateDaysUntilReset(this.qualificationPoints.pgp.lastResetDate);
+  const tgpDaysUntilReset = calculateDaysUntilReset(this.qualificationPoints.tgp.lastResetDate);
+  
   return {
     pgp: {
       monthly: this.qualificationPoints.pgp.monthly,
       accumulated: this.qualificationPoints.pgp.accumulated,
       lastResetDate: this.qualificationPoints.pgp.lastResetDate,
+      daysUntilReset: pgpDaysUntilReset
     },
     tgp: {
       monthly: this.qualificationPoints.tgp.monthly,
       accumulated: this.qualificationPoints.tgp.accumulated,
       lastResetDate: this.qualificationPoints.tgp.lastResetDate,
+      daysUntilReset: tgpDaysUntilReset
     },
     total: {
       monthly:
@@ -465,6 +487,7 @@ userSchema.methods.getQualificationPointsStats = function () {
       accumulated:
         this.qualificationPoints.pgp.accumulated +
         this.qualificationPoints.tgp.accumulated,
+      daysUntilReset: Math.min(pgpDaysUntilReset, tgpDaysUntilReset) // Use the minimum days left
     },
   };
 };
