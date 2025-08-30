@@ -172,6 +172,10 @@ const signupUser = asyncHandler(async (req, res) => {
       sponsorBy: user.sponsorBy,
       gender: user.gender,
       role: user.role,
+      kycLevel: user.kycLevel,
+      kycStatus: user.kycStatus,
+      hasVehicle: user.hasVehicle,
+      pendingVehicleData: user.pendingVehicleData,
     },
   });
 });
@@ -232,7 +236,8 @@ const loginUser = asyncHandler(async (req, res) => {
   }
   const user = await User.findOne({
     $or: [{ email }, { phoneNumber }, { username }],
-  }).populate("sponsorTree", "firstName lastName");
+  }).populate("sponsorTree", "firstName lastName")
+    .populate("pendingVehicleData");
   if (!user) {
     res.status(401);
     throw new Error("Invalid email, phone number, or username");
@@ -274,7 +279,7 @@ const loginUser = asyncHandler(async (req, res) => {
       userId: user._id,
       username: user.username,
       sponsorId: user.sponsorId,
-      level: user.level,
+      kycLevel: user.kycLevel,
       sponsorTree: user.sponsorTree.map((s) => ({
         id: s._id,
         name: `${s.firstName}${s.lastName ? " " + s.lastName : ""}`,
@@ -291,8 +296,10 @@ const loginUser = asyncHandler(async (req, res) => {
         role: user.role,
         sponsorId: user.sponsorId,
         sponsorBy: user.sponsorBy,
-        level: user.level,
+        kycLevel: user.kycLevel,
         kycStatus: user.kycStatus,
+        hasVehicle: user.hasVehicle,
+        pendingVehicleData: user.pendingVehicleData,
         country: user.country,
         gender: user.gender,
         isVerified: user.isVerified,
