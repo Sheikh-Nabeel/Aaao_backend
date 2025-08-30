@@ -677,7 +677,7 @@ async function checkAndUpdateUserLevel(user) {
 }
 
 const getReferralTree = asyncHandler(async (req, res) => {
-  const targetUserId = req.user._id;
+  const targetUserId = req.query.userId || req.user._id;
   const user = await User.findById(targetUserId);
   if (!user) {
     res.status(404);
