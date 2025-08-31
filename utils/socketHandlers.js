@@ -2,6 +2,9 @@ import User from '../models/userModel.js';
 import Booking from '../models/bookingModel.js';
 import { addMoneyToMLM } from './mlmHelper.js';
 import { calculateDistance } from "./distanceCalculator.js";
+import SocketValidationService from '../services/socketValidationService.js';
+import SocketNotificationService from '../services/socketNotificationService.js';
+import SocketDatabaseService from '../services/socketDatabaseService.js';
 
 // Socket event handlers for booking system
 export const handleBookingEvents = (socket, io) => {
@@ -96,42 +99,35 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Settings:', settings);
     
     try {
-      if (socket.user.role !== 'driver') {
-        socket.emit('settings_error', { message: 'Only drivers can update auto-accept settings' });
-        return;
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'settings_error', roleValidation.error);
       }
       
-      const driver = await User.findById(socket.user._id);
-      if (!driver) {
-        socket.emit('settings_error', { message: 'Driver not found' });
-        return;
-      }
-      
-      // Initialize driverSettings if it doesn't exist
-      if (!driver.driverSettings) {
-        driver.driverSettings = {};
-      }
-      
-      driver.driverSettings.autoAcceptSettings = {
+      // Prepare settings data
+      const autoAcceptSettings = {
         enabled: settings.enabled || false,
         maxDistance: settings.maxDistance || 5,
         minFare: settings.minFare || 0,
-        serviceTypes: settings.serviceTypes || [],
-        updatedAt: new Date()
+        serviceTypes: settings.serviceTypes || []
       };
       
-      await driver.save();
+      // Update settings using service
+      const updatedSettings = await SocketDatabaseService.updateDriverSettings(
+        socket.user._id, 
+        'autoAcceptSettings', 
+        autoAcceptSettings
+      );
       
-      socket.emit('settings_updated', {
-        message: 'Auto-accept settings updated successfully',
-        settings: driver.driverSettings.autoAcceptSettings
-      });
+      // Send confirmation
+      SocketNotificationService.confirmSettingsUpdate(socket, 'settings', updatedSettings);
       
       console.log('Auto-accept settings updated for driver:', socket.user._id);
       
     } catch (error) {
       console.error('Error updating auto-accept settings:', error);
-      socket.emit('settings_error', { message: 'Failed to update settings' });
+      SocketNotificationService.sendError(socket, 'settings_error', error.message);
     }
   });
   
@@ -141,23 +137,14 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Preferences:', preferences);
     
     try {
-      if (socket.user.role !== 'driver') {
-        socket.emit('preferences_error', { message: 'Only drivers can update ride preferences' });
-        return;
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'preferences_error', roleValidation.error);
       }
       
-      const driver = await User.findById(socket.user._id);
-      if (!driver) {
-        socket.emit('preferences_error', { message: 'Driver not found' });
-        return;
-      }
-      
-      // Initialize driverSettings if it doesn't exist
-      if (!driver.driverSettings) {
-        driver.driverSettings = {};
-      }
-      
-      driver.driverSettings.ridePreferences = {
+      // Prepare preferences data
+      const ridePreferences = {
         acceptBike: preferences.acceptBike || false,
         acceptRickshaw: preferences.acceptRickshaw || false,
         acceptCar: preferences.acceptCar || false,
@@ -170,22 +157,24 @@ export const handleBookingEvents = (socket, io) => {
         acceptMaleWithoutFemale: preferences.acceptMaleWithoutFemale || false,
         acceptNoMaleCompanion: preferences.acceptNoMaleCompanion || false,
         maxRideDistance: preferences.maxRideDistance || 50,
-        preferredAreas: preferences.preferredAreas || [],
-        updatedAt: new Date()
+        preferredAreas: preferences.preferredAreas || []
       };
       
-      await driver.save();
+      // Update preferences using service
+      const updatedPreferences = await SocketDatabaseService.updateDriverSettings(
+        socket.user._id, 
+        'ridePreferences', 
+        ridePreferences
+      );
       
-      socket.emit('preferences_updated', {
-        message: 'Ride preferences updated successfully',
-        preferences: driver.driverSettings.ridePreferences
-      });
+      // Send confirmation
+      SocketNotificationService.confirmSettingsUpdate(socket, 'preferences', updatedPreferences);
       
       console.log('Ride preferences updated for driver:', socket.user._id);
       
     } catch (error) {
       console.error('Error updating ride preferences:', error);
-      socket.emit('preferences_error', { message: 'Failed to update preferences' });
+      SocketNotificationService.sendError(socket, 'preferences_error', error.message);
     }
   });
   
@@ -196,44 +185,33 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Status Data:', data);
     
     try {
-      if (socket.user.role !== 'driver') {
-        socket.emit('status_error', { message: 'Only drivers can update status' });
-        return;
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'status_error', roleValidation.error);
       }
       
       const { isActive, currentLocation } = data;
       
-      const driver = await User.findById(socket.user._id);
-      if (!driver) {
-        socket.emit('status_error', { message: 'Driver not found' });
-        return;
-      }
+      // Update driver status and location
+      const updatedDriver = await SocketDatabaseService.updateDriverStatus(
+        socket.user._id,
+        isActive,
+        currentLocation
+      );
       
-      // Update driver status
-      driver.isActive = isActive;
-      driver.lastActiveAt = new Date();
-      
-      if (currentLocation && currentLocation.coordinates) {
-        driver.currentLocation = {
-          type: 'Point',
-          coordinates: currentLocation.coordinates,
-          address: currentLocation.address || ''
-        };
-      }
-      
-      await driver.save();
-      
+      // Send confirmation
       socket.emit('status_updated', {
         message: 'Driver status updated successfully',
-        isActive: driver.isActive,
-        lastActiveAt: driver.lastActiveAt
+        isActive: updatedDriver.isActive,
+        lastActiveAt: updatedDriver.lastActiveAt
       });
       
       console.log('Driver status updated:', socket.user._id, 'Active:', isActive);
       
     } catch (error) {
       console.error('Error updating driver status:', error);
-      socket.emit('status_error', { message: 'Failed to update status' });
+      SocketNotificationService.sendError(socket, 'status_error', error.message);
     }
   });
   
@@ -244,66 +222,45 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Location Data:', data);
     
     try {
-      if (socket.user.role !== 'driver') {
-        socket.emit('location_error', { message: 'Only drivers can update location' });
-        return;
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'location_error', roleValidation.error);
       }
       
       const { coordinates, address, heading, speed } = data;
       
-      if (!coordinates || coordinates.length !== 2) {
-        socket.emit('location_error', { message: 'Valid coordinates are required' });
-        return;
-      }
-      
-      const driver = await User.findById(socket.user._id);
-      if (!driver) {
-        socket.emit('location_error', { message: 'Driver not found' });
-        return;
+      // Validate coordinates
+      const coordValidation = SocketValidationService.validateCoordinates(coordinates);
+      if (!coordValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'location_error', coordValidation.error);
       }
       
       // Update driver location
-      driver.currentLocation = {
-        type: 'Point',
-        coordinates: coordinates,
-        address: address || '',
-        heading: heading || 0,
-        speed: speed || 0,
-        lastUpdated: new Date()
-      };
+      const updatedDriver = await SocketDatabaseService.updateDriverLocation(
+        socket.user._id,
+        { coordinates, address, heading, speed }
+      );
       
-      await driver.save();
+      // Notify users with active bookings
+      await SocketNotificationService.notifyDriverLocationUpdate(
+        io,
+        socket.user._id,
+        updatedDriver.currentLocation
+      );
       
-      // Broadcast location to users who have active bookings with this driver
-      const activeBookings = await Booking.find({
-        driver: driver._id,
-        status: { $in: ['accepted', 'started', 'in_progress'] }
-      }).populate('user', '_id');
-      
-      activeBookings.forEach(booking => {
-        const userRoom = `user_${booking.user._id}`;
-        io.to(userRoom).emit('driver_location_update', {
-          bookingId: booking._id,
-          driverLocation: {
-            coordinates: driver.currentLocation.coordinates,
-            heading: driver.currentLocation.heading,
-            speed: driver.currentLocation.speed,
-            timestamp: driver.currentLocation.lastUpdated
-          }
-        });
-      });
-      
-      socket.emit('location_updated', {
-        message: 'Location updated successfully',
-        coordinates: driver.currentLocation.coordinates,
-        timestamp: driver.currentLocation.lastUpdated
-      });
+      // Send confirmation to driver
+      SocketNotificationService.confirmLocationUpdate(
+        socket,
+        updatedDriver.currentLocation.coordinates,
+        updatedDriver.currentLocation.lastUpdated
+      );
       
       console.log('Driver location updated:', socket.user._id);
       
     } catch (error) {
       console.error('Error updating driver location:', error);
-      socket.emit('location_error', { message: 'Failed to update location' });
+      SocketNotificationService.sendError(socket, 'location_error', error.message);
     }
   });
   
@@ -314,33 +271,25 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Location Data:', data);
     
     try {
-      if (socket.user.role !== 'user') {
-        socket.emit('location_error', { message: 'Only users can update user location' });
-        return;
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'user');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'location_error', roleValidation.error);
       }
       
       const { coordinates, address, bookingId } = data;
       
-      if (!coordinates || coordinates.length !== 2) {
-        socket.emit('location_error', { message: 'Valid coordinates are required' });
-        return;
-      }
-      
-      const user = await User.findById(socket.user._id);
-      if (!user) {
-        socket.emit('location_error', { message: 'User not found' });
-        return;
+      // Validate coordinates
+      const coordValidation = SocketValidationService.validateCoordinates(coordinates);
+      if (!coordValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'location_error', coordValidation.error);
       }
       
       // Update user location
-      user.currentLocation = {
-        type: 'Point',
-        coordinates: coordinates,
-        address: address || '',
-        lastUpdated: new Date()
-      };
-      
-      await user.save();
+      const updatedLocation = await SocketDatabaseService.updateUserLocation(
+        socket.user._id,
+        { coordinates, address }
+      );
       
       // If bookingId is provided, notify the assigned driver
       if (bookingId) {
@@ -350,25 +299,26 @@ export const handleBookingEvents = (socket, io) => {
           io.to(driverRoom).emit('user_location_update', {
             bookingId: booking._id,
             userLocation: {
-              coordinates: user.currentLocation.coordinates,
-              address: user.currentLocation.address,
-              timestamp: user.currentLocation.lastUpdated
+              coordinates: updatedLocation.coordinates,
+              address: updatedLocation.address,
+              timestamp: updatedLocation.lastUpdated
             }
           });
         }
       }
       
-      socket.emit('location_updated', {
-        message: 'Location updated successfully',
-        coordinates: user.currentLocation.coordinates,
-        timestamp: user.currentLocation.lastUpdated
-      });
+      // Send confirmation
+      SocketNotificationService.confirmLocationUpdate(
+        socket,
+        updatedLocation.coordinates,
+        updatedLocation.lastUpdated
+      );
       
       console.log('User location updated:', socket.user._id);
       
     } catch (error) {
       console.error('Error updating user location:', error);
-      socket.emit('location_error', { message: 'Failed to update location' });
+      SocketNotificationService.sendError(socket, 'location_error', error.message);
     }
   });
   
@@ -379,50 +329,40 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Data:', data);
     
     try {
+      // Validate driver role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', roleValidation.error);
+      }
+      
       const { requestId } = data;
       
-      if (!requestId) {
-        socket.emit('booking_error', { message: 'Request ID is required' });
-        return;
+      // Validate request data
+      const requestValidation = SocketValidationService.validateRequest(data, ['requestId']);
+      if (!requestValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', requestValidation.error);
       }
       
-      const booking = await Booking.findById(requestId)
-        .populate('user', 'firstName lastName email phoneNumber')
-        .populate('driver', 'firstName lastName email phoneNumber');
-      
-      if (!booking) {
-        socket.emit('booking_error', { message: 'Booking not found' });
-        return;
-      }
-      
-      if (booking.status !== 'pending') {
-        socket.emit('booking_error', { message: 'Booking is no longer available' });
-        return;
-      }
-      
-      // Update booking with driver and status
-      booking.driver = socket.user._id;
-      booking.status = 'accepted';
-      booking.acceptedAt = new Date();
-      
-      await booking.save();
-      
-      // Populate driver data for response
-      await booking.populate('driver', 'firstName lastName email phoneNumber');
+      // Accept booking using database service
+      const booking = await SocketDatabaseService.acceptBooking(requestId, socket.user._id);
       
       // Notify user about acceptance
-      const userRoom = `user_${booking.user._id}`;
-      io.to(userRoom).emit('booking_accepted', {
-        bookingId: booking._id,
-        driver: {
-          id: booking.driver._id,
-          name: `${booking.driver.firstName} ${booking.driver.lastName}`,
-          phone: booking.driver.phoneNumber,
-          email: booking.driver.email
-        },
-        acceptedAt: booking.acceptedAt,
-        message: 'Your booking has been accepted by a driver'
-      });
+      SocketNotificationService.notifyBookingStatusUpdate(
+        io,
+        booking.user._id,
+        'booking_accepted',
+        {
+          bookingId: booking._id,
+          driver: {
+            id: booking.driver._id,
+            name: `${booking.driver.firstName} ${booking.driver.lastName}`,
+            phone: booking.driver.phoneNumber,
+            email: booking.driver.email
+          },
+          acceptedAt: booking.acceptedAt,
+          message: 'Your booking has been accepted by a driver'
+        }
+      );
       
       // Confirm acceptance to driver
       socket.emit('booking_accepted_confirmation', {
@@ -438,7 +378,7 @@ export const handleBookingEvents = (socket, io) => {
       
     } catch (error) {
       console.error('Error accepting booking:', error);
-      socket.emit('booking_error', { message: 'Failed to accept booking' });
+      SocketNotificationService.sendError(socket, 'booking_error', error.message);
     }
   });
   
@@ -449,41 +389,26 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Data:', data);
     
     try {
+      // Validate driver role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', roleValidation.error);
+      }
+      
       const { requestId, reason } = data;
       
-      if (!requestId) {
-        socket.emit('booking_error', { message: 'Request ID is required' });
-        return;
+      // Validate request data
+      const requestValidation = SocketValidationService.validateRequest(data, ['requestId']);
+      if (!requestValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', requestValidation.error);
       }
       
-      const booking = await Booking.findById(requestId);
-      
-      if (!booking) {
-        socket.emit('booking_error', { message: 'Booking not found' });
-        return;
-      }
-      
-      if (booking.status !== 'pending') {
-        socket.emit('booking_error', { message: 'Booking is no longer available' });
-        return;
-      }
-      
-      // Add driver to rejected list
-      if (!booking.rejectedDrivers) {
-        booking.rejectedDrivers = [];
-      }
-      
-      booking.rejectedDrivers.push({
-        driver: socket.user._id,
-        reason: reason || 'No reason provided',
-        rejectedAt: new Date()
-      });
-      
-      await booking.save();
+      // Reject booking using database service
+      await SocketDatabaseService.rejectBooking(requestId, socket.user._id, reason);
       
       // Confirm rejection to driver
       socket.emit('booking_rejected_confirmation', {
-        bookingId: booking._id,
+        bookingId: requestId,
         message: 'Booking rejected successfully'
       });
       
@@ -491,7 +416,7 @@ export const handleBookingEvents = (socket, io) => {
       
     } catch (error) {
       console.error('Error rejecting booking:', error);
-      socket.emit('booking_error', { message: 'Failed to reject booking' });
+      SocketNotificationService.sendError(socket, 'booking_error', error.message);
     }
   });
 
@@ -502,97 +427,56 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Data:', data);
     
     try {
+      // Validate driver role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', roleValidation.error);
+      }
+      
       const { requestId, newFare, reason } = data;
       
-      if (!requestId || !newFare) {
-        socket.emit('booking_error', { message: 'Request ID and new fare are required' });
-        return;
+      // Validate request data
+      const requestValidation = SocketValidationService.validateRequest(data, ['requestId', 'newFare']);
+      if (!requestValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', requestValidation.error);
       }
       
-      if (socket.user.role !== 'driver') {
-        socket.emit('booking_error', { message: 'Only drivers can modify fare' });
-        return;
+      // Validate fare modification
+      const fareValidation = await SocketValidationService.validateFareModification(requestId, newFare);
+      if (!fareValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', fareValidation.error, fareValidation.allowedRange);
       }
       
-      const booking = await Booking.findById(requestId)
-        .populate('user', 'firstName lastName email phoneNumber');
-      
-      if (!booking) {
-        socket.emit('booking_error', { message: 'Booking not found' });
-        return;
-      }
-      
-      if (booking.status !== 'pending') {
-        socket.emit('booking_error', { message: 'Fare can only be modified for pending bookings' });
-        return;
-      }
-      
-      // Get fare adjustment settings
-      const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
-      
-      if (!fareSettings.enableDriverFareAdjustment) {
-        socket.emit('booking_error', { message: 'Driver fare adjustment is disabled' });
-        return;
-      }
-      
-      // Validate fare adjustment limits
-      const originalFare = booking.fare;
-      const maxAllowedFare = originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
-      const minAllowedFare = originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
-      
-      if (newFare > maxAllowedFare || newFare < minAllowedFare) {
-        socket.emit('booking_error', {
-          message: `Fare adjustment exceeds allowed limit of ${fareSettings.allowedAdjustmentPercentage}%`,
-          allowedRange: {
-            min: minAllowedFare,
-            max: maxAllowedFare
-          }
-        });
-        return;
-      }
-      
-      if (newFare < fareSettings.minimumFare || newFare > fareSettings.maximumFare) {
-        socket.emit('booking_error', {
-          message: `Fare must be between ${fareSettings.minimumFare} and ${fareSettings.maximumFare}`,
-          allowedRange: {
-            min: fareSettings.minimumFare,
-            max: fareSettings.maximumFare
-          }
-        });
-        return;
-      }
-      
-      // Store fare modification request
-      booking.fareModificationRequest = {
-        requestedBy: socket.user._id,
-        originalFare: originalFare,
-        requestedFare: newFare,
-        reason: reason || 'No reason provided',
-        requestedAt: new Date(),
-        status: 'pending'
-      };
-      
-      await booking.save();
+      // Modify booking fare using database service
+      const booking = await SocketDatabaseService.modifyBookingFare(
+        requestId,
+        newFare,
+        reason,
+        socket.user._id
+      );
       
       // Notify user about fare modification request
-      const userRoom = `user_${booking.user._id}`;
-      io.to(userRoom).emit('fare_modification_request', {
-        bookingId: booking._id,
-        originalFare: originalFare,
-        requestedFare: newFare,
-        reason: reason || 'No reason provided',
-        driver: {
-          id: socket.user._id,
-          name: `${socket.user.firstName} ${socket.user.lastName}`
-        },
-        requestedAt: booking.fareModificationRequest.requestedAt
-      });
+      SocketNotificationService.notifyFareModification(
+        io,
+        booking.user._id,
+        {
+          bookingId: booking._id,
+          originalFare: booking.fareModificationRequest.originalFare,
+          requestedFare: newFare,
+          reason: reason || 'No reason provided',
+          driver: {
+            id: socket.user._id,
+            name: `${socket.user.firstName} ${socket.user.lastName}`
+          },
+          requestedAt: booking.fareModificationRequest.requestedAt
+        }
+      );
       
       // Confirm fare modification request to driver
       socket.emit('fare_modification_sent', {
         bookingId: booking._id,
         message: 'Fare modification request sent to user',
-        originalFare: originalFare,
+        originalFare: booking.fareModificationRequest.originalFare,
         requestedFare: newFare
       });
       
@@ -600,7 +484,7 @@ export const handleBookingEvents = (socket, io) => {
       
     } catch (error) {
       console.error('Error modifying booking fare:', error);
-      socket.emit('booking_error', { message: 'Failed to modify fare' });
+      SocketNotificationService.sendError(socket, 'booking_error', error.message);
     }
   });
 
@@ -611,63 +495,36 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Data:', data);
     
     try {
-      const { bookingId, response, reason } = data; // response: 'accept' or 'reject'
-      
-      if (!bookingId || !response) {
-        socket.emit('booking_error', { message: 'Booking ID and response are required' });
-        return;
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'user');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', roleValidation.error);
       }
       
-      if (socket.user.role !== 'user') {
-        socket.emit('booking_error', { message: 'Only users can respond to fare modifications' });
-        return;
+      const { bookingId, response, reason } = data;
+      
+      // Validate request data
+      const requestValidation = SocketValidationService.validateRequest(data, ['bookingId', 'response']);
+      if (!requestValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', requestValidation.error);
       }
       
       if (!['accept', 'reject'].includes(response)) {
-        socket.emit('booking_error', { message: 'Response must be either accept or reject' });
-        return;
+        return SocketNotificationService.sendError(socket, 'booking_error', 'Response must be either accept or reject');
       }
       
-      const booking = await Booking.findById(bookingId)
-        .populate('user', 'firstName lastName email phoneNumber');
-      
-      if (!booking) {
-        socket.emit('booking_error', { message: 'Booking not found' });
-        return;
+      // Validate booking access
+      const accessValidation = await SocketValidationService.validateBookingAccess(bookingId, socket.user._id, 'user');
+      if (!accessValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', accessValidation.error);
       }
       
-      if (booking.user._id.toString() !== socket.user._id.toString()) {
-        socket.emit('booking_error', { message: 'You can only respond to your own bookings' });
-        return;
-      }
-      
-      if (!booking.fareModificationRequest || booking.fareModificationRequest.status !== 'pending') {
-        socket.emit('booking_error', { message: 'No pending fare modification request found' });
-        return;
-      }
-      
-      // Update fare modification request status
-      booking.fareModificationRequest.status = response === 'accept' ? 'accepted' : 'rejected';
-      booking.fareModificationRequest.respondedAt = new Date();
-      booking.fareModificationRequest.userResponse = {
-        response: response,
-        reason: reason || 'No reason provided'
-      };
-      
-      // If accepted, update the booking fare and automatically start the ride
-      if (response === 'accept') {
-        booking.fare = booking.fareModificationRequest.requestedFare;
-        booking.fareModifiedAt = new Date();
-        
-        // Automatically start the ride when fare modification is accepted
-        if (booking.status === 'pending') {
-          booking.status = 'started';
-          booking.acceptedAt = new Date();
-          booking.startedAt = new Date();
-        }
-      }
-      
-      await booking.save();
+      // Respond to fare modification using database service
+      const booking = await SocketDatabaseService.respondToFareModification(
+        bookingId,
+        response === 'accept',
+        socket.user._id
+      );
       
       // Notify driver about user's response
       const driverRoom = `driver_${booking.fareModificationRequest.requestedBy}`;
@@ -728,7 +585,7 @@ export const handleBookingEvents = (socket, io) => {
       
     } catch (error) {
        console.error('Error responding to fare modification:', error);
-       socket.emit('booking_error', { message: 'Failed to respond to fare modification' });
+       SocketNotificationService.sendError(socket, 'booking_error', error.message);
      }
    });
 
@@ -739,58 +596,38 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Data:', data);
     
     try {
-      const { bookingId, reason } = data;
-      
-      if (!bookingId) {
-        socket.emit('booking_error', { message: 'Booking ID is required' });
-        return;
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'user');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', roleValidation.error);
       }
-      
-      if (socket.user.role !== 'user') {
-        socket.emit('booking_error', { message: 'Only users can cancel their bookings' });
-        return;
+
+      // Validate request data
+      const dataValidation = SocketValidationService.validateBasicRequest(data, ['bookingId']);
+      if (!dataValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', dataValidation.error);
       }
-      
-      const booking = await Booking.findById(bookingId)
-        .populate('user', 'firstName lastName email phoneNumber')
-        .populate('driver', 'firstName lastName email phoneNumber');
-      
-      if (!booking) {
-        socket.emit('booking_error', { message: 'Booking not found' });
-        return;
+
+      // Validate booking access
+      const accessValidation = await SocketValidationService.validateBookingAccess(
+        data.bookingId, 
+        socket.user._id, 
+        socket.user.role
+      );
+      if (!accessValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'booking_error', accessValidation.error);
       }
-      
-      if (booking.user._id.toString() !== socket.user._id.toString()) {
-        socket.emit('booking_error', { message: 'You can only cancel your own bookings' });
-        return;
-      }
-      
-      if (!['pending', 'accepted'].includes(booking.status)) {
-        socket.emit('booking_error', { message: 'Booking cannot be cancelled at this stage' });
-        return;
-      }
-      
-      // Update booking status
-      booking.status = 'cancelled';
-      booking.cancelledAt = new Date();
-      booking.cancellationReason = reason || 'No reason provided';
-      booking.cancelledBy = socket.user._id;
-      
-      await booking.save();
-      
-      // If booking was accepted, notify the driver
-      if (booking.driver && booking.status === 'accepted') {
-        const driverRoom = `driver_${booking.driver._id}`;
-        io.to(driverRoom).emit('booking_cancelled', {
-          bookingId: booking._id,
-          message: 'Booking has been cancelled by the user',
-          reason: booking.cancellationReason,
-          cancelledAt: booking.cancelledAt,
-          user: {
-            name: `${booking.user.firstName} ${booking.user.lastName}`,
-            phone: booking.user.phoneNumber
-          }
-        });
+
+      // Cancel booking
+      const booking = await SocketDatabaseService.cancelBooking(
+        data.bookingId, 
+        socket.user._id, 
+        data.reason
+      );
+
+      // Notify driver if booking was accepted
+      if (booking.driver && booking.originalStatus === 'accepted') {
+        SocketNotificationService.notifyBookingCancellation(io, booking);
       }
       
       // Confirm cancellation to user
@@ -800,11 +637,11 @@ export const handleBookingEvents = (socket, io) => {
         cancelledAt: booking.cancelledAt
       });
       
-      console.log('Booking cancelled:', bookingId, 'by user:', socket.user._id);
+      console.log('Booking cancelled:', data.bookingId, 'by user:', socket.user._id);
       
     } catch (error) {
       console.error('Error cancelling booking:', error);
-      socket.emit('booking_error', { message: 'Failed to cancel booking' });
+      SocketNotificationService.sendError(socket, 'booking_error', 'Failed to cancel booking');
     }
   });
 
@@ -817,138 +654,41 @@ export const handleBookingEvents = (socket, io) => {
     try {
       const { bookingId, newFare, reason } = data;
       
-      if (!bookingId || !newFare) {
-        socket.emit('fare_increase_error', { message: 'Booking ID and new fare are required' });
+      // Validate user role
+      if (!SocketValidationService.validateUserRole(socket, 'user')) {
+        SocketNotificationService.sendError(socket, 'fare_increase_error', 'Only users can increase fare');
         return;
       }
       
-      if (socket.user.role !== 'user') {
-        socket.emit('fare_increase_error', { message: 'Only users can increase fare' });
+      // Validate request data
+      if (!SocketValidationService.validateRequestData(socket, { bookingId, newFare }, 'fare_increase_error')) {
         return;
       }
       
-      const booking = await Booking.findById(bookingId)
-        .populate('user', 'firstName lastName email phoneNumber');
+      // Validate booking access
+      const booking = await SocketValidationService.validateBookingAccess(socket, bookingId, 'user', 'fare_increase_error');
+      if (!booking) return;
       
-      if (!booking) {
-        socket.emit('fare_increase_error', { message: 'Booking not found' });
-        return;
-      }
-      
-      if (booking.user._id.toString() !== socket.user._id.toString()) {
-        socket.emit('fare_increase_error', { message: 'You can only modify your own bookings' });
-        return;
-      }
-      
-      if (booking.status !== 'pending') {
-        socket.emit('fare_increase_error', { message: 'Can only increase fare for pending bookings' });
-        return;
-      }
-      
-      // Check if maximum resend attempts reached
-      if (booking.resendAttempts >= booking.maxResendAttempts) {
-        socket.emit('fare_increase_error', { 
-          message: `Maximum resend attempts (${booking.maxResendAttempts}) reached` 
-        });
-        return;
-      }
-      
-      // Validate fare increase (must be higher than current fare)
-      if (newFare <= booking.fare) {
-        socket.emit('fare_increase_error', { 
-          message: 'New fare must be higher than current fare' 
-        });
-        return;
-      }
-      
-      // Validate reasonable fare increase (max 50% increase per attempt)
-      const maxIncrease = booking.fare * 1.5;
-      if (newFare > maxIncrease) {
-        socket.emit('fare_increase_error', { 
-          message: `Fare increase too high. Maximum allowed: ${maxIncrease.toFixed(2)} AED` 
-        });
-        return;
-      }
-      
-      // Record the fare increase
-      const originalFare = booking.fare;
-      booking.userFareIncreases.push({
-        originalFare: originalFare,
-        increasedFare: newFare,
-        reason: reason || 'No drivers responding',
-        increasedAt: new Date(),
-        resendAttempt: booking.resendAttempts + 1
-      });
-      
-      // Update booking with new fare and resend info
-      booking.fare = newFare;
-      booking.resendAttempts += 1;
-      booking.lastResendAt = new Date();
-      
-      await booking.save();
+      // Increase fare and resend
+      const { booking: updatedBooking, originalFare } = await SocketDatabaseService.increaseFareAndResend(bookingId, newFare, reason);
       
       // Find nearby drivers again
-      const nearbyDrivers = await findNearbyDrivers(booking, io);
+      const nearbyDrivers = await findNearbyDrivers(updatedBooking, io);
       
       if (nearbyDrivers.length === 0) {
-        socket.emit('fare_increase_error', { 
-          message: 'Still no drivers available in your area. You can try increasing the fare again.' 
-        });
+        SocketNotificationService.sendError(socket, 'fare_increase_error', 
+          'Still no drivers available in your area. You can try increasing the fare again.');
         return;
       }
       
-      // Send updated booking request to nearby drivers
-      nearbyDrivers.forEach(driver => {
-        const driverRoom = `driver_${driver._id}`;
-        io.to(driverRoom).emit('new_booking_request', {
-          requestId: booking._id,
-          user: {
-            id: booking.user._id,
-            firstName: booking.user.firstName,
-            lastName: booking.user.lastName,
-            email: booking.user.email,
-            phoneNumber: booking.user.phoneNumber
-          },
-          from: {
-            address: booking.pickupLocation.address,
-            coordinates: booking.pickupLocation.coordinates
-          },
-          to: {
-            address: booking.dropoffLocation.address,
-            coordinates: booking.dropoffLocation.coordinates
-          },
-          fare: booking.fare,
-          originalFare: originalFare,
-          fareIncreased: true,
-          resendAttempt: booking.resendAttempts,
-          distance: booking.distance,
-          serviceType: booking.serviceType,
-          vehicleType: booking.vehicleType,
-          serviceCategory: booking.serviceCategory,
-          driverPreference: booking.driverPreference,
-          pinkCaptainOptions: booking.pinkCaptainOptions,
-          paymentMethod: booking.paymentMethod,
-          scheduledTime: booking.scheduledTime,
-          createdAt: booking.createdAt
-        });
-      });
-      
-      // Confirm fare increase and resend to user
-      socket.emit('fare_increased_and_resent', {
-        bookingId: booking._id,
-        originalFare: originalFare,
-        newFare: newFare,
-        resendAttempt: booking.resendAttempts,
-        maxAttempts: booking.maxResendAttempts,
-        driversFound: nearbyDrivers.length,
-        message: `Fare increased to ${newFare} AED and request resent to ${nearbyDrivers.length} drivers`
-      });
+      // Notify fare increase and resend
+      SocketNotificationService.notifyFareIncreaseAndResend(socket, io, updatedBooking, originalFare, nearbyDrivers);
       
       console.log('Fare increased and booking resent:', {
-        bookingId: booking._id,
+        bookingId: updatedBooking._id,
         originalFare,
-        newFare,
-        resendAttempt: booking.resendAttempts,
+        newFare: updatedBooking.fare,
+        resendAttempt: updatedBooking.resendAttempts,
         driversFound: nearbyDrivers.length
       });
       

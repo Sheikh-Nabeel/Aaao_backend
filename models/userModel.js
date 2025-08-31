@@ -248,9 +248,7 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-userSchema.index({ username: 1 });
-userSchema.index({ email: 1 });
-userSchema.index({ phoneNumber: 1 });
+// Removed duplicate indexes for username, email, phoneNumber (already created by unique: true)
 userSchema.index({ sponsorId: 1 });
 userSchema.index({ sponsorBy: 1 });
 userSchema.index({ level: 1 });

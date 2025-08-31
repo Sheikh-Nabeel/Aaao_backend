@@ -29,6 +29,7 @@ import { fileURLToPath } from "url";
 import { handleBookingEvents } from "./utils/socketHandlers.js";
 import jwt from "jsonwebtoken";
 import userModel from "./models/userModel.js";
+import queryOptimizer from "./utils/queryOptimizer.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,14 +105,23 @@ app.use("/api/fare", fareEstimationRoutes); // Added fare estimation routes
 app.use("/api/wallet", walletRoutes); // Added wallet routes
 app.use("/api/email-verification", emailVerificationRoutes); // Added email verification routes
 
-connectDB();
-
-app.use(errorHandler);
-
-// Socket.IO authentication middleware
-io.use(async (socket, next) => {
+// Initialize server function
+const initializeServer = async () => {
   try {
-    const token = socket.handshake.auth.token;
+    await connectDB();
+    
+    // Generate performance report every 30 minutes
+    setInterval(() => {
+      const report = queryOptimizer.generatePerformanceReport();
+      console.log('📊 Performance Report:'.cyan, report);
+    }, 30 * 60 * 1000);
+    
+    app.use(errorHandler);
+    
+    // Socket.IO authentication middleware
+    io.use(async (socket, next) => {
+      try {
+        const token = socket.handshake.auth.token;
     
     if (!token) {
       console.log('Socket connection rejected: No token provided'.red);
@@ -190,19 +200,28 @@ io.on('connection', (socket) => {
   // Handle booking events with authenticated user context
   handleBookingEvents(socket, io);
 
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    console.log(`Authenticated user disconnected: ${socket.id} - ${socket.user.email}`.red);
+    // Handle disconnection
+    socket.on('disconnect', () => {
+      console.log(`Authenticated user disconnected: ${socket.id} - ${socket.user.email}`.red);
+    });
   });
-});
+  
+  // Make io accessible to other modules
+  app.set('io', io);
+  
+  const PORT = process.env.PORT || 3003;
+  server.listen(PORT, () =>
+    console.log(`🚀 Server started successfully on port: ${PORT}`.cyan.bold)
+  );
+  
+  } catch (error) {
+    console.error('Failed to initialize server:', error.message.red);
+    process.exit(1);
+  }
+};
 
-// Make io accessible to other modules
-app.set('io', io);
-
-const PORT = process.env.PORT || 3003;
-server.listen(PORT, () =>
-  console.log(`🚀 Server started successfully on port: ${PORT}`.cyan.bold)
-);
+// Initialize the server
+initializeServer();
 
 // Export io for use in other modules
 export { io };
