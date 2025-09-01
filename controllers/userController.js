@@ -1412,34 +1412,41 @@ const getQualificationTransactions = asyncHandler(async (req, res) => {
   });
 });
 
-// New controller functions for delete and edit user
 const deleteUser = asyncHandler(async (req, res) => {
   const { userId } = req.params;
+  console.log(`Starting deleteUser for userId: ${userId}`);
+  const startTime = Date.now();
 
   if (!userId) {
+    console.log('No userId provided');
     res.status(400);
     throw new Error("User ID is required");
   }
 
   if (!mongoose.isValidObjectId(userId)) {
+    console.log('Invalid userId format:', userId);
     res.status(400);
     throw new Error("Invalid user ID format");
   }
 
+  console.log(`Checking user existence: ${Date.now() - startTime}ms`);
   const user = await User.findById(userId);
   if (!user) {
+    console.log('User not found:', userId);
     res.status(404);
     throw new Error("User not found");
   }
 
   // Prevent deletion of superadmin users
   if (user.role === "superadmin") {
+    console.log('Attempted to delete superadmin:', userId);
     res.status(403);
     throw new Error("Cannot delete a superadmin user");
   }
 
   // Remove user from any sponsor's referral lists
   if (user.sponsorBy) {
+    console.log(`Fetching sponsor for user.sponsorBy: ${user.sponsorBy}, Time: ${Date.now() - startTime}ms`);
     const sponsor = await User.findOne({
       $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
     });
@@ -1451,43 +1458,46 @@ const deleteUser = asyncHandler(async (req, res) => {
         (id) => id.toString() !== userId
       );
       await sponsor.save();
-      await updateAllLevels(sponsor._id);
+      console.log(`Sponsor updated: ${sponsor._id}, Time: ${Date.now() - startTime}ms`);
+      // Temporarily comment out updateAllLevels to test for delays
+      // console.log(`Starting updateAllLevels for: ${sponsor._id}, Time: ${Date.now() - startTime}ms`);
+      // await updateAllLevels(sponsor._id);
+      // console.log(`updateAllLevels completed for: ${sponsor._id}, Time: ${Date.now() - startTime}ms`);
+    } else {
+      console.log(`No sponsor found for: ${user.sponsorBy}, Time: ${Date.now() - startTime}ms`);
     }
   }
 
   // Delete associated images
-  if (user.cnicImages?.front) {
-    const frontImagePath = path.join(process.cwd(), user.cnicImages.front);
-    if (fs.existsSync(frontImagePath)) {
-      fs.unlinkSync(frontImagePath);
+  const deleteImage = (imagePath) => {
+    if (imagePath) {
+      const fullPath = path.join(process.cwd(), imagePath);
+      if (fs.existsSync(fullPath)) {
+        console.log(`Deleting image: ${fullPath}, Time: ${Date.now() - startTime}ms`);
+        fs.unlinkSync(fullPath);
+      } else {
+        console.log(`Image not found: ${fullPath}, Time: ${Date.now() - startTime}ms`);
+      }
     }
-  }
-  if (user.cnicImages?.back) {
-    const backImagePath = path.join(process.cwd(), user.cnicImages.back);
-    if (fs.existsSync(backImagePath)) {
-      fs.unlinkSync(backImagePath);
-    }
-  }
-  if (user.selfieImage) {
-    const selfieImagePath = path.join(process.cwd(), user.selfieImage);
-    if (fs.existsSync(selfieImagePath)) {
-      fs.unlinkSync(selfieImagePath);
-    }
-  }
-  if (user.licenseImage) {
-    const licenseImagePath = path.join(process.cwd(), user.licenseImage);
-    if (fs.existsSync(licenseImagePath)) {
-      fs.unlinkSync(licenseImagePath);
-    }
-  }
+  };
+  console.log(`Starting image deletion, Time: ${Date.now() - startTime}ms`);
+  deleteImage(user.cnicImages?.front);
+  deleteImage(user.cnicImages?.back);
+  deleteImage(user.selfieImage);
+  deleteImage(user.licenseImage);
+  console.log(`Image deletion completed, Time: ${Date.now() - startTime}ms`);
 
   // Delete associated vehicle data
   if (user.pendingVehicleData) {
+    console.log(`Deleting vehicle: ${user.pendingVehicleData}, Time: ${Date.now() - startTime}ms`);
     await Vehicle.findByIdAndDelete(user.pendingVehicleData);
+    console.log(`Vehicle deleted, Time: ${Date.now() - startTime}ms`);
   }
 
   // Delete the user
+  console.log(`Deleting user from database: ${userId}, Time: ${Date.now() - startTime}ms`);
   await User.findByIdAndDelete(userId);
+  console.log(`User deleted successfully: ${userId}, Total time: ${Date.now() - startTime}ms`);
 
   res.status(200).json({
     success: true,
@@ -1495,7 +1505,6 @@ const deleteUser = asyncHandler(async (req, res) => {
     userId,
   });
 });
-
 const editUser = asyncHandler(async (req, res) => {
   const { userId } = req.params;
   const {
