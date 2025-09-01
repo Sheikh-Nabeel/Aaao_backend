@@ -943,32 +943,35 @@ const approveKYC = asyncHandler(async (req, res) => {
     throw new Error("User ID is required");
   }
   const user = await User.findById(userId)
-    .select("kycLevel kycStatus pendingVehicleData")
+    .select("kycLevel kycStatus pendingVehicleData licenseImage") // Include licenseImage
     .populate("pendingVehicleData");
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
   let kycLevelToApprove;
-  if (user.kycLevel === 0) {
+  if (user.kycLevel === 0 && user.kycStatus === "pending") {
     kycLevelToApprove = 1;
-  } else if (user.kycLevel === 1) {
+  } else if (
+    user.kycLevel === 1 &&
+    user.kycStatus === "pending" &&
+    user.licenseImage
+  ) {
     kycLevelToApprove = 2;
   } else {
     res.status(400);
-    throw new Error("No valid KYC level to approve");
+    throw new Error(
+      user.kycLevel === 1 && !user.licenseImage
+        ? "License must be uploaded before approving KYC Level 2"
+        : "No valid KYC level to approve or KYC already approved"
+    );
   }
-  if (kycLevelToApprove === 2) {
-    if (!user.licenseImage) {
-      res.status(400);
-      throw new Error("License must be uploaded before approving KYC Level 2");
-    }
-    if (user.pendingVehicleData) {
-      const vehicle = await Vehicle.findById(user.pendingVehicleData);
-      if (vehicle) {
-        vehicle.status = "approved";
-        await vehicle.save();
-      }
+  if (kycLevelToApprove === 2 && user.pendingVehicleData) {
+    // If a vehicle is registered, auto-approve it
+    const vehicle = await Vehicle.findById(user.pendingVehicleData);
+    if (vehicle) {
+      vehicle.status = "approved";
+      await vehicle.save();
     }
   }
   const updatedUser = await User.findByIdAndUpdate(
