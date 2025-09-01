@@ -3,6 +3,109 @@ import { calculateShiftingMoversFare, calculateCarRecoveryFare } from '../utils/
 import { calculateComprehensiveFare } from '../utils/comprehensiveFareCalculator.js';
 import PricingConfig from '../models/pricingModel.js';
 import ComprehensivePricing from '../models/comprehensivePricingModel.js';
+import User from '../models/userModel.js';
+import { calculateDistance } from '../utils/distanceCalculator.js';
+
+// Find qualified drivers and vehicles for fare estimation
+const findQualifiedDriversForEstimation = async (pickupLocation, serviceType, vehicleType, driverPreference = 'nearby') => {
+  try {
+    console.log('=== FINDING QUALIFIED DRIVERS FOR ESTIMATION ===');
+    console.log('Service Type:', serviceType);
+    console.log('Vehicle Type:', vehicleType);
+    console.log('Driver Preference:', driverPreference);
+    
+    let driverQuery = {
+      role: 'driver',
+      kycLevel: 2,
+      kycStatus: 'approved',
+      isActive: true
+    };
+
+    // Handle Pink Captain preferences
+    if (driverPreference === 'pink_captain') {
+      driverQuery.gender = 'female';
+      console.log('Pink Captain requested - filtering for female drivers');
+    }
+
+    // Handle vehicle type filtering
+    if (vehicleType && vehicleType !== 'any') {
+      driverQuery.vehicleType = vehicleType;
+    }
+
+    console.log('Driver Query:', driverQuery);
+
+    // Find drivers based on query
+    const drivers = await User.find(driverQuery).select(
+      'firstName lastName email phoneNumber vehicleType currentLocation gender driverSettings vehicleDetails profilePicture rating totalRides'
+    );
+    console.log(`Found ${drivers.length} potential drivers`);
+
+    if (drivers.length === 0) {
+      console.log('No drivers found matching criteria');
+      return [];
+    }
+
+    // Calculate distances and filter by radius
+    const driversWithDistance = [];
+    const maxRadius = driverPreference === 'pink_captain' ? 50 : 10; // 50km for Pink Captain, 10km for estimation
+
+    for (const driver of drivers) {
+      if (driver.currentLocation && driver.currentLocation.coordinates) {
+        const distance = calculateDistance(
+          { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
+          { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+        );
+
+        if (distance <= maxRadius) {
+          driversWithDistance.push({
+            id: driver._id,
+            name: `${driver.firstName} ${driver.lastName}`,
+            email: driver.email,
+            phoneNumber: driver.phoneNumber,
+            vehicleType: driver.vehicleType,
+            vehicleDetails: driver.vehicleDetails,
+            profilePicture: driver.profilePicture,
+            rating: driver.rating || 0,
+            totalRides: driver.totalRides || 0,
+            gender: driver.gender,
+            currentLocation: {
+              coordinates: driver.currentLocation.coordinates,
+              address: driver.currentLocation.address,
+              lastUpdated: driver.currentLocation.lastUpdated
+            },
+            distance: Math.round(distance * 100) / 100,
+            estimatedArrival: Math.ceil(distance / 0.5) // Assuming 30km/h average speed in city
+          });
+        }
+      }
+    }
+
+    // Filter Pink Captain drivers based on their preferences
+    let filteredDrivers = driversWithDistance;
+    if (driverPreference === 'pink_captain') {
+      console.log('Filtering Pink Captain drivers based on preferences...');
+      
+      filteredDrivers = driversWithDistance.filter(driver => {
+        const driverData = drivers.find(d => d._id.toString() === driver.id.toString());
+        const driverPrefs = driverData?.driverSettings?.ridePreferences;
+        return driverPrefs && driverPrefs.pinkCaptainMode;
+      });
+      
+      console.log(`Filtered to ${filteredDrivers.length} Pink Captain drivers`);
+    }
+
+    // Sort by distance and limit to top 10
+    filteredDrivers.sort((a, b) => a.distance - b.distance);
+    const topDrivers = filteredDrivers.slice(0, 10);
+    
+    console.log(`Returning ${topDrivers.length} qualified drivers within ${maxRadius}km radius`);
+    return topDrivers;
+
+  } catch (error) {
+    console.error('Error finding qualified drivers for estimation:', error);
+    return [];
+  }
+};
 
 // Get fare adjustment settings
 const getFareAdjustmentSettings = async (serviceType) => {
@@ -104,8 +207,25 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     paymentMethod = "cash"
   } = req.body;
   
+  // Authentication validation
+  if (!req.user || !req.user._id) {
+    return res.status(401).json({
+      success: false,
+      message: "Authentication required. Please log in to get fare estimation.",
+      token: req.cookies.token,
+    });
+  }
 
   const userId = req.user._id;
+  
+  // Validate user KYC status for fare estimation
+  if (req.user.kycLevel < 1 || req.user.kycStatus !== 'approved') {
+    return res.status(403).json({
+      success: false,
+      message: "KYC Level 1 must be approved to get fare estimation.",
+      token: req.cookies.token,
+    });
+  }
 
   // Validation
   if (
@@ -120,6 +240,14 @@ const getFareEstimation = asyncHandler(async (req, res) => {
   ) {
     return res.status(400).json({
       message: "Pickup and dropoff coordinates, addresses, service type, and distance are required",
+      token: req.cookies.token,
+    });
+  }
+  
+  // Vehicle type validation for proper driver matching
+  if (!vehicleType) {
+    return res.status(400).json({
+      message: "Vehicle type is required for fare estimation and driver matching",
       token: req.cookies.token,
     });
   }
@@ -258,6 +386,14 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     const minFare = estimatedFare * (1 - adjustmentPercentage / 100);
     const maxFare = estimatedFare * (1 + adjustmentPercentage / 100);
 
+    // Find qualified drivers and vehicles for the estimation
+    const qualifiedDrivers = await findQualifiedDriversForEstimation(
+      pickupLocation,
+      serviceType,
+      vehicleType,
+      req.body.driverPreference
+    );
+
          // Prepare response data
      const responseData = {
        estimatedFare: Math.round(estimatedFare * 100) / 100,
@@ -268,13 +404,16 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         maxFare: Math.round(maxFare * 100) / 100,
         canAdjustFare: fareSettings.enableUserFareAdjustment
       },
+      qualifiedDrivers: qualifiedDrivers,
+      driversCount: qualifiedDrivers.length,
       tripDetails: {
         distance: `${(distanceInMeters / 1000).toFixed(2)} km`,
         serviceType,
         serviceCategory,
         vehicleType,
         routeType,
-        paymentMethod
+        paymentMethod,
+        driverPreference: req.body.driverPreference
       }
     };
     

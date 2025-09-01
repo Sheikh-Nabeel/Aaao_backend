@@ -16,6 +16,30 @@ export const handleBookingEvents = (socket, io) => {
     console.log('User:', socket.user.email);
     console.log('Booking Data:', bookingData);
     
+    // Authentication validation
+    if (!socket.user || !socket.user._id) {
+      socket.emit('booking_error', { 
+        message: 'Authentication required. Please log in to create booking.' 
+      });
+      return;
+    }
+    
+    // Validate user KYC status
+    if (socket.user.kycLevel < 1 || socket.user.kycStatus !== 'approved') {
+      socket.emit('booking_error', { 
+        message: 'KYC Level 1 must be approved to create bookings.' 
+      });
+      return;
+    }
+    
+    // Validate required booking data
+    if (!bookingData.vehicleType) {
+      socket.emit('booking_error', { 
+        message: 'Vehicle type is required for proper driver matching.' 
+      });
+      return;
+    }
+    
     try {
       // Create new booking with user ID
       const booking = new Booking({
@@ -249,6 +273,24 @@ export const handleBookingEvents = (socket, io) => {
         updatedDriver.currentLocation
       );
       
+      // Broadcast to location tracking subscribers
+      const locationUpdate = {
+        driverId: socket.user._id,
+        coordinates: updatedDriver.currentLocation.coordinates,
+        address: updatedDriver.currentLocation.address,
+        heading,
+        speed,
+        timestamp: new Date().toISOString(),
+        vehicleType: socket.user.vehicleType,
+        isActive: socket.user.isActive
+      };
+      
+      // Broadcast to nearby location subscribers
+      socket.to('location_nearby').emit('driver_location_broadcast', locationUpdate);
+      
+      // Broadcast to specific driver subscribers
+      socket.to(`driver_${socket.user._id}`).emit('driver_location_broadcast', locationUpdate);
+      
       // Send confirmation to driver
       SocketNotificationService.confirmLocationUpdate(
         socket,
@@ -307,6 +349,21 @@ export const handleBookingEvents = (socket, io) => {
         }
       }
       
+      // Broadcast to location tracking subscribers (for customers)
+      const customerLocationUpdate = {
+        customerId: socket.user._id,
+        coordinates: updatedLocation.coordinates,
+        address: updatedLocation.address,
+        timestamp: updatedLocation.lastUpdated,
+        bookingId: bookingId || null
+      };
+      
+      // Broadcast to nearby location subscribers
+      socket.to('location_nearby').emit('customer_location_broadcast', customerLocationUpdate);
+      
+      // Broadcast to specific customer subscribers
+      socket.to(`customer_${socket.user._id}`).emit('customer_location_broadcast', customerLocationUpdate);
+      
       // Send confirmation
       SocketNotificationService.confirmLocationUpdate(
         socket,
@@ -322,6 +379,134 @@ export const handleBookingEvents = (socket, io) => {
     }
   });
   
+  // Handle live location tracking subscription
+  socket.on('subscribe_location_updates', async (data) => {
+    console.log('=== SOCKET: SUBSCRIBE LOCATION UPDATES ===');
+    console.log('User:', socket.user.email);
+    console.log('Subscription Data:', data);
+    
+    try {
+      const { trackingType, targetIds, serviceType, vehicleType } = data;
+      
+      if (trackingType === 'nearby_drivers') {
+        // Subscribe to nearby driver location updates
+        socket.join('nearby_drivers_tracking');
+        socket.emit('location_subscription_confirmed', {
+          type: 'nearby_drivers',
+          message: 'Subscribed to nearby driver location updates',
+          timestamp: new Date()
+        });
+        console.log(`User ${socket.user._id} subscribed to nearby drivers tracking`);
+        
+      } else if (trackingType === 'specific_drivers' && targetIds) {
+        // Subscribe to specific driver location updates
+        targetIds.forEach(driverId => {
+          socket.join(`location_driver_${driverId}`);
+        });
+        socket.emit('location_subscription_confirmed', {
+          type: 'specific_drivers',
+          targetIds,
+          message: 'Subscribed to specific driver location updates',
+          timestamp: new Date()
+        });
+        console.log(`User ${socket.user._id} subscribed to specific drivers:`, targetIds);
+        
+      } else if (trackingType === 'fare_estimation_drivers') {
+        // Subscribe to drivers for fare estimation
+        const roomName = `fare_estimation_${serviceType}_${vehicleType}`;
+        socket.join(roomName);
+        socket.emit('location_subscription_confirmed', {
+          type: 'fare_estimation_drivers',
+          serviceType,
+          vehicleType,
+          message: 'Subscribed to fare estimation driver updates',
+          timestamp: new Date()
+        });
+        console.log(`User ${socket.user._id} subscribed to fare estimation drivers for ${serviceType}`);
+      }
+      
+    } catch (error) {
+      console.error('Error subscribing to location updates:', error);
+      socket.emit('error', { message: 'Failed to subscribe to location updates' });
+    }
+  });
+
+  // Handle unsubscribe from location tracking
+  socket.on('unsubscribe_location_updates', (data) => {
+    console.log('=== SOCKET: UNSUBSCRIBE LOCATION UPDATES ===');
+    console.log('User:', socket.user.email);
+    console.log('Unsubscription Data:', data);
+    
+    try {
+      const { trackingType, targetIds, serviceType, vehicleType } = data;
+      
+      if (trackingType === 'nearby_drivers') {
+        socket.leave('nearby_drivers_tracking');
+      } else if (trackingType === 'specific_drivers' && targetIds) {
+        targetIds.forEach(driverId => {
+          socket.leave(`location_driver_${driverId}`);
+        });
+      } else if (trackingType === 'fare_estimation_drivers') {
+        const roomName = `fare_estimation_${serviceType}_${vehicleType}`;
+        socket.leave(roomName);
+      }
+      
+      socket.emit('location_unsubscription_confirmed', {
+        type: trackingType,
+        message: 'Unsubscribed from location updates',
+        timestamp: new Date()
+      });
+      
+      console.log(`User ${socket.user._id} unsubscribed from ${trackingType}`);
+      
+    } catch (error) {
+      console.error('Error unsubscribing from location updates:', error);
+    }
+  });
+
+  // Handle request for qualified drivers with locations
+  socket.on('request_qualified_drivers', async (data) => {
+    console.log('=== SOCKET: REQUEST QUALIFIED DRIVERS ===');
+    console.log('User:', socket.user.email);
+    console.log('Request Data:', data);
+    
+    try {
+      const { pickupLocation, serviceType, vehicleType, driverPreference } = data;
+      
+      if (!pickupLocation || !pickupLocation.coordinates) {
+        socket.emit('error', { message: 'Invalid pickup location' });
+        return;
+      }
+      
+      // Import the function from fareEstimationController
+      const { findQualifiedDriversForEstimation } = await import('../controllers/fareEstimationController.js');
+      
+      // Find qualified drivers
+      const qualifiedDrivers = await findQualifiedDriversForEstimation(
+        pickupLocation,
+        serviceType,
+        vehicleType,
+        driverPreference
+      );
+      
+      // Emit qualified drivers with their locations
+      socket.emit('qualified_drivers_response', {
+        success: true,
+        drivers: qualifiedDrivers,
+        driversCount: qualifiedDrivers.length,
+        serviceType,
+        vehicleType,
+        timestamp: new Date()
+      });
+      
+      console.log(`Sent ${qualifiedDrivers.length} qualified drivers to user ${socket.user._id}`);
+      
+    } catch (error) {
+      console.error('Error getting qualified drivers:', error);
+      socket.emit('error', { message: 'Failed to get qualified drivers' });
+    }
+  });
+
   // Accept booking request
   socket.on('accept_booking_request', async (data) => {
     console.log('=== SOCKET: ACCEPT BOOKING REQUEST ===');

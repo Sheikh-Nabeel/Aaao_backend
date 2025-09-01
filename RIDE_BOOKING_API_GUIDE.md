@@ -5,14 +5,15 @@ This guide covers the essential APIs for implementing ride booking functionality
 ## Table of Contents
 1. [Authentication & Connection](#authentication--connection)
 2. [Socket.IO Connection & Disconnection](#socketio-connection--disconnection)
-3. [Fare Estimation](#fare-estimation)
-4. [Fare Adjustment](#fare-adjustment)
-5. [Fare Modification & Negotiation](#fare-modification--negotiation)
+3. [Live Location Tracking](#live-location-tracking)
+4. [Fare Estimation with Qualified Drivers](#fare-estimation-with-qualified-drivers)
+5. [Fare Adjustment](#fare-adjustment)
+6. [Fare Modification & Negotiation](#fare-modification--negotiation)
    - [User-Initiated Fare Increase & Resend](#user-initiated-fare-increase--resend)
-6. [Booking Creation & Driver Notification Process](#booking-creation--driver-notification-process)
-7. [Booking Creation API](#booking-creation-api)
-8. [Real-time Booking Flow](#real-time-booking-flow)
-9. [Admin Pricing Configuration](#admin-pricing-configuration)
+7. [Booking Creation & Driver Notification Process](#booking-creation--driver-notification-process)
+8. [Booking Creation API](#booking-creation-api)
+9. [Real-time Booking Flow](#real-time-booking-flow)
+10. [Admin Pricing Configuration](#admin-pricing-configuration)
 
 ---
 
@@ -245,7 +246,176 @@ socket.on('disconnect', (reason) => {
 
 ---
 
-## 3. Fare Estimation
+## 3. Live Location Tracking
+
+### Real-time Location Updates
+
+The system supports comprehensive live location tracking for both customers and drivers using Socket.IO for real-time communication.
+
+#### Customer Location Tracking
+
+##### Update Customer Location
+```javascript
+// Update customer location during ride search or active booking
+socket.emit('user_location_update', {
+  coordinates: [longitude, latitude],
+  address: 'Current address string',
+  bookingId: 'booking_id_if_active' // Optional: include for active rides
+});
+
+// Listen for location update confirmation
+socket.on('location_updated', (data) => {
+  console.log('Location updated:', data);
+});
+```
+
+##### Continuous Location Updates
+```javascript
+// For continuous tracking during ride search
+socket.emit('update_location', {
+  coordinates: [longitude, latitude]
+});
+```
+
+#### Driver Location Tracking
+
+##### Update Driver Location
+```javascript
+// Comprehensive driver location update
+socket.emit('driver_location_update', {
+  coordinates: [longitude, latitude],
+  address: 'Current driver address',
+  heading: 45,        // Direction in degrees (0-360)
+  speed: 30,          // Speed in km/h
+  accuracy: 5,        // GPS accuracy in meters
+  timestamp: Date.now()
+});
+
+// Listen for driver location update confirmation
+socket.on('driver_location_updated', (data) => {
+  console.log('Driver location updated:', data);
+});
+```
+
+##### Driver Status Updates
+```javascript
+// Update driver availability status
+socket.emit('driver_status_update', {
+  status: 'available', // 'available', 'busy', 'offline'
+  coordinates: [longitude, latitude]
+});
+```
+
+#### Location Broadcasting
+
+##### Customer Receives Driver Location
+```javascript
+// Listen for nearby driver locations during search
+socket.on('nearby_drivers', (drivers) => {
+  drivers.forEach(driver => {
+    console.log('Driver:', {
+      id: driver._id,
+      name: driver.firstName + ' ' + driver.lastName,
+      location: driver.currentLocation,
+      distance: driver.distance,
+      vehicleType: driver.vehicleType,
+      rating: driver.rating
+    });
+  });
+});
+
+// Listen for assigned driver location updates during active ride
+socket.on('driver_location_update', (locationData) => {
+  console.log('Driver location update:', {
+    coordinates: locationData.coordinates,
+    address: locationData.address,
+    heading: locationData.heading,
+    speed: locationData.speed,
+    estimatedArrival: locationData.estimatedArrival
+  });
+});
+```
+
+##### Driver Receives Customer Location
+```javascript
+// Listen for customer location updates during active ride
+socket.on('customer_location_update', (locationData) => {
+  console.log('Customer location:', {
+    coordinates: locationData.coordinates,
+    address: locationData.address,
+    bookingId: locationData.bookingId
+  });
+});
+```
+
+#### Location Data Structure
+
+##### Standard Location Object
+```javascript
+{
+  coordinates: [longitude, latitude], // [Number, Number]
+  address: "Street address string",   // String
+  lastUpdated: "2024-01-15T10:30:00Z", // ISO timestamp
+  accuracy: 5,                        // GPS accuracy in meters
+  heading: 45,                        // Direction (drivers only)
+  speed: 30                           // Speed in km/h (drivers only)
+}
+```
+
+##### Driver Location Response
+```javascript
+{
+  _id: "driver_id",
+  firstName: "John",
+  lastName: "Doe",
+  currentLocation: {
+    coordinates: [77.2090, 28.6139],
+    address: "Connaught Place, New Delhi",
+    lastUpdated: "2024-01-15T10:30:00Z"
+  },
+  vehicleType: "sedan",
+  vehicleDetails: {
+    make: "Toyota",
+    model: "Camry",
+    plateNumber: "DL01AB1234",
+    color: "white"
+  },
+  rating: 4.8,
+  totalRides: 1250,
+  distance: 2.5,              // Distance from customer in km
+  estimatedArrival: "8 mins"  // Estimated arrival time
+}
+```
+
+#### Location Privacy & Security
+
+##### Location Sharing Controls
+```javascript
+// Enable/disable location sharing
+socket.emit('toggle_location_sharing', {
+  enabled: true,
+  shareWithCustomers: true,  // For drivers
+  shareWithDrivers: true     // For customers
+});
+```
+
+##### Location History
+```javascript
+// Request location history (for analytics/support)
+socket.emit('get_location_history', {
+  bookingId: 'booking_id',
+  startTime: '2024-01-15T00:00:00Z',
+  endTime: '2024-01-15T23:59:59Z'
+});
+
+socket.on('location_history', (history) => {
+  console.log('Location history:', history);
+});
+```
+
+---
+
+## 4. Fare Estimation with Qualified Drivers
 
 The fare estimation system supports multiple service categories with different pricing models:
 
@@ -462,7 +632,62 @@ Content-Type: application/json
     "trafficCondition": "moderate",
     "isNightTime": false,
     "demandRatio": 1.2
-  }
+  },
+  "qualifiedDrivers": [
+    {
+      "_id": "driver_id_1",
+      "firstName": "Ahmed",
+      "lastName": "Hassan",
+      "email": "ahmed.hassan@example.com",
+      "phoneNumber": "+971501234567",
+      "vehicleType": "economy",
+      "currentLocation": {
+        "coordinates": [77.2095, 28.6145],
+        "address": "Near Connaught Place Metro Station",
+        "lastUpdated": "2024-01-15T10:28:00Z"
+      },
+      "vehicleDetails": {
+        "make": "Toyota",
+        "model": "Corolla",
+        "plateNumber": "DL01AB1234",
+        "color": "white",
+        "year": 2022
+      },
+      "profilePicture": "https://example.com/profiles/ahmed.jpg",
+      "rating": 4.8,
+      "totalRides": 1250,
+      "gender": "male",
+      "distance": 0.8,
+      "estimatedArrival": "3 mins"
+    },
+    {
+      "_id": "driver_id_2",
+      "firstName": "Fatima",
+      "lastName": "Al-Zahra",
+      "email": "fatima.alzahra@example.com",
+      "phoneNumber": "+971507654321",
+      "vehicleType": "economy",
+      "currentLocation": {
+        "coordinates": [77.2110, 28.6120],
+        "address": "Janpath Road",
+        "lastUpdated": "2024-01-15T10:29:00Z"
+      },
+      "vehicleDetails": {
+        "make": "Nissan",
+        "model": "Sunny",
+        "plateNumber": "DL02CD5678",
+        "color": "silver",
+        "year": 2021
+      },
+      "profilePicture": "https://example.com/profiles/fatima.jpg",
+      "rating": 4.9,
+      "totalRides": 890,
+      "gender": "female",
+      "distance": 1.2,
+      "estimatedArrival": "4 mins"
+    }
+  ],
+  "driversCount": 8
 }
 ```
 
@@ -572,13 +797,74 @@ Content-Type: application/json
 }
 ```
 
+### Qualified Drivers Data
+
+The fare estimation API now returns comprehensive information about qualified drivers in the area, including their live locations, vehicle details, and ratings. This enables customers to see available drivers before booking.
+
+#### Driver Qualification Criteria
+
+- **Role**: Must be a verified driver
+- **KYC Status**: Must have completed KYC verification
+- **Activity Status**: Must be currently active and available
+- **Location**: Must be within service radius (10km for general services, 50km for Pink Captain)
+- **Vehicle Type**: Must match the requested service and vehicle type
+- **Gender Filtering**: For Pink Captain service, only female drivers are included
+
+#### Driver Data Structure
+
+Each qualified driver object includes:
+
+```javascript
+{
+  "_id": "unique_driver_id",
+  "firstName": "Driver first name",
+  "lastName": "Driver last name",
+  "email": "driver@example.com",
+  "phoneNumber": "+971501234567",
+  "vehicleType": "economy|premium|luxury|xl|family",
+  "currentLocation": {
+    "coordinates": [longitude, latitude],
+    "address": "Current driver address",
+    "lastUpdated": "ISO timestamp"
+  },
+  "vehicleDetails": {
+    "make": "Vehicle manufacturer",
+    "model": "Vehicle model",
+    "plateNumber": "License plate",
+    "color": "Vehicle color",
+    "year": 2022
+  },
+  "profilePicture": "URL to driver photo",
+  "rating": 4.8,              // Average rating (0-5)
+  "totalRides": 1250,         // Total completed rides
+  "gender": "male|female",
+  "distance": 0.8,            // Distance from pickup in km
+  "estimatedArrival": "3 mins" // Estimated arrival time
+}
+```
+
+#### Pink Captain Service
+
+For Pink Captain service requests, the system:
+- Filters drivers by gender (female only)
+- Checks `driverSettings.ridePreferences.pinkCaptainMode` is enabled
+- Uses extended search radius (50km vs 10km)
+- Prioritizes drivers with Pink Captain experience
+
+#### Driver Sorting & Limits
+
+- Drivers are sorted by distance from pickup location (closest first)
+- Maximum of 10 qualified drivers returned per request
+- Real-time location data ensures accuracy
+- Includes estimated arrival time based on current traffic
+
 ---
 
-## 4. Fare Adjustment
+## 5. Fare Adjustment
 
 After getting the fare estimation, users can adjust the fare within admin-configured limits for all service types.
 
-### 4.1 Car Cab Fare Adjustment
+### 5.1 Car Cab Fare Adjustment
 
 ```http
 POST /api/fare/adjust-fare
@@ -608,7 +894,7 @@ Content-Type: application/json
 }
 ```
 
-### 4.2 Bike Fare Adjustment
+### 5.2 Bike Fare Adjustment
 
 ```http
 POST /api/fare/adjust-fare
@@ -638,7 +924,7 @@ Content-Type: application/json
 }
 ```
 
-### 4.3 Car Recovery Fare Adjustment
+### 5.3 Car Recovery Fare Adjustment
 
 ```http
 POST /api/fare/adjust-fare
@@ -668,7 +954,7 @@ Content-Type: application/json
 }
 ```
 
-### 4.4 Shifting & Movers Fare Adjustment
+### 5.4 Shifting & Movers Fare Adjustment
 
 ```http
 POST /api/fare/adjust-fare
@@ -783,7 +1069,7 @@ Content-Type: application/json
 
 ---
 
-## 5. Fare Modification & Negotiation
+## 6. Fare Modification & Negotiation
 
 The fare modification system allows drivers to propose fare changes during the booking process, enabling real-time negotiation between drivers and users. This feature provides flexibility for dynamic pricing based on traffic conditions, demand, or service complexity.
 
@@ -1245,7 +1531,7 @@ useEffect(() => {
 
 ---
 
-## 6. Booking Creation & Driver Notification Process
+## 7. Booking Creation & Driver Notification Process
 
 After fare estimation and optional adjustment, the system follows a two-step process: creating the booking in the database and then notifying qualified drivers.
 
@@ -1687,7 +1973,7 @@ The system uses a priority-based notification system:
 
 ---
 
-## 7. Booking Creation API
+## 8. Booking Creation API
 
 After understanding the booking flow, use the following endpoints to create bookings for each service.
 
@@ -1936,7 +2222,7 @@ Content-Type: application/json
 
 ---
 
-## 8. Real-time Booking Flow
+## 9. Real-time Booking Flow
 
 ### Recommended Approach: REST-First with Automatic Real-time Updates
 
@@ -2130,7 +2416,7 @@ socket.on('error', (error) => {
 
 ---
 
-## 9. Admin Pricing Configuration
+## 10. Admin Pricing Configuration
 
 The system provides a comprehensive admin dashboard for configuring pricing across all service categories.
 
