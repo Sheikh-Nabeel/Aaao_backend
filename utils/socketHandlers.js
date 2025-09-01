@@ -255,28 +255,19 @@ export const handleBookingEvents = (socket, io) => {
         return SocketNotificationService.sendError(socket, 'location_error', coordValidation.error);
       }
       
-      // Update location based on user role
+      // Update location using unified function
+      const updatedUser = await SocketDatabaseService.updateUserLocation(
+        socket.user._id,
+        { coordinates }
+      );
+      
+      // If user is a driver, notify users with active bookings
       if (userRole === 'driver') {
-        // Update driver location
-        const updatedDriver = await SocketDatabaseService.updateDriverLocation(
-          socket.user._id,
-          { coordinates, address: '', heading: 0, speed: 0 }
-        );
-        
-        // Notify users with active bookings
         await SocketNotificationService.notifyDriverLocationUpdate(
           io,
           socket.user._id,
-          updatedDriver.currentLocation
+          updatedUser.currentLocation
         );
-      } else if (userRole === 'user') {
-        // Update user location
-        await SocketDatabaseService.updateUserLocation(
-          socket.user._id,
-          { coordinates, address: '' }
-        );
-      } else {
-        return SocketNotificationService.sendError(socket, 'location_error', 'Invalid user role for location updates');
       }
       
       // Broadcast simplified location update with user ID and coordinates only

@@ -85,35 +85,13 @@ class SocketDatabaseService {
       };
 
       await user.save();
-      return user.currentLocation;
+      return user;
     } catch (error) {
       throw new Error(`Failed to update user location: ${error.message}`);
     }
   }
 
-  /**
-   * Update driver location with additional metadata
-   */
-  static async updateDriverLocation(driverId, locationData) {
-    try {
-      const driver = await User.findById(driverId);
-      if (!driver) {
-        throw new Error('Driver not found');
-      }
 
-      const { coordinates } = locationData;
-
-      driver.currentLocation = {
-        type: 'Point',
-        coordinates: coordinates
-      };
-
-      await driver.save();
-      return driver;
-    } catch (error) {
-      throw new Error(`Failed to update driver location: ${error.message}`);
-    }
-  }
 
   /**
    * Accept booking request
