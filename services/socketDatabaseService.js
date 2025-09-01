@@ -70,6 +70,18 @@ class SocketDatabaseService {
   }
 
   /**
+   * Get user by ID with location data
+   */
+  static async getUserById(userId) {
+    try {
+      const user = await User.findById(userId).select('_id username email role currentLocation');
+      return user;
+    } catch (error) {
+      throw new Error(`Failed to get user: ${error.message}`);
+    }
+  }
+
+  /**
    * Update user location
    */
   static async updateUserLocation(userId, locationData) {

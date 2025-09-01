@@ -94,9 +94,19 @@
             <input type="text" id="userId" placeholder="User ID (auto-detected if empty)">
         </div>
         <div>
-            <button onclick="sendUserLocation()">Send User Location</button>
-            <button onclick="sendDriverLocation()">Send Driver Location</button>
-            <button onclick="getNearbyDrivers()">Get Nearby Drivers</button>
+            <button onclick="sendLocation()">📍 Send Location Update</button>
+            <button onclick="getNearbyDrivers()">🚙 Get Nearby Drivers</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📡 Get Live Location</h3>
+        <div>
+            <label>Target User ID (optional):</label>
+            <input type="text" id="targetUserId" placeholder="User ID (leave empty for your own location)">
+        </div>
+        <div>
+            <button onclick="getLiveLocation()">📡 Get Live Location</button>
         </div>
     </div>
 
@@ -185,6 +195,22 @@
                 displayLocationUpdate(roleText, data);
             });
             
+            // Live location response
+            socket.on('live_location_response', (data) => {
+                if (data.location) {
+                    const roleIcon = data.role === 'driver' ? '🚗' : '👤';
+                    log(`${roleIcon} Live location for ${data.username} (${data.role}): [${data.location.coordinates.join(', ')}]`, 'success');
+                    displayLiveLocation(data);
+                } else {
+                    log(`📍 ${data.username} (${data.role}): ${data.message}`, 'info');
+                }
+            });
+            
+            // Live location error
+            socket.on('live_location_error', (error) => {
+                log(`❌ Live location error: ${error.message}`, 'error');
+            });
+
             // Nearby drivers response
             socket.on('nearby_drivers', (drivers) => {
                 log(`🚙 Received ${drivers.length} nearby drivers`, 'info');
@@ -211,7 +237,7 @@
             }
         }
         
-        function sendUserLocation() {
+        function sendLocation() {
             if (!socket || !socket.connected) {
                 alert('Please connect first');
                 return;
@@ -227,8 +253,7 @@
             }
             
             const locationData = {
-                coordinates: [longitude, latitude],
-                userRole: 'user'
+                coordinates: [longitude, latitude]
             };
             
             if (userId) {
@@ -236,35 +261,7 @@
             }
             
             socket.emit('location_update', locationData);
-            log(`📤 Sent user location: [${longitude}, ${latitude}]${userId ? ` for user ${userId}` : ''}`, 'info');
-        }
-        
-        function sendDriverLocation() {
-            if (!socket || !socket.connected) {
-                alert('Please connect first');
-                return;
-            }
-            
-            const longitude = parseFloat(document.getElementById('longitude').value);
-            const latitude = parseFloat(document.getElementById('latitude').value);
-            const userId = document.getElementById('userId').value;
-            
-            if (isNaN(longitude) || isNaN(latitude)) {
-                alert('Please enter valid coordinates');
-                return;
-            }
-            
-            const locationData = {
-                coordinates: [longitude, latitude],
-                userRole: 'driver'
-            };
-            
-            if (userId) {
-                locationData.userId = userId;
-            }
-            
-            socket.emit('location_update', locationData);
-            log(`📤 Sent driver location: [${longitude}, ${latitude}]${userId ? ` for user ${userId}` : ''}`, 'info');
+            log(`📤 Sent location update: [${longitude}, ${latitude}]${userId ? ` for user ${userId}` : ''}`, 'info');
         }
         
         function getNearbyDrivers() {
@@ -288,6 +285,23 @@
             log(`📤 Requested nearby drivers for: [${longitude}, ${latitude}]`, 'info');
         }
         
+        function getLiveLocation() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const targetUserId = document.getElementById('targetUserId').value.trim();
+            
+            const requestData = {};
+            if (targetUserId) {
+                requestData.userId = targetUserId;
+            }
+            
+            socket.emit('get_live_location', requestData);
+            log(`📤 Requested live location${targetUserId ? ` for user ${targetUserId}` : ' for current user'}`, 'info');
+        }
+        
         function displayLocationUpdate(type, data) {
             const container = document.getElementById('locationUpdates');
             const updateDiv = document.createElement('div');
@@ -297,6 +311,28 @@
                 User ID: <span class="coordinates">${data.userId}</span><br>
                 Coordinates: <span class="coordinates">[${data.coordinates.join(', ')}]</span><br>
                 <small>Received at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(updateDiv);
+            
+            // Keep only last 5 updates
+            while (container.children.length > 5) {
+                container.removeChild(container.firstChild);
+            }
+        }
+        
+        function displayLiveLocation(data) {
+            const container = document.getElementById('locationUpdates');
+            const updateDiv = document.createElement('div');
+            updateDiv.className = 'location-display';
+            const roleIcon = data.role === 'driver' ? '🚗' : '👤';
+            updateDiv.innerHTML = `
+                <strong>${roleIcon} Live Location Response</strong><br>
+                Username: <span class="coordinates">${data.username}</span><br>
+                Role: <span class="coordinates">${data.role}</span><br>
+                User ID: <span class="coordinates">${data.userId}</span><br>
+                ${data.location ? `Coordinates: <span class="coordinates">[${data.location.coordinates.join(', ')}]</span><br>
+                Last Updated: <span class="coordinates">${new Date(data.location.lastUpdated).toLocaleString()}</span>` : 'No location data available'}<br>
+                <small>Retrieved at: ${new Date().toLocaleTimeString()}</small>
             `;
             container.appendChild(updateDiv);
             

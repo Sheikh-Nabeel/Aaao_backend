@@ -472,6 +472,68 @@ export const handleBookingEvents = (socket, io) => {
     }
   });
 
+  // Get live location for users and drivers
+  socket.on('get_live_location', async (data) => {
+    console.log('=== SOCKET: GET LIVE LOCATION ===');
+    console.log('User:', socket.user.email);
+    console.log('Request Data:', data);
+    
+    try {
+      const { userId, userType } = data;
+      
+      // If no userId provided, return current user's location
+      const targetUserId = userId || socket.user._id;
+      
+      // Get user from database with current location
+      const user = await SocketDatabaseService.getUserById(targetUserId);
+      
+      if (!user) {
+        socket.emit('live_location_error', { 
+          message: 'User not found',
+          userId: targetUserId 
+        });
+        return;
+      }
+      
+      // Check if user has location data
+      if (!user.currentLocation || !user.currentLocation.coordinates) {
+        socket.emit('live_location_response', {
+          success: true,
+          userId: user._id,
+          username: user.username,
+          role: user.role,
+          location: null,
+          message: 'No location data available',
+          timestamp: new Date()
+        });
+        return;
+      }
+      
+      // Return live location data
+      socket.emit('live_location_response', {
+        success: true,
+        userId: user._id,
+        username: user.username,
+        role: user.role,
+        location: {
+          type: user.currentLocation.type,
+          coordinates: user.currentLocation.coordinates,
+          lastUpdated: user.currentLocation.lastUpdated || new Date()
+        },
+        timestamp: new Date()
+      });
+      
+      console.log(`Sent live location for user ${user._id} (${user.role}) to ${socket.user.email}`);
+      
+    } catch (error) {
+      console.error('Error getting live location:', error);
+      socket.emit('live_location_error', { 
+        message: 'Failed to get live location',
+        error: error.message 
+      });
+    }
+  });
+
   // Accept booking request
   socket.on('accept_booking_request', async (data) => {
     console.log('=== SOCKET: ACCEPT BOOKING REQUEST ===');
