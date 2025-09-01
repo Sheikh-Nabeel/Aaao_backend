@@ -454,13 +454,35 @@ export const handleBookingEvents = (socket, io) => {
         driverPreference
       );
       
-      // Emit qualified drivers with their locations
+      // Format qualified drivers for map display
+      const formattedQualifiedDrivers = qualifiedDrivers.map(driver => ({
+        driverId: driver.driverId,
+        username: driver.username,
+        email: driver.email,
+        coordinates: driver.currentLocation.coordinates,
+        distance: driver.distance,
+        isActive: driver.isActive,
+        vehicleInfo: driver.vehicleInfo,
+        rating: driver.rating || 0,
+        completedRides: driver.completedRides || 0,
+        lastActiveAt: driver.lastActiveAt,
+        estimatedArrival: driver.estimatedArrival,
+        fareMultiplier: driver.fareMultiplier || 1
+      }));
+      
+      // Emit qualified drivers with enhanced map data
       socket.emit('qualified_drivers_response', {
         success: true,
-        drivers: qualifiedDrivers,
-        driversCount: qualifiedDrivers.length,
+        drivers: formattedQualifiedDrivers,
+        driversCount: formattedQualifiedDrivers.length,
         serviceType,
         vehicleType,
+        searchCriteria: {
+          pickupLocation,
+          serviceType,
+          vehicleType,
+          driverPreference
+        },
         timestamp: new Date()
       });
       
@@ -469,6 +491,83 @@ export const handleBookingEvents = (socket, io) => {
     } catch (error) {
       console.error('Error getting qualified drivers:', error);
       socket.emit('error', { message: 'Failed to get qualified drivers' });
+    }
+  });
+
+  // Get all drivers within specified radius (default 5km)
+  socket.on('get_nearby_drivers_radius', async (data) => {
+    console.log('=== SOCKET: GET NEARBY DRIVERS RADIUS ===');
+    console.log('User:', socket.user.email);
+    console.log('Request Data:', data);
+    
+    try {
+      const { coordinates, radius = 5 } = data;
+      
+      if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
+        socket.emit('nearby_drivers_radius_error', { 
+          message: 'Invalid coordinates. Please provide [longitude, latitude]' 
+        });
+        return;
+      }
+      
+      const [longitude, latitude] = coordinates;
+      
+      if (isNaN(longitude) || isNaN(latitude)) {
+        socket.emit('nearby_drivers_radius_error', { 
+          message: 'Invalid coordinate values' 
+        });
+        return;
+      }
+      
+      // Find all active drivers within the specified radius
+      const nearbyDrivers = await User.find({
+        role: 'driver',
+        isActive: true,
+        currentLocation: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: [longitude, latitude]
+            },
+            $maxDistance: radius * 1000 // Convert km to meters
+          }
+        }
+      }).select('_id username email currentLocation isActive lastActiveAt');
+      
+      // Format driver data for map display
+      const formattedDrivers = nearbyDrivers.map(driver => ({
+        driverId: driver._id,
+        username: driver.username,
+        email: driver.email,
+        coordinates: driver.currentLocation.coordinates,
+        isActive: driver.isActive,
+        lastActiveAt: driver.lastActiveAt,
+        distance: calculateDistance(
+          latitude, longitude,
+          driver.currentLocation.coordinates[1], driver.currentLocation.coordinates[0]
+        )
+      }));
+      
+      // Sort by distance
+      formattedDrivers.sort((a, b) => a.distance - b.distance);
+      
+      socket.emit('nearby_drivers_radius_response', {
+        success: true,
+        drivers: formattedDrivers,
+        driversCount: formattedDrivers.length,
+        searchLocation: { coordinates: [longitude, latitude] },
+        radius: radius,
+        timestamp: new Date()
+      });
+      
+      console.log(`Found ${formattedDrivers.length} drivers within ${radius}km for user ${socket.user._id}`);
+      
+    } catch (error) {
+      console.error('Error getting nearby drivers by radius:', error);
+      socket.emit('nearby_drivers_radius_error', { 
+        message: 'Failed to get nearby drivers',
+        error: error.message 
+      });
     }
   });
 

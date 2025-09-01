@@ -111,6 +111,62 @@
     </div>
 
     <div class="container">
+        <h3>🗺️ Get Nearby Drivers (Radius)</h3>
+        <div>
+            <label>Longitude:</label>
+            <input type="text" id="radiusLongitude" value="73.0756609" placeholder="Longitude">
+        </div>
+        <div>
+            <label>Latitude:</label>
+            <input type="text" id="radiusLatitude" value="33.6402842" placeholder="Latitude">
+        </div>
+        <div>
+            <label>Radius (km):</label>
+            <input type="text" id="searchRadius" value="5" placeholder="Radius in kilometers">
+        </div>
+        <div>
+            <button onclick="getNearbyDriversRadius()">🗺️ Get Drivers in Radius</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>🎯 Get Qualified Drivers (For Map)</h3>
+        <div>
+            <label>Pickup Longitude:</label>
+            <input type="text" id="pickupLongitude" value="73.0756609" placeholder="Pickup Longitude">
+        </div>
+        <div>
+            <label>Pickup Latitude:</label>
+            <input type="text" id="pickupLatitude" value="33.6402842" placeholder="Pickup Latitude">
+        </div>
+        <div>
+            <label>Service Type:</label>
+            <select id="serviceType">
+                <option value="car cab">Car Cab</option>
+                <option value="bike" selected>Bike</option>
+                <option value="car recovery">Car Recovery</option>
+                <option value="shifting & movers">Shifting & Movers</option>
+            </select>
+        </div>
+        <div>
+            <label>Vehicle Type (Bike):</label>
+            <select id="vehicleType">
+                <option value="economy" selected>Economy</option>
+                <option value="premium">Premium</option>
+                <option value="vip">VIP</option>
+            </select>
+        </div>
+        <div>
+            <label>Service Category (Optional):</label>
+            <input type="text" id="serviceCategory" placeholder="Service Category (optional for bikes)">
+        </div>
+        <div>
+            <button onclick="getQualifiedDrivers()">🎯 Get Qualified Drivers</button>
+            <button onclick="setBikeDefaults()">🏍️ Set Bike Defaults</button>
+        </div>
+    </div>
+
+    <div class="container">
         <h3>📡 Received Location Updates</h3>
         <div id="locationUpdates"></div>
     </div>
@@ -118,6 +174,43 @@
     <div class="container">
         <h3>🚙 Nearby Drivers</h3>
         <div id="nearbyDrivers"></div>
+    </div>
+
+    <div class="container">
+        <h3>🗺️ Nearby Drivers (Radius)</h3>
+        <div id="nearbyDriversRadius"></div>
+    </div>
+
+    <div class="container">
+        <h3>🎯 Qualified Drivers</h3>
+        <div id="qualifiedDrivers"></div>
+    </div>
+
+    <div class="container">
+        <h3>🏍️ Bike Service Reference</h3>
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 12px;">
+            <strong>Bike Service Types:</strong><br>
+            • serviceType: "bike"<br>
+            • vehicleType: "economy", "premium", "vip"<br>
+            • serviceCategory: null (not required for bikes)<br><br>
+            
+            <strong>Complete Bike Request Example:</strong><br>
+            {
+              "pickupLocation": { "coordinates": [55.2708, 25.2048] },<br>
+              "dropoffLocation": { "coordinates": [55.2744, 25.1972] },<br>
+              "serviceType": "bike",<br>
+              "vehicleType": "economy",<br>
+              "routeType": "one_way",<br>
+              "passengerCount": 1,<br>
+              "paymentMethod": "cash",<br>
+              "serviceOptions": {<br>
+                "helmet": true,<br>
+                "rainCover": false,<br>
+                "extraHelmet": false,<br>
+                "baggageCarrier": false<br>
+              }<br>
+            }
+        </div>
     </div>
 
     <div class="container">
@@ -217,6 +310,28 @@
                 displayNearbyDrivers(drivers);
             });
             
+            // Nearby drivers radius response
+            socket.on('nearby_drivers_radius_response', (data) => {
+                log(`🗺️ Found ${data.driversCount} drivers within ${data.radius}km radius`, 'success');
+                displayNearbyDriversRadius(data);
+            });
+            
+            // Nearby drivers radius error
+            socket.on('nearby_drivers_radius_error', (error) => {
+                log(`❌ Nearby drivers radius error: ${error.message}`, 'error');
+            });
+            
+            // Qualified drivers response (enhanced for map)
+            socket.on('qualified_drivers_response', (data) => {
+                log(`🎯 Found ${data.driversCount} qualified drivers for ${data.serviceType} service`, 'success');
+                displayQualifiedDrivers(data);
+            });
+            
+            // Qualified drivers error
+            socket.on('error', (error) => {
+                log(`❌ Error: ${error.message}`, 'error');
+            });
+            
             // Error handling
             socket.on('location_error', (error) => {
                 log(`❌ Location error: ${error.message}`, 'error');
@@ -302,6 +417,70 @@
             log(`📤 Requested live location${targetUserId ? ` for user ${targetUserId}` : ' for current user'}`, 'info');
         }
         
+        function getNearbyDriversRadius() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('radiusLongitude').value);
+            const latitude = parseFloat(document.getElementById('radiusLatitude').value);
+            const radius = parseFloat(document.getElementById('searchRadius').value) || 5;
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            socket.emit('get_nearby_drivers_radius', {
+                coordinates: [longitude, latitude],
+                radius: radius
+            });
+            log(`📤 Requested drivers within ${radius}km of [${longitude}, ${latitude}]`, 'info');
+        }
+        
+        function getQualifiedDrivers() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('pickupLongitude').value);
+            const latitude = parseFloat(document.getElementById('pickupLatitude').value);
+            const serviceType = document.getElementById('serviceType').value || 'bike';
+            const vehicleType = document.getElementById('vehicleType').value || 'economy';
+            const serviceCategory = document.getElementById('serviceCategory').value.trim() || null;
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid pickup coordinates');
+                return;
+            }
+            
+            const requestData = {
+                pickupLocation: {
+                    type: 'Point',
+                    coordinates: [longitude, latitude]
+                },
+                serviceType: serviceType,
+                vehicleType: vehicleType,
+                driverPreference: null
+            };
+            
+            if (serviceCategory) {
+                requestData.serviceCategory = serviceCategory;
+            }
+            
+            socket.emit('request_qualified_drivers', requestData);
+            log(`📤 Requested qualified ${vehicleType} drivers for ${serviceType} service at [${longitude}, ${latitude}]`, 'info');
+        }
+        
+        function setBikeDefaults() {
+            document.getElementById('serviceType').value = 'bike';
+            document.getElementById('vehicleType').value = 'economy';
+            document.getElementById('serviceCategory').value = '';
+            log('🏍️ Set bike defaults: serviceType=bike, vehicleType=economy', 'info');
+        }
+        
         function displayLocationUpdate(type, data) {
             const container = document.getElementById('locationUpdates');
             const updateDiv = document.createElement('div');
@@ -358,6 +537,79 @@
                     <strong>Driver ${index + 1}</strong><br>
                     User ID: <span class="coordinates">${driver.userId}</span><br>
                     Coordinates: <span class="coordinates">[${driver.coordinates.join(', ')}]</span>
+                `;
+                container.appendChild(driverDiv);
+            });
+        }
+        
+        function displayNearbyDriversRadius(data) {
+            const container = document.getElementById('nearbyDriversRadius');
+            container.innerHTML = '';
+            
+            if (data.driversCount === 0) {
+                container.innerHTML = '<div class="location-display">No drivers found within radius</div>';
+                return;
+            }
+            
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'location-display';
+            headerDiv.innerHTML = `
+                <strong>🗺️ Found ${data.driversCount} drivers within ${data.radius}km</strong><br>
+                Search Center: <span class="coordinates">[${data.searchCenter.join(', ')}]</span>
+            `;
+            container.appendChild(headerDiv);
+            
+            data.drivers.forEach((driver, index) => {
+                const driverDiv = document.createElement('div');
+                driverDiv.className = 'location-display';
+                driverDiv.innerHTML = `
+                    <strong>🚗 ${driver.username || `Driver ${index + 1}`}</strong><br>
+                    ID: <span class="coordinates">${driver.driverId}</span><br>
+                    Distance: <span class="coordinates">${driver.distance.toFixed(2)}km</span><br>
+                    Coordinates: <span class="coordinates">[${driver.coordinates.join(', ')}]</span><br>
+                    Status: <span class="coordinates">${driver.isActive ? '🟢 Active' : '🔴 Inactive'}</span><br>
+                    ${driver.vehicleInfo ? `Vehicle: <span class="coordinates">${driver.vehicleInfo.type} - ${driver.vehicleInfo.model}</span><br>` : ''}
+                    ${driver.rating ? `Rating: <span class="coordinates">⭐ ${driver.rating}/5</span><br>` : ''}
+                    <small>Last Active: ${new Date(driver.lastActiveAt).toLocaleString()}</small>
+                `;
+                container.appendChild(driverDiv);
+            });
+        }
+        
+        function displayQualifiedDrivers(data) {
+            const container = document.getElementById('qualifiedDrivers');
+            container.innerHTML = '';
+            
+            if (data.driversCount === 0) {
+                container.innerHTML = '<div class="location-display">No qualified drivers found</div>';
+                return;
+            }
+            
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'location-display';
+            headerDiv.innerHTML = `
+                <strong>🎯 Found ${data.driversCount} qualified drivers</strong><br>
+                Service: <span class="coordinates">${data.serviceType}</span> | 
+                Vehicle: <span class="coordinates">${data.vehicleType}</span><br>
+                Pickup: <span class="coordinates">[${data.pickupLocation.coordinates.join(', ')}]</span>
+            `;
+            container.appendChild(headerDiv);
+            
+            data.drivers.forEach((driver, index) => {
+                const driverDiv = document.createElement('div');
+                driverDiv.className = 'location-display';
+                driverDiv.innerHTML = `
+                    <strong>🚗 ${driver.username || `Driver ${index + 1}`}</strong><br>
+                    ID: <span class="coordinates">${driver.driverId}</span><br>
+                    Email: <span class="coordinates">${driver.email}</span><br>
+                    Distance: <span class="coordinates">${driver.distance.toFixed(2)}km</span><br>
+                    Coordinates: <span class="coordinates">[${driver.coordinates.join(', ')}]</span><br>
+                    Status: <span class="coordinates">${driver.isActive ? '🟢 Active' : '🔴 Inactive'}</span><br>
+                    ${driver.vehicleInfo ? `Vehicle: <span class="coordinates">${driver.vehicleInfo.type} - ${driver.vehicleInfo.model}</span><br>` : ''}
+                    ${driver.rating ? `Rating: <span class="coordinates">⭐ ${driver.rating}/5 (${driver.completedRides} rides)</span><br>` : ''}
+                    ${driver.estimatedArrival ? `ETA: <span class="coordinates">${driver.estimatedArrival} min</span><br>` : ''}
+                    ${driver.fareMultiplier ? `Fare Multiplier: <span class="coordinates">${driver.fareMultiplier}x</span><br>` : ''}
+                    <small>Last Active: ${new Date(driver.lastActiveAt).toLocaleString()}</small>
                 `;
                 container.appendChild(driverDiv);
             });
