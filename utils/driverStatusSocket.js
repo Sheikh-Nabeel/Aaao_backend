@@ -14,74 +14,89 @@ export const initializeDriverStatusSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(`Socket connected: ${socket.id}`);
 
-    // Handle driver status toggle (online/offline)
-    socket.on('driver:toggle-status', async (data) => {
-      try {
-        const { location } = data;
-        const userId = socket.user.id;
-
-        // Verify user is a driver
-        if (socket.user.role !== 'driver') {
-          socket.emit('driver:status-error', {
-            message: 'Only drivers can toggle status'
-          });
-          return;
-        }
-
-        // Get current driver status
-        const currentDriver = await User.findById(userId).select('driverStatus isActive');
-        const isCurrentlyOnline = currentDriver.driverStatus === 'online' && currentDriver.isActive;
-        
-        // Toggle status
-        const newStatus = isCurrentlyOnline ? 'offline' : 'online';
-        const newActiveState = !isCurrentlyOnline;
+    // Driver go online
+  socket.on('driver:go-online', async (data) => {
+    try {
+      const { latitude, longitude, userId: targetUserId } = data;
+      const userId = targetUserId || socket.user._id;
         
         const updateData = {
-          driverStatus: newStatus,
-          isActive: newActiveState,
+          driverStatus: 'online',
+          isActive: true,
           lastActiveAt: new Date()
         };
-
-        // Add location if going online and location provided
-        if (newStatus === 'online' && location && location.latitude && location.longitude) {
+        
+        // Update location if provided
+        if (latitude && longitude) {
           updateData.currentLocation = {
             type: 'Point',
-            coordinates: [location.longitude, location.latitude]
+            coordinates: [longitude, latitude]
           };
         }
-
-        const driver = await User.findByIdAndUpdate(
+        
+        // Update user in database
+        const updatedUser = await User.findByIdAndUpdate(
           userId,
           updateData,
-          { new: true, select: 'firstName lastName driverStatus isActive currentLocation' }
-        );
-
-        if (driver) {
-          if (newStatus === 'online') {
-            driverSockets.set(userId, socket.id);
-            socket.join(`driver:${userId}`);
-          } else {
-            driverSockets.delete(userId);
-            socket.leave(`driver:${userId}`);
-          }
-
-          // Emit status update to driver
-          socket.emit('driver:status-updated', {
-            status: newStatus,
-            isActive: newActiveState,
-            location: driver.currentLocation,
-            message: `You are now ${newStatus}`,
-            timestamp: new Date()
-          });
-
-          console.log(`Driver ${driver.firstName} ${driver.lastName} is now ${newStatus}`);
-        }
-
-      } catch (error) {
-        console.error('Error handling driver status toggle:', error);
-        socket.emit('driver:status-error', {
-          message: 'Failed to toggle status'
+          { new: true }
+        ).select('driverStatus isActive currentLocation lastActiveAt');
+        
+        // Join online drivers room
+        socket.join('online-drivers');
+        socket.leave('offline-drivers');
+        
+        // Emit status update
+        socket.emit('driver:status-updated', {
+          status: updatedUser.driverStatus,
+          isActive: updatedUser.isActive,
+          location: updatedUser.currentLocation,
+          lastActiveAt: updatedUser.lastActiveAt
         });
+        
+        console.log(`Driver ${userId} went online`);
+        
+      } catch (error) {
+        console.error('Error going online:', error);
+        socket.emit('driver:status-error', { message: 'Failed to go online' });
+      }
+    });
+    
+    // Driver go offline
+  socket.on('driver:go-offline', async (data = {}) => {
+    try {
+      const { userId: targetUserId } = data;
+      const userId = targetUserId || socket.user._id;
+        
+        const updateData = {
+          driverStatus: 'offline',
+          isActive: false,
+          lastActiveAt: new Date()
+        };
+        
+        // Update user in database
+        const updatedUser = await User.findByIdAndUpdate(
+          userId,
+          updateData,
+          { new: true }
+        ).select('driverStatus isActive currentLocation lastActiveAt');
+        
+        // Join offline drivers room
+        socket.join('offline-drivers');
+        socket.leave('online-drivers');
+        
+        // Emit status update
+        socket.emit('driver:status-updated', {
+          status: updatedUser.driverStatus,
+          isActive: updatedUser.isActive,
+          location: updatedUser.currentLocation,
+          lastActiveAt: updatedUser.lastActiveAt
+        });
+        
+        console.log(`Driver ${userId} went offline`);
+        
+      } catch (error) {
+        console.error('Error going offline:', error);
+        socket.emit('driver:status-error', { message: 'Failed to go offline' });
       }
     });
 

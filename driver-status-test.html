@@ -71,6 +71,12 @@
         button.offline:hover {
             background-color: #c82333;
         }
+        button.offline {
+            background-color: #dc3545;
+        }
+        button.offline:hover {
+            background-color: #c82333;
+        }
         .status {
             padding: 15px;
             border-radius: 5px;
@@ -101,6 +107,21 @@
             overflow-y: auto;
             font-family: monospace;
             font-size: 12px;
+        }
+        .form-group {
+            margin: 10px 0;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
         }
         .log-entry {
             margin-bottom: 5px;
@@ -141,7 +162,12 @@
         <!-- Driver Status Controls -->
         <div class="section">
             <h3>🚦 Driver Status Controls</h3>
-            <button onclick="toggleStatus()">🔄 Toggle Status</button>
+            <div class="form-group">
+                <label for="targetUserId">Target User ID (optional):</label>
+                <input type="text" id="targetUserId" placeholder="Leave empty for current user">
+            </div>
+            <button onclick="goOnline()">🟢 Go Online</button>
+            <button onclick="goOffline()" class="offline">🔴 Go Offline</button>
         </div>
 
 
@@ -232,22 +258,57 @@
         }
 
         // Socket-based driver actions
-        function toggleStatus() {
+        function goOnline() {
             if (!socket) {
                 log('Please connect to server first', 'error');
                 return;
             }
 
-            const latitude = parseFloat(document.getElementById('latitude').value);
-            const longitude = parseFloat(document.getElementById('longitude').value);
+            const targetUserId = document.getElementById('targetUserId').value.trim();
 
-            const data = {};
-            if (latitude && longitude) {
-                data.location = { latitude, longitude };
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    const data = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    };
+                    if (targetUserId) {
+                        data.userId = targetUserId;
+                    }
+                    socket.emit('driver:go-online', data);
+                    log(`Going online${targetUserId ? ` for user ${targetUserId}` : ''} with location: ${data.latitude}, ${data.longitude}`, 'info');
+                }, function(error) {
+                    // If location fails, go online without location
+                    const data = {};
+                    if (targetUserId) {
+                        data.userId = targetUserId;
+                    }
+                    socket.emit('driver:go-online', data);
+                    log(`Going online${targetUserId ? ` for user ${targetUserId}` : ''} without location (geolocation failed)`, 'info');
+                });
+            } else {
+                const data = {};
+                if (targetUserId) {
+                    data.userId = targetUserId;
+                }
+                socket.emit('driver:go-online', data);
+                log(`Going online${targetUserId ? ` for user ${targetUserId}` : ''} without location (geolocation not supported)`, 'info');
+            }
+        }
+        
+        function goOffline() {
+            if (!socket) {
+                log('Please connect to server first', 'error');
+                return;
             }
 
-            socket.emit('driver:toggle-status', data);
-            log('Toggling driver status...', 'info');
+            const targetUserId = document.getElementById('targetUserId').value.trim();
+            const data = {};
+            if (targetUserId) {
+                data.userId = targetUserId;
+            }
+            socket.emit('driver:go-offline', data);
+            log(`Going offline${targetUserId ? ` for user ${targetUserId}` : ''}`, 'info');
         }
 
 
