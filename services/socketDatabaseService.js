@@ -54,11 +54,7 @@ class SocketDatabaseService {
       if (currentLocation && currentLocation.coordinates) {
         driver.currentLocation = {
           type: 'Point',
-          coordinates: currentLocation.coordinates,
-          address: currentLocation.address || '',
-          heading: currentLocation.heading || 0,
-          speed: currentLocation.speed || 0,
-          lastUpdated: new Date()
+          coordinates: currentLocation.coordinates
         };
       }
 
@@ -85,9 +81,7 @@ class SocketDatabaseService {
 
       user.currentLocation = {
         type: 'Point',
-        coordinates: locationData.coordinates,
-        address: locationData.address || '',
-        lastUpdated: new Date()
+        coordinates: locationData.coordinates
       };
 
       await user.save();
@@ -107,15 +101,11 @@ class SocketDatabaseService {
         throw new Error('Driver not found');
       }
 
-      const { coordinates, address, heading, speed } = locationData;
+      const { coordinates } = locationData;
 
       driver.currentLocation = {
         type: 'Point',
-        coordinates: coordinates,
-        address: address || '',
-        heading: heading || 0,
-        speed: speed || 0,
-        lastUpdated: new Date()
+        coordinates: coordinates
       };
 
       await driver.save();
