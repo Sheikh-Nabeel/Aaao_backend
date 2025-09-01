@@ -22,6 +22,7 @@ import fareEstimationRoutes from "./routes/fareEstimationRoutes.js"; // Added fa
 import walletRoutes from "./routes/walletRoutes.js"; // Added wallet routes
 import emailVerificationRoutes from "./routes/emailVerificationRoutes.js"; // Added email verification routes
 import driverStatusRoutes from "./routes/driverStatusRoutes.js"; // Added driver status routes
+import qualifiedDriversRoutes from "./routes/qualifiedDriversRoutes.js"; // Added qualified drivers routes
 
 import cloudinary from "cloudinary";
 import "colors";
@@ -107,6 +108,8 @@ app.use("/api/fare", fareEstimationRoutes); // Added fare estimation routes
 app.use("/api/wallet", walletRoutes); // Added wallet routes
 app.use("/api/email-verification", emailVerificationRoutes); // Added email verification routes
 app.use("/api/driver-status", driverStatusRoutes); // Added driver status routes
+app.use("/api/qualified-drivers", qualifiedDriversRoutes); // Added qualified drivers routes
+app.use("/api/nearby-drivers", qualifiedDriversRoutes); // Added nearby drivers routes
 
 // Initialize server function
 const initializeServer = async () => {

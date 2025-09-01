@@ -454,21 +454,74 @@ export const handleBookingEvents = (socket, io) => {
         driverPreference
       );
       
-      // Format qualified drivers for map display
-      const formattedQualifiedDrivers = qualifiedDrivers.map(driver => ({
-        driverId: driver.driverId,
-        username: driver.username,
-        email: driver.email,
-        coordinates: driver.currentLocation.coordinates,
-        distance: driver.distance,
-        isActive: driver.isActive,
-        vehicleInfo: driver.vehicleInfo,
-        rating: driver.rating || 0,
-        completedRides: driver.completedRides || 0,
-        lastActiveAt: driver.lastActiveAt,
-        estimatedArrival: driver.estimatedArrival,
-        fareMultiplier: driver.fareMultiplier || 1
-      }));
+      // Get full driver information with vehicle details
+      const driversWithFullInfo = await Promise.all(
+        qualifiedDrivers.map(async (driver) => {
+          try {
+            // Get full driver data
+            const fullDriver = await User.findById(driver.driverId)
+              .select('-password -refreshToken')
+              .populate({
+                path: 'vehicles',
+                match: { isActive: true },
+                select: 'vehicleType brand model year color licensePlate isActive'
+              });
+            
+            if (!fullDriver) return null;
+            
+            return {
+              // Driver basic info
+              driverId: fullDriver._id,
+              username: fullDriver.username,
+              email: fullDriver.email,
+              phone: fullDriver.phone,
+              profilePicture: fullDriver.profilePicture,
+              
+              // Driver status and activity
+              isActive: fullDriver.isActive,
+              isOnline: fullDriver.isOnline,
+              driverStatus: fullDriver.driverStatus,
+              lastActiveAt: fullDriver.lastActiveAt,
+              
+              // Location and distance
+              coordinates: fullDriver.currentLocation?.coordinates || driver.currentLocation?.coordinates,
+              currentLocation: fullDriver.currentLocation,
+              distance: driver.distance,
+              estimatedArrival: driver.estimatedArrival,
+              
+              // Driver performance
+              rating: fullDriver.rating || 0,
+              completedRides: fullDriver.completedRides || 0,
+              totalEarnings: fullDriver.totalEarnings || 0,
+              
+              // Vehicle information
+              vehicles: fullDriver.vehicles || [],
+              vehicleInfo: driver.vehicleInfo,
+              
+              // KYC and verification
+              kycLevel: fullDriver.kycLevel,
+              kycStatus: fullDriver.kycStatus,
+              isVerified: fullDriver.isVerified,
+              
+              // Pricing
+              fareMultiplier: driver.fareMultiplier || 1,
+              
+              // Additional driver details
+              role: fullDriver.role,
+              gender: fullDriver.gender,
+              dateOfBirth: fullDriver.dateOfBirth,
+              address: fullDriver.address,
+              emergencyContact: fullDriver.emergencyContact
+            };
+          } catch (error) {
+            console.error(`Error fetching full info for driver ${driver.driverId}:`, error);
+            return null;
+          }
+        })
+      );
+      
+      // Filter out null results
+      const formattedQualifiedDrivers = driversWithFullInfo.filter(driver => driver !== null);
       
       // Emit qualified drivers with enhanced map data
       socket.emit('qualified_drivers_response', {
@@ -519,7 +572,7 @@ export const handleBookingEvents = (socket, io) => {
         return;
       }
       
-      // Find all active drivers within the specified radius
+      // Find all active drivers within the specified radius with full information
       const nearbyDrivers = await User.find({
         role: 'driver',
         isActive: true,
@@ -532,21 +585,61 @@ export const handleBookingEvents = (socket, io) => {
             $maxDistance: radius * 1000 // Convert km to meters
           }
         }
-      }).select('_id username email currentLocation isActive lastActiveAt');
+      })
+      .select('-password -refreshToken')
+      .populate({
+        path: 'vehicles',
+        match: { isActive: true },
+        select: 'vehicleType brand model year color licensePlate isActive'
+      });
       
-      // Format driver data for map display
-      const formattedDrivers = nearbyDrivers.map(driver => ({
-        driverId: driver._id,
-        username: driver.username,
-        email: driver.email,
-        coordinates: driver.currentLocation.coordinates,
-        isActive: driver.isActive,
-        lastActiveAt: driver.lastActiveAt,
-        distance: calculateDistance(
+      // Format driver data with comprehensive information
+      const formattedDrivers = nearbyDrivers.map(driver => {
+        const distance = calculateDistance(
           latitude, longitude,
           driver.currentLocation.coordinates[1], driver.currentLocation.coordinates[0]
-        )
-      }));
+        );
+        
+        return {
+          // Driver basic info
+          driverId: driver._id,
+          username: driver.username,
+          email: driver.email,
+          phone: driver.phone,
+          profilePicture: driver.profilePicture,
+          
+          // Driver status and activity
+          isActive: driver.isActive,
+          isOnline: driver.isOnline,
+          driverStatus: driver.driverStatus,
+          lastActiveAt: driver.lastActiveAt,
+          
+          // Location and distance
+          coordinates: driver.currentLocation.coordinates,
+          currentLocation: driver.currentLocation,
+          distance: distance,
+          
+          // Driver performance
+          rating: driver.rating || 0,
+          completedRides: driver.completedRides || 0,
+          totalEarnings: driver.totalEarnings || 0,
+          
+          // Vehicle information
+          vehicles: driver.vehicles || [],
+          
+          // KYC and verification
+          kycLevel: driver.kycLevel,
+          kycStatus: driver.kycStatus,
+          isVerified: driver.isVerified,
+          
+          // Additional driver details
+          role: driver.role,
+          gender: driver.gender,
+          dateOfBirth: driver.dateOfBirth,
+          address: driver.address,
+          emergencyContact: driver.emergencyContact
+        };
+      });
       
       // Sort by distance
       formattedDrivers.sort((a, b) => a.distance - b.distance);
