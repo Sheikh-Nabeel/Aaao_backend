@@ -1656,6 +1656,48 @@ const editUser = asyncHandler(async (req, res) => {
   });
 });
 
+const getAllCustomers = asyncHandler(async (req, res) => {
+  const customers = await User.find({ role: "customer" })
+    .select(
+      "username firstName lastName email phoneNumber gender country kycLevel kycStatus hasVehicle createdAt"
+    )
+    .sort({ createdAt: -1 });
+
+  res.status(200).json({
+    success: true,
+    message: "All customers retrieved successfully",
+    customers: customers.map((customer) => ({
+      ...customer._doc,
+      lastName: customer.lastName || "",
+    })),
+    totalCustomers: customers.length,
+  });
+});
+
+const getAllDrivers = asyncHandler(async (req, res) => {
+  const drivers = await User.find({ role: "driver" })
+    .select(
+      "username firstName lastName email phoneNumber gender country kycLevel kycStatus hasVehicle createdAt"
+    )
+    .populate({
+      path: "pendingVehicleData",
+      select:
+        "vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate vehicleType serviceType serviceCategory wheelchair packingHelper loadingUnloadingHelper fixingHelper vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages",
+    })
+    .sort({ createdAt: -1 });
+
+  res.status(200).json({
+    success: true,
+    message: "All drivers retrieved successfully",
+    drivers: drivers.map((driver) => ({
+      ...driver._doc,
+      lastName: driver.lastName || "",
+      vehicle: driver.pendingVehicleData || null,
+    })),
+    totalDrivers: drivers.length,
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -1685,4 +1727,6 @@ export {
   getQualificationTransactions,
   deleteUser,
   editUser,
+  getAllCustomers, // Added new controller
+  getAllDrivers,
 };
