@@ -6,18 +6,21 @@ import { v4 as uuidv4 } from "uuid";
 import mongoose from "mongoose";
 import path from "path";
 import fs from "fs";
-import { generateOTP, sendOTPEmail, sendPasswordResetOTP, sendKYCApprovalEmail, sendKYCRejectionEmail } from "../middleware/email.js";
-
-// Email templates and functions are now imported from email.js
+import {
+  generateOTP,
+  sendOTPEmail,
+  sendPasswordResetOTP,
+  sendKYCApprovalEmail,
+  sendKYCRejectionEmail,
+} from "../middleware/email.js";
 
 // Ensure uploads folder exists
 const uploadsDir = path.join(process.cwd(), "Uploads");
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(UploadsDir, { recursive: true });
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// OTP generation is now imported from email.js
-
+// Existing controller functions (unchanged)
 const signupUser = asyncHandler(async (req, res) => {
   const {
     username,
@@ -28,7 +31,7 @@ const signupUser = asyncHandler(async (req, res) => {
     password,
     sponsorBy,
     gender,
-    otp // New field for OTP verification
+    otp,
   } = req.body;
   const referralUsername = req.query.ref;
 
@@ -39,16 +42,14 @@ const signupUser = asyncHandler(async (req, res) => {
     !phoneNumber ||
     !password ||
     !gender ||
-    !otp // OTP is now required
+    !otp
   ) {
     res.status(400);
     throw new Error("All required fields must be provided");
   }
 
-  // Normalize email to lowercase
   const normalizedEmail = email.trim().toLowerCase();
 
-  // Check for existing email, username, and phone number
   const existingEmail = await User.findOne({ email: normalizedEmail });
   const existingUsername = await User.findOne({ username });
   const existingPhone = await User.findOne({ phoneNumber });
@@ -59,43 +60,43 @@ const signupUser = asyncHandler(async (req, res) => {
   if (existingPhone)
     errors.phoneNumber = "This phone number is already registered";
 
-  // If there are any errors, return them
   if (Object.keys(errors).length > 0) {
     res.status(400).json({ errors });
     return;
   }
 
-  // Import EmailVerification model
-  const EmailVerification = mongoose.model('EmailVerification');
-  
-  // Check if email is verified with OTP
-  const emailVerification = await EmailVerification.findOne({ email: normalizedEmail });
+  const EmailVerification = mongoose.model("EmailVerification");
+
+  const emailVerification = await EmailVerification.findOne({
+    email: normalizedEmail,
+  });
   if (!emailVerification) {
     res.status(400);
-    throw new Error("Email not verified. Please request OTP verification first.");
+    throw new Error(
+      "Email not verified. Please request OTP verification first."
+    );
   }
-  
-  // Verify OTP
+
   if (!emailVerification.isVerified) {
-    // Check if OTP is valid
     if (Date.now() > emailVerification.otpExpires) {
       res.status(400);
       throw new Error("OTP has expired. Please request a new OTP.");
     }
-    
+
     if (emailVerification.otp !== otp) {
       res.status(400);
       throw new Error("Invalid OTP. Please try again.");
     }
-    
-    // Mark email as verified
+
     emailVerification.isVerified = true;
     await emailVerification.save();
   }
 
   let finalSponsorBy = sponsorBy;
   if (referralUsername) {
-    const sponsor = await User.findOne({ username: referralUsername }).select("_id");
+    const sponsor = await User.findOne({ username: referralUsername }).select(
+      "_id"
+    );
     if (sponsor) {
       finalSponsorBy = referralUsername;
     } else {
@@ -113,7 +114,6 @@ const signupUser = asyncHandler(async (req, res) => {
     finalSponsorBy = sponsorBy;
   }
 
-  // Create new user with verified email
   const user = await User.create({
     username,
     firstName,
@@ -123,15 +123,14 @@ const signupUser = asyncHandler(async (req, res) => {
     password,
     sponsorBy: finalSponsorBy || null,
     gender,
-    isVerified: true, // User is already verified through email OTP
+    isVerified: true,
     role: "customer",
     sponsorId: `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`,
     pendingVehicleData: null,
   });
-  
+
   console.log("Created new user with verified email:", user.email);
 
-  // Process sponsor relationships if applicable
   let sponsorName = null;
   if (user.sponsorBy) {
     const sponsor = await User.findOne({
@@ -145,18 +144,17 @@ const signupUser = asyncHandler(async (req, res) => {
     }
   }
 
-  // Generate token for automatic login
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRY,
   });
-  
+
   res.cookie("token", token, {
     httpOnly: true,
     maxAge: 3600000,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
   });
-  
+
   res.status(201).json({
     message: "Registration completed successfully",
     token,
@@ -188,43 +186,42 @@ const verifyOTPUser = asyncHandler(async (req, res) => {
     throw new Error("Email and OTP are required");
   }
 
-  // Normalize email to lowercase
   email = email.trim().toLowerCase();
 
-  // Import EmailVerification model
-  const EmailVerification = mongoose.model('EmailVerification');
-  
-  // Find email verification record
+  const EmailVerification = mongoose.model("EmailVerification");
+
   const emailVerification = await EmailVerification.findOne({ email });
   if (!emailVerification) {
     res.status(404);
     throw new Error("Email verification not found. Please request OTP first.");
   }
-  
+
   if (emailVerification.isVerified) {
     res.status(400);
     throw new Error("Email already verified. You can proceed to registration.");
   }
-  
-  if (Date.now() > emailVerification.otpExpires || !emailVerification.otpExpires) {
+
+  if (
+    Date.now() > emailVerification.otpExpires ||
+    !emailVerification.otpExpires
+  ) {
     res.status(400);
     throw new Error("OTP has expired. Please request a new OTP.");
   }
-  
+
   if (emailVerification.otp !== otp) {
     res.status(400);
     throw new Error("Invalid OTP");
   }
-  
-  // Mark email as verified
+
   emailVerification.isVerified = true;
   await emailVerification.save();
 
-  // Return success response
   res.status(200).json({
-    message: "Email verified successfully. You can now proceed with registration.",
+    message:
+      "Email verified successfully. You can now proceed with registration.",
     email: email,
-    isVerified: true
+    isVerified: true,
   });
 });
 
@@ -236,7 +233,8 @@ const loginUser = asyncHandler(async (req, res) => {
   }
   const user = await User.findOne({
     $or: [{ email }, { phoneNumber }, { username }],
-  }).populate("sponsorTree", "firstName lastName")
+  })
+    .populate("sponsorTree", "firstName lastName")
     .populate("pendingVehicleData");
   if (!user) {
     res.status(401);
@@ -304,7 +302,7 @@ const loginUser = asyncHandler(async (req, res) => {
         gender: user.gender,
         isVerified: user.isVerified,
         createdAt: user.createdAt,
-        updatedAt: user.updatedAt
+        updatedAt: user.updatedAt,
       },
     });
 });
@@ -315,7 +313,6 @@ const forgotPassword = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error("Email is required");
   }
-  // Normalize email
   email = email.trim().toLowerCase();
   const user = await User.findOne({ email });
   if (!user) {
@@ -490,7 +487,6 @@ const resendOtp = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error("Email is required");
   }
-  // Normalize email
   email = email.trim().toLowerCase();
   const user = await User.findOne({ email });
   if (!user) {
@@ -597,7 +593,6 @@ async function computeNextLevels(user) {
 async function updateUserNextLevels(user) {
   const levels = await computeNextLevels(user);
   user.nextLevels = levels;
-  // Keep legacy fields in sync for backward compatibility (first 4 levels)
   user.directReferrals = levels[0] || user.directReferrals || [];
   user.level2Referrals = levels[1] || [];
   user.level3Referrals = levels[2] || [];
@@ -662,7 +657,6 @@ async function checkAndUpdateUserLevel(user) {
       Array.isArray(user.directReferrals) &&
       user.directReferrals.length > 0
     ) {
-      // Ensure nextLevels calculated if missing
       await updateUserNextLevels(user);
     }
   }
@@ -690,7 +684,6 @@ const getReferralTree = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error("User not found");
   }
-  // Ensure dynamic levels are computed
   if (!Array.isArray(user.nextLevels) || user.nextLevels.length === 0) {
     await updateUserNextLevels(user);
   }
@@ -708,9 +701,8 @@ const getReferralTree = asyncHandler(async (req, res) => {
     level4: dynamicCounts.level4 || 0,
     totalReferrals: dynamicTotal,
   };
-  // Get qualification points stats for the main user
   const userQualificationStats = user.getQualificationPointsStats();
-  
+
   const referralTree = {
     user: {
       id: user._id,
@@ -722,28 +714,26 @@ const getReferralTree = asyncHandler(async (req, res) => {
       sponsorBy: user.sponsorBy,
       kycStatus: user.kycStatus,
       country: user.country,
-      // Add qualification points data
       qualificationPoints: {
         pgp: {
           monthly: userQualificationStats.pgp.monthly,
-          accumulated: userQualificationStats.pgp.accumulated
+          accumulated: userQualificationStats.pgp.accumulated,
         },
         tgp: {
           monthly: userQualificationStats.tgp.monthly,
-          accumulated: userQualificationStats.tgp.accumulated
+          accumulated: userQualificationStats.tgp.accumulated,
         },
         total: {
           monthly: userQualificationStats.total.monthly,
-          accumulated: userQualificationStats.total.accumulated
-        }
+          accumulated: userQualificationStats.total.accumulated,
+        },
       },
-      // Add CRR rank data
       crrRank: {
-        current: user.crrRank.current || 'None',
+        current: user.crrRank.current || "None",
         lastUpdated: user.crrRank.lastUpdated,
         rewardAmount: user.crrRank.rewardAmount || 0,
-        rewardClaimed: user.crrRank.rewardClaimed || false
-      }
+        rewardClaimed: user.crrRank.rewardClaimed || false,
+      },
     },
     counts: {
       totalReferrals: stats.totalReferrals,
@@ -758,7 +748,6 @@ const getReferralTree = asyncHandler(async (req, res) => {
       level3: [],
       level4: [],
     },
-    // Dynamic structure with arbitrary depth
     levels: {
       counts: dynamicCounts,
       members: {},
@@ -787,7 +776,13 @@ const getReferralTree = asyncHandler(async (req, res) => {
         name: {
           $concat: [
             "$firstName",
-            { $cond: { if: "$lastName", then: { $concat: [" ", "$lastName"] }, else: "" } },
+            {
+              $cond: {
+                if: "$lastName",
+                then: { $concat: [" ", "$lastName"] },
+                else: "",
+              },
+            },
           ],
         },
         email: 1,
@@ -796,38 +791,36 @@ const getReferralTree = asyncHandler(async (req, res) => {
         kycLevel: 1,
         role: 1,
         joinedDate: "$createdAt",
-        // Add qualification points data
         qualificationPoints: {
           pgp: {
             monthly: "$qualificationPoints.pgp.monthly",
-            accumulated: "$qualificationPoints.pgp.accumulated"
+            accumulated: "$qualificationPoints.pgp.accumulated",
           },
           tgp: {
             monthly: "$qualificationPoints.tgp.monthly",
-            accumulated: "$qualificationPoints.tgp.accumulated"
+            accumulated: "$qualificationPoints.tgp.accumulated",
           },
           total: {
             monthly: {
               $add: [
                 { $ifNull: ["$qualificationPoints.pgp.monthly", 0] },
-                { $ifNull: ["$qualificationPoints.tgp.monthly", 0] }
-              ]
+                { $ifNull: ["$qualificationPoints.tgp.monthly", 0] },
+              ],
             },
             accumulated: {
               $add: [
                 { $ifNull: ["$qualificationPoints.pgp.accumulated", 0] },
-                { $ifNull: ["$qualificationPoints.tgp.accumulated", 0] }
-              ]
-            }
-          }
+                { $ifNull: ["$qualificationPoints.tgp.accumulated", 0] },
+              ],
+            },
+          },
         },
-        // Add CRR rank data
         crrRank: {
           current: "$crrRank.current",
           lastUpdated: "$crrRank.lastUpdated",
           rewardAmount: "$crrRank.rewardAmount",
-          rewardClaimed: "$crrRank.rewardClaimed"
-        }
+          rewardClaimed: "$crrRank.rewardClaimed",
+        },
       },
     },
     {
@@ -849,7 +842,6 @@ const getReferralTree = asyncHandler(async (req, res) => {
     referralTree.members[levelKey] = existingMembersInLevel;
     referralTree.counts[levelKey] = existingMembersInLevel.length;
   };
-  // Legacy levels for backward compatibility
   processLevel(levelsIds[0] || [], "level1");
   processLevel(levelsIds[1] || [], "level2");
   processLevel(levelsIds[2] || [], "level3");
@@ -859,7 +851,6 @@ const getReferralTree = asyncHandler(async (req, res) => {
     0
   );
 
-  // Dynamic members for all depths
   for (let i = 0; i < levelsIds.length; i++) {
     const key = `level${i + 1}`;
     const ids = levelsIds[i] || [];
@@ -952,34 +943,35 @@ const approveKYC = asyncHandler(async (req, res) => {
     throw new Error("User ID is required");
   }
   const user = await User.findById(userId)
-    .select("kycLevel kycStatus pendingVehicleData")
+    .select("kycLevel kycStatus pendingVehicleData licenseImage") // Include licenseImage
     .populate("pendingVehicleData");
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
   let kycLevelToApprove;
-  if (user.kycLevel === 0) {
+  if (user.kycLevel === 0 && user.kycStatus === "pending") {
     kycLevelToApprove = 1;
-  } else if (user.kycLevel === 1) {
+  } else if (
+    user.kycLevel === 1 &&
+    user.kycStatus === "pending" &&
+    user.licenseImage
+  ) {
     kycLevelToApprove = 2;
   } else {
     res.status(400);
-    throw new Error("No valid KYC level to approve");
+    throw new Error(
+      user.kycLevel === 1 && !user.licenseImage
+        ? "License must be uploaded before approving KYC Level 2"
+        : "No valid KYC level to approve or KYC already approved"
+    );
   }
-  if (kycLevelToApprove === 2) {
-    // Require license image uploaded for Level 2
-    if (!user.licenseImage) {
-      res.status(400);
-      throw new Error("License must be uploaded before approving KYC Level 2");
-    }
-    // If a vehicle is already registered, auto-approve it; otherwise OK to approve user without vehicle
-    if (user.pendingVehicleData) {
-      const vehicle = await Vehicle.findById(user.pendingVehicleData);
-      if (vehicle) {
-        vehicle.status = "approved";
-        await vehicle.save();
-      }
+  if (kycLevelToApprove === 2 && user.pendingVehicleData) {
+    // If a vehicle is registered, auto-approve it
+    const vehicle = await Vehicle.findById(user.pendingVehicleData);
+    if (vehicle) {
+      vehicle.status = "approved";
+      await vehicle.save();
     }
   }
   const updatedUser = await User.findByIdAndUpdate(
@@ -996,7 +988,11 @@ const approveKYC = asyncHandler(async (req, res) => {
     throw new Error("Failed to update KYC status.");
   }
   try {
-    await sendKYCApprovalEmail(updatedUser.email, kycLevelToApprove, `${updatedUser.firstName} ${updatedUser.lastName || ''}`.trim());
+    await sendKYCApprovalEmail(
+      updatedUser.email,
+      kycLevelToApprove,
+      `${updatedUser.firstName} ${updatedUser.lastName || ""}`.trim()
+    );
     console.log(`KYC approval email sent to ${updatedUser.email}`);
   } catch (error) {
     console.error(
@@ -1032,7 +1028,11 @@ const rejectKYC = asyncHandler(async (req, res) => {
   user.kycStatus = "rejected";
   await user.save();
   try {
-    await sendKYCRejectionEmail(user.email, reason, `${user.firstName} ${user.lastName || ''}`.trim());
+    await sendKYCRejectionEmail(
+      user.email,
+      reason,
+      `${user.firstName} ${user.lastName || ""}`.trim()
+    );
     console.log(`KYC rejection email sent to ${user.email}`);
   } catch (error) {
     console.error(
@@ -1157,7 +1157,6 @@ const setVehicleOwnership = asyncHandler(async (req, res) => {
   });
 });
 
-// Pinned and Favorite Drivers Management
 const addPinnedDriver = asyncHandler(async (req, res) => {
   const { driverId } = req.body;
   const userId = req.user._id;
@@ -1167,14 +1166,12 @@ const addPinnedDriver = asyncHandler(async (req, res) => {
     throw new Error("Driver ID is required");
   }
 
-  // Check if driver exists
   const driver = await User.findById(driverId);
   if (!driver || driver.role !== "driver") {
     res.status(404);
     throw new Error("Driver not found");
   }
 
-  // Add to pinned drivers if not already pinned
   const user = await User.findById(userId);
   if (!user.pinnedDrivers) {
     user.pinnedDrivers = [];
@@ -1219,7 +1216,7 @@ const getPinnedDrivers = asyncHandler(async (req, res) => {
   const user = await User.findById(userId)
     .select("pinnedDrivers")
     .populate("pinnedDrivers", "firstName lastName phoneNumber vehicleDetails");
-  
+
   res.status(200).json({
     success: true,
     message: "Pinned drivers retrieved successfully",
@@ -1236,14 +1233,12 @@ const addFavoriteDriver = asyncHandler(async (req, res) => {
     throw new Error("Driver ID is required");
   }
 
-  // Check if driver exists
   const driver = await User.findById(driverId);
   if (!driver || driver.role !== "driver") {
     res.status(404);
     throw new Error("Driver not found");
   }
 
-  // Add to favorite drivers if not already favorited
   const user = await User.findById(userId);
   if (!user.favoriteDrivers) {
     user.favoriteDrivers = [];
@@ -1287,8 +1282,11 @@ const getFavoriteDrivers = asyncHandler(async (req, res) => {
 
   const user = await User.findById(userId)
     .select("favoriteDrivers")
-    .populate("favoriteDrivers", "firstName lastName phoneNumber vehicleDetails");
-  
+    .populate(
+      "favoriteDrivers",
+      "firstName lastName phoneNumber vehicleDetails"
+    );
+
   res.status(200).json({
     success: true,
     message: "Favorite drivers retrieved successfully",
@@ -1305,12 +1303,10 @@ const getNearbyDriversForUser = asyncHandler(async (req, res) => {
     throw new Error("Latitude and longitude are required");
   }
 
-  // Get user's pinned and favorite drivers
   const user = await User.findById(userId);
   const pinnedDrivers = user.pinnedDrivers || [];
   const favoriteDrivers = user.favoriteDrivers || [];
 
-  // Find nearby drivers
   const nearbyDrivers = await User.find({
     role: "driver",
     isOnline: true,
@@ -1320,30 +1316,34 @@ const getNearbyDriversForUser = asyncHandler(async (req, res) => {
           type: "Point",
           coordinates: [parseFloat(longitude), parseFloat(latitude)],
         },
-        $maxDistance: radius * 1000, // Convert km to meters
+        $maxDistance: radius * 1000,
       },
     },
   }).populate("vehicleDetails");
 
-  // Filter by service type if specified
   let filteredDrivers = nearbyDrivers;
   if (serviceType) {
-    filteredDrivers = nearbyDrivers.filter(driver => 
-      driver.vehicleDetails && 
-      driver.vehicleDetails.some(vehicle => 
-        vehicle.serviceType === serviceType
-      )
+    filteredDrivers = nearbyDrivers.filter(
+      (driver) =>
+        driver.vehicleDetails &&
+        driver.vehicleDetails.some(
+          (vehicle) => vehicle.serviceType === serviceType
+        )
     );
   }
 
-  // Prioritize pinned and favorite drivers
-  const prioritizedDrivers = filteredDrivers.map(driver => ({
-    ...driver.toObject(),
-    isPinned: pinnedDrivers.includes(driver._id.toString()),
-    isFavorite: favoriteDrivers.includes(driver._id.toString()),
-    priority: pinnedDrivers.includes(driver._id.toString()) ? 1 : 
-              favoriteDrivers.includes(driver._id.toString()) ? 2 : 3
-  })).sort((a, b) => a.priority - b.priority);
+  const prioritizedDrivers = filteredDrivers
+    .map((driver) => ({
+      ...driver.toObject(),
+      isPinned: pinnedDrivers.includes(driver._id.toString()),
+      isFavorite: favoriteDrivers.includes(driver._id.toString()),
+      priority: pinnedDrivers.includes(driver._id.toString())
+        ? 1
+        : favoriteDrivers.includes(driver._id.toString())
+        ? 2
+        : 3,
+    }))
+    .sort((a, b) => a.priority - b.priority);
 
   res.status(200).json({
     success: true,
@@ -1353,26 +1353,24 @@ const getNearbyDriversForUser = asyncHandler(async (req, res) => {
   });
 });
 
-// Get user qualification stats (TGP/PGP)
 const getQualificationStats = asyncHandler(async (req, res) => {
   const { userId } = req.params;
-  
+
   if (!userId) {
     res.status(400);
     throw new Error("User ID is required");
   }
-  
+
   const user = await User.findById(userId);
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
-  
-  // Check and reset monthly points if needed
+
   await user.checkAndResetMonthlyQualificationPoints();
-  
+
   const stats = user.getQualificationPointsStats();
-  
+
   res.status(200).json({
     success: true,
     stats: {
@@ -1384,34 +1382,268 @@ const getQualificationStats = asyncHandler(async (req, res) => {
       monthlyTotal: stats.total.monthly,
       lastResetDate: {
         pgp: stats.pgp.lastResetDate,
-        tgp: stats.tgp.lastResetDate
-      }
-    }
+        tgp: stats.tgp.lastResetDate,
+      },
+    },
   });
 });
 
-// Get user qualification transactions
 const getQualificationTransactions = asyncHandler(async (req, res) => {
   const { userId } = req.params;
   const { limit = 50 } = req.query;
-  
+
   if (!userId) {
     res.status(400);
     throw new Error("User ID is required");
   }
-  
+
   const user = await User.findById(userId);
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
-  
+
   const transactions = user.getQualificationPointsTransactions(parseInt(limit));
-  
+
   res.status(200).json({
     success: true,
     transactions,
-    total: user.qualificationPoints.transactions.length
+    total: user.qualificationPoints.transactions.length,
+  });
+});
+
+// New controller functions for delete and edit user
+const deleteUser = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    res.status(400);
+    throw new Error("User ID is required");
+  }
+
+  if (!mongoose.isValidObjectId(userId)) {
+    res.status(400);
+    throw new Error("Invalid user ID format");
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  // Prevent deletion of superadmin users
+  if (user.role === "superadmin") {
+    res.status(403);
+    throw new Error("Cannot delete a superadmin user");
+  }
+
+  // Remove user from any sponsor's referral lists
+  if (user.sponsorBy) {
+    const sponsor = await User.findOne({
+      $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
+    });
+    if (sponsor) {
+      sponsor.directReferrals = sponsor.directReferrals.filter(
+        (id) => id.toString() !== userId
+      );
+      sponsor.sponsorTree = sponsor.sponsorTree.filter(
+        (id) => id.toString() !== userId
+      );
+      await sponsor.save();
+      await updateAllLevels(sponsor._id);
+    }
+  }
+
+  // Delete associated images
+  if (user.cnicImages?.front) {
+    const frontImagePath = path.join(process.cwd(), user.cnicImages.front);
+    if (fs.existsSync(frontImagePath)) {
+      fs.unlinkSync(frontImagePath);
+    }
+  }
+  if (user.cnicImages?.back) {
+    const backImagePath = path.join(process.cwd(), user.cnicImages.back);
+    if (fs.existsSync(backImagePath)) {
+      fs.unlinkSync(backImagePath);
+    }
+  }
+  if (user.selfieImage) {
+    const selfieImagePath = path.join(process.cwd(), user.selfieImage);
+    if (fs.existsSync(selfieImagePath)) {
+      fs.unlinkSync(selfieImagePath);
+    }
+  }
+  if (user.licenseImage) {
+    const licenseImagePath = path.join(process.cwd(), user.licenseImage);
+    if (fs.existsSync(licenseImagePath)) {
+      fs.unlinkSync(licenseImagePath);
+    }
+  }
+
+  // Delete associated vehicle data
+  if (user.pendingVehicleData) {
+    await Vehicle.findByIdAndDelete(user.pendingVehicleData);
+  }
+
+  // Delete the user
+  await User.findByIdAndDelete(userId);
+
+  res.status(200).json({
+    success: true,
+    message: "User deleted successfully",
+    userId,
+  });
+});
+
+const editUser = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const {
+    username,
+    firstName,
+    lastName,
+    email,
+    phoneNumber,
+    gender,
+    country,
+    role,
+    kycLevel,
+    kycStatus,
+    hasVehicle,
+  } = req.body;
+
+  if (!userId) {
+    res.status(400);
+    throw new Error("User ID is required");
+  }
+
+  if (!mongoose.isValidObjectId(userId)) {
+    res.status(400);
+    throw new Error("Invalid user ID format");
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  // Prevent editing superadmin users
+  if (user.role === "superadmin") {
+    res.status(403);
+    throw new Error("Cannot edit a superadmin user");
+  }
+
+  // Validate input fields
+  const errors = {};
+
+  if (username) {
+    const existingUsername = await User.findOne({
+      username,
+      _id: { $ne: userId },
+    });
+    if (existingUsername) {
+      errors.username = "This username is already taken";
+    } else if (!/^[a-зA-Я0-9_]+$/.test(username)) {
+      errors.username =
+        "Username can only contain letters, numbers, and underscores";
+    } else if (username.length < 3 || username.length > 30) {
+      errors.username = "Username must be between 3 and 30 characters";
+    }
+  }
+
+  if (email) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const existingEmail = await User.findOne({
+      email: normalizedEmail,
+      _id: { $ne: userId },
+    });
+    if (existingEmail) {
+      errors.email = "This email is already registered";
+    } else if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+      errors.email = "Please enter a valid email address";
+    }
+  }
+
+  if (phoneNumber) {
+    const existingPhone = await User.findOne({
+      phoneNumber,
+      _id: { $ne: userId },
+    });
+    if (existingPhone) {
+      errors.phoneNumber = "This phone number is already registered";
+    } else if (phoneNumber.length < 10 || phoneNumber.length > 13) {
+      errors.phoneNumber = "Phone number must be between 10 and 13 characters";
+    }
+  }
+
+  if (gender && !["Male", "Female", "Other"].includes(gender)) {
+    errors.gender = "Gender must be Male, Female, or Other";
+  }
+
+  if (role && !["customer", "driver", "admin"].includes(role)) {
+    errors.role = "Role must be customer, driver, or admin";
+  }
+
+  if (kycLevel !== undefined && ![0, 1, 2].includes(Number(kycLevel))) {
+    errors.kycLevel = "KYC level must be 0, 1, or 2";
+  }
+
+  if (
+    kycStatus &&
+    !["pending", "approved", "rejected", null].includes(kycStatus)
+  ) {
+    errors.kycStatus =
+      "KYC status must be pending, approved, rejected, or null";
+  }
+
+  if (hasVehicle && !["yes", "no", null].includes(hasVehicle)) {
+    errors.hasVehicle = "hasVehicle must be yes, no, or null";
+  }
+
+  if (Object.keys(errors).length > 0) {
+    res.status(400).json({ errors });
+    return;
+  }
+
+  // Update user fields
+  const updateData = {};
+  if (username) updateData.username = username;
+  if (firstName) updateData.firstName = firstName;
+  if (lastName !== undefined) updateData.lastName = lastName || "";
+  if (email) updateData.email = email.trim().toLowerCase();
+  if (phoneNumber) updateData.phoneNumber = phoneNumber;
+  if (gender) updateData.gender = gender;
+  if (country) updateData.country = country;
+  if (role) updateData.role = role;
+  if (kycLevel !== undefined) updateData.kycLevel = Number(kycLevel);
+  if (kycStatus) updateData.kycStatus = kycStatus;
+  if (hasVehicle) updateData.hasVehicle = hasVehicle;
+
+  const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+    new: true,
+    runValidators: true,
+  }).select(
+    "username firstName lastName email phoneNumber gender country role kycLevel kycStatus hasVehicle"
+  );
+
+  res.status(200).json({
+    success: true,
+    message: "User updated successfully",
+    user: {
+      userId: updatedUser._id,
+      username: updatedUser.username,
+      firstName: updatedUser.firstName,
+      lastName: updatedUser.lastName || "",
+      email: updatedUser.email,
+      phoneNumber: updatedUser.phoneNumber,
+      gender: updatedUser.gender,
+      country: updatedUser.country,
+      role: updatedUser.role,
+      kycLevel: updatedUser.kycLevel,
+      kycStatus: updatedUser.kycStatus,
+      hasVehicle: updatedUser.hasVehicle,
+    },
   });
 });
 
@@ -1442,4 +1674,6 @@ export {
   getNearbyDriversForUser,
   getQualificationStats,
   getQualificationTransactions,
+  deleteUser,
+  editUser,
 };

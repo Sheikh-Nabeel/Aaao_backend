@@ -26,6 +26,8 @@ import {
   getNearbyDriversForUser,
   getQualificationStats,
   getQualificationTransactions,
+  deleteUser, // New import
+  editUser, // New import
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -36,14 +38,14 @@ import {
   getAllServices,
   getUserServices,
   deleteService,
-  getAvailableServices
+  getAvailableServices,
 } from "../controllers/serviceController.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 import authHandler from "../middlewares/authMIddleware.js";
 import adminMiddleware from "../middlewares/adminMiddleware.js";
-import superadminAuth from "../middlewares/superadminAuth.js"; // Added import for superadminAuth
+import superadminAuth from "../middlewares/superadminAuth.js";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -120,18 +122,31 @@ router.get("/by-username", getUserByUsername);
 
 // Qualification stats routes
 router.get("/qualification-stats/:userId", authHandler, getQualificationStats);
-router.get("/qualification-transactions/:userId", authHandler, getQualificationTransactions);
+router.get(
+  "/qualification-transactions/:userId",
+  authHandler,
+  getQualificationTransactions
+);
 
-router.post('/services', authHandler, upload.fields([
-  { name: 'tradeLicenseCopy', maxCount: 1 },
-  { name: 'shopImages', maxCount: 10 },
-  { name: 'passportCopy', maxCount: 2 },
-  { name: 'uploadedPriceList', maxCount: 1 },
-  { name: 'uploadedPortfolio', maxCount: 1 }
-]), createService);
-router.get('/services',  getAllServices);
-router.get('/user-services', authHandler, getUserServices);
-router.delete('/services/:serviceId', authHandler, deleteService);
-router.get('/available-services', authHandler, getAvailableServices); // New endpoint
+router.post(
+  "/services",
+  authHandler,
+  upload.fields([
+    { name: "tradeLicenseCopy", maxCount: 1 },
+    { name: "shopImages", maxCount: 10 },
+    { name: "passportCopy", maxCount: 2 },
+    { name: "uploadedPriceList", maxCount: 1 },
+    { name: "uploadedPortfolio", maxCount: 1 },
+  ]),
+  createService
+);
+router.get("/services", getAllServices);
+router.get("/user-services", authHandler, getUserServices);
+router.delete("/services/:serviceId", authHandler, deleteService);
+router.get("/available-services", authHandler, getAvailableServices);
+
+// New routes for delete and edit user
+router.delete("/delete/:userId", authHandler, adminMiddleware, deleteUser);
+router.patch("/edit/:userId", authHandler, adminMiddleware, editUser);
 
 export default router;
