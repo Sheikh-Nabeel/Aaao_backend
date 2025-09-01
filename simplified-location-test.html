@@ -151,8 +151,8 @@
         <div>
             <label>Vehicle Type (Bike):</label>
             <select id="vehicleType">
-                <option value="economy" selected>Economy</option>
-                <option value="premium">Premium</option>
+                <option value="economy">Economy</option>
+                <option value="premium" selected>Premium</option>
                 <option value="vip">VIP</option>
             </select>
         </div>
@@ -313,6 +313,7 @@
             // Nearby drivers radius response
             socket.on('nearby_drivers_radius_response', (data) => {
                 log(`🗺️ Found ${data.driversCount} drivers within ${data.radius}km radius`, 'success');
+                log(`📡 Raw Response Data: ${JSON.stringify(data, null, 2)}`, 'info');
                 displayNearbyDriversRadius(data);
             });
             
@@ -324,6 +325,7 @@
             // Qualified drivers response (enhanced for map)
             socket.on('qualified_drivers_response', (data) => {
                 log(`🎯 Found ${data.driversCount} qualified drivers for ${data.serviceType} service`, 'success');
+                log(`📡 Raw Response Data: ${JSON.stringify(data, null, 2)}`, 'info');
                 displayQualifiedDrivers(data);
             });
             
@@ -546,8 +548,21 @@
             const container = document.getElementById('nearbyDriversRadius');
             container.innerHTML = '';
             
+            // Display raw response data
+            const rawDataDiv = document.createElement('div');
+            rawDataDiv.className = 'location-display';
+            rawDataDiv.style.backgroundColor = '#e8f4fd';
+            rawDataDiv.innerHTML = `
+                <strong>📡 Raw Socket Response Data:</strong><br>
+                <pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 11px;">${JSON.stringify(data, null, 2)}</pre>
+            `;
+            container.appendChild(rawDataDiv);
+            
             if (data.driversCount === 0) {
-                container.innerHTML = '<div class="location-display">No drivers found within radius</div>';
+                const noDriversDiv = document.createElement('div');
+                noDriversDiv.className = 'location-display';
+                noDriversDiv.innerHTML = 'No drivers found within radius';
+                container.appendChild(noDriversDiv);
                 return;
             }
             
@@ -580,8 +595,21 @@
             const container = document.getElementById('qualifiedDrivers');
             container.innerHTML = '';
             
+            // Display raw response data
+            const rawDataDiv = document.createElement('div');
+            rawDataDiv.className = 'location-display';
+            rawDataDiv.style.backgroundColor = '#fff3cd';
+            rawDataDiv.innerHTML = `
+                <strong>📡 Raw Socket Response Data:</strong><br>
+                <pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 11px;">${JSON.stringify(data, null, 2)}</pre>
+            `;
+            container.appendChild(rawDataDiv);
+            
             if (data.driversCount === 0) {
-                container.innerHTML = '<div class="location-display">No qualified drivers found</div>';
+                const noDriversDiv = document.createElement('div');
+                noDriversDiv.className = 'location-display';
+                noDriversDiv.innerHTML = 'No qualified drivers found';
+                container.appendChild(noDriversDiv);
                 return;
             }
             
@@ -591,28 +619,30 @@
                 <strong>🎯 Found ${data.driversCount} qualified drivers</strong><br>
                 Service: <span class="coordinates">${data.serviceType}</span> | 
                 Vehicle: <span class="coordinates">${data.vehicleType}</span><br>
-                Pickup: <span class="coordinates">[${data.pickupLocation.coordinates.join(', ')}]</span>
+                Pickup: <span class="coordinates">[${data.pickupLocation ? data.pickupLocation.coordinates.join(', ') : 'N/A'}]</span>
             `;
             container.appendChild(headerDiv);
             
-            data.drivers.forEach((driver, index) => {
-                const driverDiv = document.createElement('div');
-                driverDiv.className = 'location-display';
-                driverDiv.innerHTML = `
-                    <strong>🚗 ${driver.username || `Driver ${index + 1}`}</strong><br>
-                    ID: <span class="coordinates">${driver.driverId}</span><br>
-                    Email: <span class="coordinates">${driver.email}</span><br>
-                    Distance: <span class="coordinates">${driver.distance.toFixed(2)}km</span><br>
-                    Coordinates: <span class="coordinates">[${driver.coordinates.join(', ')}]</span><br>
-                    Status: <span class="coordinates">${driver.isActive ? '🟢 Active' : '🔴 Inactive'}</span><br>
-                    ${driver.vehicleInfo ? `Vehicle: <span class="coordinates">${driver.vehicleInfo.type} - ${driver.vehicleInfo.model}</span><br>` : ''}
-                    ${driver.rating ? `Rating: <span class="coordinates">⭐ ${driver.rating}/5 (${driver.completedRides} rides)</span><br>` : ''}
-                    ${driver.estimatedArrival ? `ETA: <span class="coordinates">${driver.estimatedArrival} min</span><br>` : ''}
-                    ${driver.fareMultiplier ? `Fare Multiplier: <span class="coordinates">${driver.fareMultiplier}x</span><br>` : ''}
-                    <small>Last Active: ${new Date(driver.lastActiveAt).toLocaleString()}</small>
-                `;
-                container.appendChild(driverDiv);
-            });
+            if (data.drivers && data.drivers.length > 0) {
+                data.drivers.forEach((driver, index) => {
+                    const driverDiv = document.createElement('div');
+                    driverDiv.className = 'location-display';
+                    driverDiv.innerHTML = `
+                        <strong>🚗 ${driver.username || `Driver ${index + 1}`}</strong><br>
+                        ID: <span class="coordinates">${driver.driverId}</span><br>
+                        Email: <span class="coordinates">${driver.email}</span><br>
+                        Distance: <span class="coordinates">${driver.distance ? driver.distance.toFixed(2) : 'N/A'}km</span><br>
+                        Coordinates: <span class="coordinates">[${driver.coordinates ? driver.coordinates.join(', ') : 'N/A'}]</span><br>
+                        Status: <span class="coordinates">${driver.isActive ? '🟢 Active' : '🔴 Inactive'}</span><br>
+                        ${driver.vehicleInfo ? `Vehicle: <span class="coordinates">${driver.vehicleInfo.type} - ${driver.vehicleInfo.model}</span><br>` : ''}
+                        ${driver.rating ? `Rating: <span class="coordinates">⭐ ${driver.rating}/5 (${driver.completedRides} rides)</span><br>` : ''}
+                        ${driver.estimatedArrival ? `ETA: <span class="coordinates">${driver.estimatedArrival} min</span><br>` : ''}
+                        ${driver.fareMultiplier ? `Fare Multiplier: <span class="coordinates">${driver.fareMultiplier}x</span><br>` : ''}
+                        <small>Last Active: ${driver.lastActiveAt ? new Date(driver.lastActiveAt).toLocaleString() : 'N/A'}</small>
+                    `;
+                    container.appendChild(driverDiv);
+                });
+            }
         }
         
         function clearLog() {

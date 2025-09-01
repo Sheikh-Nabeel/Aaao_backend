@@ -12,4 +12,6 @@ router.get('/', authHandler, getQualifiedDrivers);
 // GET /api/nearby-drivers?lat=33.6402842&lon=73.0756609&radius=5&includeOffline=false
 router.get('/nearby', authHandler, getNearbyDrivers);
 
+
+
 export default router;

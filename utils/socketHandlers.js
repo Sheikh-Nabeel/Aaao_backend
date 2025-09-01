@@ -1,5 +1,6 @@
 import User from '../models/userModel.js';
 import Booking from '../models/bookingModel.js';
+import Vehicle from '../models/vehicleModel.js';
 import { addMoneyToMLM } from './mlmHelper.js';
 import { calculateDistance } from "./distanceCalculator.js";
 import SocketValidationService from '../services/socketValidationService.js';
@@ -436,98 +437,219 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Request Data:', data);
     
     try {
-      const { pickupLocation, serviceType, vehicleType, driverPreference } = data;
+      const { pickupLocation, serviceType, vehicleType, driverPreference = 'nearby' } = data;
       
       if (!pickupLocation || !pickupLocation.coordinates) {
         socket.emit('error', { message: 'Invalid pickup location' });
         return;
       }
       
-      // Import the function from fareEstimationController
-      const { findQualifiedDriversForEstimation } = await import('../controllers/fareEstimationController.js');
-      
-      // Find qualified drivers
-      const qualifiedDrivers = await findQualifiedDriversForEstimation(
-        pickupLocation,
-        serviceType,
-        vehicleType,
-        driverPreference
+      // Use the same logic as qualifiedDriversController
+      let driverQuery = {
+        role: 'driver',
+        kycLevel: 2,
+        kycStatus: 'approved',
+        isActive: true,
+        driverStatus: 'online'
+      };
+
+      // Handle Pink Captain preferences
+      if (driverPreference === 'pink_captain') {
+        driverQuery.gender = 'female';
+        console.log('Pink Captain requested - filtering for female drivers');
+      }
+
+      console.log('Driver Query:', driverQuery);
+
+      // Find drivers based on query
+      const drivers = await User.find(driverQuery).select(
+        'firstName lastName email phoneNumber currentLocation gender driverSettings vehicleDetails profilePicture rating totalRides createdAt lastActiveAt driverStatus isActive'
       );
+      console.log(`Found ${drivers.length} potential drivers`);
+
+      if (drivers.length === 0) {
+        socket.emit('qualified_drivers_response', {
+          success: true,
+          drivers: [],
+          driversCount: 0,
+          serviceType,
+          vehicleType,
+          searchCriteria: {
+            pickupLocation,
+            serviceType,
+            vehicleType,
+            driverPreference
+          },
+          timestamp: new Date()
+        });
+        console.log('No drivers found matching criteria');
+        return;
+      }
+
+      // Get driver IDs for vehicle lookup
+      const driverIds = drivers.map(driver => driver._id);
       
-      // Get full driver information with vehicle details
-      const driversWithFullInfo = await Promise.all(
-        qualifiedDrivers.map(async (driver) => {
-          try {
-            // Get full driver data
-            const fullDriver = await User.findById(driver.driverId)
-              .select('-password -refreshToken')
-              .populate({
-                path: 'vehicles',
-                match: { isActive: true },
-                select: 'vehicleType brand model year color licensePlate isActive'
-              });
+      // Find vehicles that match the service type and vehicle type
+      let vehicleQuery = {
+        userId: { $in: driverIds },
+        serviceType: serviceType,
+        isActive: true
+      };
+      
+      // Add vehicle type filter if specified
+      if (vehicleType && vehicleType !== 'any') {
+        vehicleQuery.vehicleType = vehicleType;
+      }
+      
+      console.log('Vehicle Query:', vehicleQuery);
+      
+      // Find matching vehicles
+      const vehicles = await Vehicle.find(vehicleQuery).select(
+        'userId vehicleType serviceType make model year color licensePlate registrationNumber'
+      );
+      console.log(`Found ${vehicles.length} matching vehicles`);
+      
+      if (vehicles.length === 0) {
+        socket.emit('qualified_drivers_response', {
+          success: true,
+          drivers: [],
+          driversCount: 0,
+          serviceType,
+          vehicleType,
+          searchCriteria: {
+            pickupLocation,
+            serviceType,
+            vehicleType,
+            driverPreference
+          },
+          availableDrivers: drivers.length,
+          availableVehicles: 0,
+          timestamp: new Date()
+        });
+        console.log('No vehicles found matching service and vehicle type criteria');
+        return;
+      }
+      
+      // Create a map of driver ID to vehicle info
+      const driverVehicleMap = {};
+      vehicles.forEach(vehicle => {
+        driverVehicleMap[vehicle.userId.toString()] = vehicle;
+      });
+      
+      // Get driver IDs that have matching vehicles
+      const qualifiedDriverIds = vehicles.map(vehicle => vehicle.userId.toString());
+      
+      // Filter drivers to only those with matching vehicles
+      const qualifiedDrivers = drivers.filter(driver => 
+        qualifiedDriverIds.includes(driver._id.toString())
+      );
+
+      console.log(`Found ${qualifiedDrivers.length} drivers with matching vehicles`);
+
+      if (qualifiedDrivers.length === 0) {
+        socket.emit('qualified_drivers_response', {
+          success: true,
+          drivers: [],
+          driversCount: 0,
+          serviceType,
+          vehicleType,
+          searchCriteria: {
+            pickupLocation,
+            serviceType,
+            vehicleType,
+            driverPreference
+          },
+          availableDrivers: drivers.length,
+          availableVehicles: vehicles.length,
+          timestamp: new Date()
+        });
+        console.log('No qualified drivers found with matching vehicles');
+        return;
+      }
+
+      // Calculate distances and filter by radius
+      const driversWithDistance = [];
+      const maxRadius = driverPreference === 'pink_captain' ? 50 : 10;
+
+      for (const driver of qualifiedDrivers) {
+        if (driver.currentLocation && driver.currentLocation.coordinates) {
+          const distance = calculateDistance(
+            { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
+            { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+          );
+
+          if (distance <= maxRadius) {
+            const vehicle = driverVehicleMap[driver._id.toString()];
             
-            if (!fullDriver) return null;
-            
-            return {
+            driversWithDistance.push({
               // Driver basic info
-              driverId: fullDriver._id,
-              username: fullDriver.username,
-              email: fullDriver.email,
-              phone: fullDriver.phone,
-              profilePicture: fullDriver.profilePicture,
+              driverId: driver._id,
+              firstName: driver.firstName,
+              lastName: driver.lastName,
+              fullName: `${driver.firstName} ${driver.lastName}`,
+              email: driver.email,
+              phoneNumber: driver.phoneNumber,
+              profilePicture: driver.profilePicture,
               
               // Driver status and activity
-              isActive: fullDriver.isActive,
-              isOnline: fullDriver.isOnline,
-              driverStatus: fullDriver.driverStatus,
-              lastActiveAt: fullDriver.lastActiveAt,
+              isActive: driver.isActive,
+              driverStatus: driver.driverStatus,
+              lastActiveAt: driver.lastActiveAt,
               
               // Location and distance
-              coordinates: fullDriver.currentLocation?.coordinates || driver.currentLocation?.coordinates,
-              currentLocation: fullDriver.currentLocation,
-              distance: driver.distance,
-              estimatedArrival: driver.estimatedArrival,
+              coordinates: driver.currentLocation.coordinates,
+              currentLocation: driver.currentLocation,
+              distance: Math.round(distance * 100) / 100,
+              estimatedArrival: Math.ceil(distance / 0.5),
               
               // Driver performance
-              rating: fullDriver.rating || 0,
-              completedRides: fullDriver.completedRides || 0,
-              totalEarnings: fullDriver.totalEarnings || 0,
+              rating: driver.rating || 0,
+              totalRides: driver.totalRides || 0,
               
               // Vehicle information
-              vehicles: fullDriver.vehicles || [],
-              vehicleInfo: driver.vehicleInfo,
-              
-              // KYC and verification
-              kycLevel: fullDriver.kycLevel,
-              kycStatus: fullDriver.kycStatus,
-              isVerified: fullDriver.isVerified,
-              
-              // Pricing
-              fareMultiplier: driver.fareMultiplier || 1,
+              vehicles: [{
+                id: vehicle._id,
+                serviceType: vehicle.serviceType,
+                vehicleType: vehicle.vehicleType,
+                make: vehicle.make,
+                model: vehicle.model,
+                year: vehicle.year,
+                color: vehicle.color,
+                licensePlate: vehicle.licensePlate,
+                registrationNumber: vehicle.registrationNumber
+              }],
               
               // Additional driver details
-              role: fullDriver.role,
-              gender: fullDriver.gender,
-              dateOfBirth: fullDriver.dateOfBirth,
-              address: fullDriver.address,
-              emergencyContact: fullDriver.emergencyContact
-            };
-          } catch (error) {
-            console.error(`Error fetching full info for driver ${driver.driverId}:`, error);
-            return null;
+              role: driver.role,
+              gender: driver.gender,
+              driverSettings: driver.driverSettings
+            });
           }
-        })
-      );
+        }
+      }
+
+      // Filter Pink Captain drivers based on their preferences
+      let filteredDrivers = driversWithDistance;
+      if (driverPreference === 'pink_captain') {
+        console.log('Filtering Pink Captain drivers based on preferences...');
+        
+        filteredDrivers = driversWithDistance.filter(driver => {
+          const driverPrefs = driver.driverSettings?.ridePreferences;
+          return driverPrefs && driverPrefs.pinkCaptainMode;
+        });
+        
+        console.log(`Filtered to ${filteredDrivers.length} Pink Captain drivers`);
+      }
+
+      // Sort by distance and limit to top 20
+      filteredDrivers.sort((a, b) => a.distance - b.distance);
+      const topDrivers = filteredDrivers.slice(0, 20);
       
-      // Filter out null results
-      const formattedQualifiedDrivers = driversWithFullInfo.filter(driver => driver !== null);
-      
-      // Emit qualified drivers with enhanced map data
+      // Emit qualified drivers response
       socket.emit('qualified_drivers_response', {
         success: true,
-        drivers: formattedQualifiedDrivers,
-        driversCount: formattedQualifiedDrivers.length,
+        drivers: topDrivers,
+        driversCount: topDrivers.length,
         serviceType,
         vehicleType,
         searchCriteria: {
@@ -536,10 +658,22 @@ export const handleBookingEvents = (socket, io) => {
           vehicleType,
           driverPreference
         },
+        searchStats: {
+          totalDriversFound: drivers.length,
+          totalVehiclesFound: vehicles.length,
+          driversWithVehicles: qualifiedDrivers.length,
+          driversInRadius: driversWithDistance.length,
+          finalQualifiedDrivers: topDrivers.length
+        },
         timestamp: new Date()
       });
       
-      console.log(`Sent ${qualifiedDrivers.length} qualified drivers to user ${socket.user._id}`);
+      console.log(`Sent ${topDrivers.length} qualified drivers to user ${socket.user._id}`);
+      console.log('Response data:', JSON.stringify({
+        success: true,
+        drivers: topDrivers,
+        driversCount: topDrivers.length
+      }, null, 2));
       
     } catch (error) {
       console.error('Error getting qualified drivers:', error);
@@ -586,18 +720,31 @@ export const handleBookingEvents = (socket, io) => {
           }
         }
       })
-      .select('-password -refreshToken')
-      .populate({
-        path: 'vehicles',
-        match: { isActive: true },
-        select: 'vehicleType brand model year color licensePlate isActive'
+      .select('-password -refreshToken');
+      
+      // Get driver IDs for vehicle lookup
+      const driverIds = nearbyDrivers.map(driver => driver._id);
+      
+      // Find vehicles for these drivers
+      const vehicles = await Vehicle.find({ 
+        userId: { $in: driverIds },
+        isActive: true 
+      }).select('userId vehicleType serviceType brand model year color licensePlate');
+      
+      // Create a map of driver ID to vehicles
+      const driverVehiclesMap = {};
+      vehicles.forEach(vehicle => {
+        if (!driverVehiclesMap[vehicle.userId.toString()]) {
+          driverVehiclesMap[vehicle.userId.toString()] = [];
+        }
+        driverVehiclesMap[vehicle.userId.toString()].push(vehicle);
       });
       
       // Format driver data with comprehensive information
       const formattedDrivers = nearbyDrivers.map(driver => {
         const distance = calculateDistance(
-          latitude, longitude,
-          driver.currentLocation.coordinates[1], driver.currentLocation.coordinates[0]
+          { lat: latitude, lng: longitude },
+          { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
         );
         
         return {
@@ -625,7 +772,7 @@ export const handleBookingEvents = (socket, io) => {
           totalEarnings: driver.totalEarnings || 0,
           
           // Vehicle information
-          vehicles: driver.vehicles || [],
+          vehicles: driverVehiclesMap[driver._id.toString()] || [],
           
           // KYC and verification
           kycLevel: driver.kycLevel,
@@ -1835,10 +1982,8 @@ export const findNearbyDrivers = async (booking, io = null) => {
     for (const driver of drivers) {
       if (driver.currentLocation && driver.currentLocation.coordinates) {
         const distance = calculateDistance(
-          booking.pickupLocation.coordinates[1],
-          booking.pickupLocation.coordinates[0],
-          driver.currentLocation.coordinates[1],
-          driver.currentLocation.coordinates[0]
+          { lat: booking.pickupLocation.coordinates[1], lng: booking.pickupLocation.coordinates[0] },
+          { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
         );
 
         if (distance <= maxRadius) {

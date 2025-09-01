@@ -23,7 +23,7 @@ const getQualifiedDrivers = asyncHandler(async (req, res) => {
     });
   }
 
-  const userId = req.user._id;
+  const userId = req.user?._id || null;
   const pickupLocation = {
     type: 'Point',
     coordinates: [parseFloat(lon), parseFloat(lat)]

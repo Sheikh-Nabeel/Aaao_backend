@@ -173,6 +173,11 @@ const vehicleSchema = new mongoose.Schema(
       default: false,
       required: false,
     },
+    isActive: {
+      type: Boolean,
+      default: true,
+      required: false,
+    },
     status: {
       type: String,
       enum: ["pending", "approved", "rejected", null],
