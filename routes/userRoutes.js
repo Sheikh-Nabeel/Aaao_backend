@@ -27,7 +27,9 @@ import {
   getQualificationStats,
   getQualificationTransactions,
   deleteUser, // New import
-  editUser, // New import
+  editUser,
+  getAllCustomers,
+  getAllDrivers, // New import
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -148,5 +150,7 @@ router.get("/available-services", authHandler, getAvailableServices);
 // New routes for delete and edit user
 router.delete("/delete/:userId", authHandler, adminMiddleware, deleteUser);
 router.patch("/edit/:userId", authHandler, adminMiddleware, editUser);
+router.get("/customers", authHandler, adminMiddleware, getAllCustomers);
+router.get("/drivers", authHandler, adminMiddleware, getAllDrivers);
 
 export default router;
