@@ -239,20 +239,15 @@ export const handleBookingEvents = (socket, io) => {
     }
   });
   
-  // Driver location update
-  socket.on('driver_location_update', async (data) => {
-    console.log('=== SOCKET: DRIVER LOCATION UPDATE ===');
-    console.log('Driver:', socket.user.email);
+  // Unified location update for both users and drivers
+  socket.on('location_update', async (data) => {
+    console.log('=== SOCKET: LOCATION UPDATE ===');
+    console.log('User:', socket.user.email, 'Role:', socket.user.role);
     console.log('Location Data:', data);
     
     try {
-      // Validate user role
-      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
-      if (!roleValidation.isValid) {
-        return SocketNotificationService.sendError(socket, 'location_error', roleValidation.error);
-      }
-      
-      const { coordinates, address, heading, speed } = data;
+      const { coordinates, userId } = data;
+      const userRole = socket.user.role;
       
       // Validate coordinates
       const coordValidation = SocketValidationService.validateCoordinates(coordinates);
@@ -260,66 +255,67 @@ export const handleBookingEvents = (socket, io) => {
         return SocketNotificationService.sendError(socket, 'location_error', coordValidation.error);
       }
       
-      // Update driver location
-      const updatedDriver = await SocketDatabaseService.updateDriverLocation(
-        socket.user._id,
-        { coordinates, address, heading, speed }
-      );
+      // Update location based on user role
+      if (userRole === 'driver') {
+        // Update driver location
+        const updatedDriver = await SocketDatabaseService.updateDriverLocation(
+          socket.user._id,
+          { coordinates, address: '', heading: 0, speed: 0 }
+        );
+        
+        // Notify users with active bookings
+        await SocketNotificationService.notifyDriverLocationUpdate(
+          io,
+          socket.user._id,
+          updatedDriver.currentLocation
+        );
+      } else if (userRole === 'user') {
+        // Update user location
+        await SocketDatabaseService.updateUserLocation(
+          socket.user._id,
+          { coordinates, address: '' }
+        );
+      } else {
+        return SocketNotificationService.sendError(socket, 'location_error', 'Invalid user role for location updates');
+      }
       
-      // Notify users with active bookings
-      await SocketNotificationService.notifyDriverLocationUpdate(
-        io,
-        socket.user._id,
-        updatedDriver.currentLocation
-      );
-      
-      // Broadcast to location tracking subscribers
+      // Broadcast simplified location update with user ID and coordinates only
       const locationUpdate = {
-        driverId: socket.user._id,
-        coordinates: updatedDriver.currentLocation.coordinates,
-        address: updatedDriver.currentLocation.address,
-        heading,
-        speed,
-        timestamp: new Date().toISOString(),
-        vehicleType: socket.user.vehicleType,
-        isActive: socket.user.isActive
+        userId: userId || socket.user._id,
+        coordinates: coordinates,
+        userRole: userRole
       };
       
       // Broadcast to nearby location subscribers
-      socket.to('location_nearby').emit('driver_location_broadcast', locationUpdate);
+      socket.to('location_nearby').emit('location_update', locationUpdate);
       
-      // Broadcast to specific driver subscribers
-      socket.to(`driver_${socket.user._id}`).emit('driver_location_broadcast', locationUpdate);
+      // Broadcast to specific user/driver subscribers
+      socket.to(`${userRole}_${socket.user._id}`).emit('location_update', locationUpdate);
       
-      // Send confirmation to driver
-      SocketNotificationService.confirmLocationUpdate(
-        socket,
-        updatedDriver.currentLocation.coordinates,
-        updatedDriver.currentLocation.lastUpdated
-      );
+      // Send confirmation
+      socket.emit('location_updated', {
+        userId: locationUpdate.userId,
+        coordinates: locationUpdate.coordinates,
+        userRole: userRole,
+        timestamp: new Date().toISOString()
+      });
       
-      console.log('Driver location updated:', socket.user._id);
+      console.log(`${userRole} location updated:`, socket.user._id);
       
     } catch (error) {
-      console.error('Error updating driver location:', error);
+      console.error('Error updating location:', error);
       SocketNotificationService.sendError(socket, 'location_error', error.message);
     }
   });
   
-  // User location update
-  socket.on('user_location_update', async (data) => {
-    console.log('=== SOCKET: USER LOCATION UPDATE ===');
+  // Get nearby drivers with simplified data
+  socket.on('get_nearby_drivers', async (data) => {
+    console.log('=== SOCKET: GET NEARBY DRIVERS ===');
     console.log('User:', socket.user.email);
-    console.log('Location Data:', data);
+    console.log('Request Data:', data);
     
     try {
-      // Validate user role
-      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'user');
-      if (!roleValidation.isValid) {
-        return SocketNotificationService.sendError(socket, 'location_error', roleValidation.error);
-      }
-      
-      const { coordinates, address, bookingId } = data;
+      const { coordinates, radius = 10 } = data;
       
       // Validate coordinates
       const coordValidation = SocketValidationService.validateCoordinates(coordinates);
@@ -327,54 +323,32 @@ export const handleBookingEvents = (socket, io) => {
         return SocketNotificationService.sendError(socket, 'location_error', coordValidation.error);
       }
       
-      // Update user location
-      const updatedLocation = await SocketDatabaseService.updateUserLocation(
-        socket.user._id,
-        { coordinates, address }
-      );
-      
-      // If bookingId is provided, notify the assigned driver
-      if (bookingId) {
-        const booking = await Booking.findById(bookingId).populate('driver', '_id');
-        if (booking && booking.driver && ['accepted', 'started', 'in_progress'].includes(booking.status)) {
-          const driverRoom = `driver_${booking.driver._id}`;
-          io.to(driverRoom).emit('user_location_update', {
-            bookingId: booking._id,
-            userLocation: {
-              coordinates: updatedLocation.coordinates,
-              address: updatedLocation.address,
-              timestamp: updatedLocation.lastUpdated
-            }
-          });
+      // Find nearby active drivers
+      const nearbyDrivers = await User.find({
+        role: 'driver',
+        isActive: true,
+        currentLocation: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: coordinates
+            },
+            $maxDistance: radius * 1000 // Convert km to meters
+          }
         }
-      }
+      }).select('_id currentLocation');
       
-      // Broadcast to location tracking subscribers (for customers)
-      const customerLocationUpdate = {
-        customerId: socket.user._id,
-        coordinates: updatedLocation.coordinates,
-        address: updatedLocation.address,
-        timestamp: updatedLocation.lastUpdated,
-        bookingId: bookingId || null
-      };
+      // Send simplified nearby drivers data
+      const simplifiedDrivers = nearbyDrivers.map(driver => ({
+        userId: driver._id,
+        coordinates: driver.currentLocation.coordinates,
+        userRole: 'driver'
+      }));
       
-      // Broadcast to nearby location subscribers
-      socket.to('location_nearby').emit('customer_location_broadcast', customerLocationUpdate);
-      
-      // Broadcast to specific customer subscribers
-      socket.to(`customer_${socket.user._id}`).emit('customer_location_broadcast', customerLocationUpdate);
-      
-      // Send confirmation
-      SocketNotificationService.confirmLocationUpdate(
-        socket,
-        updatedLocation.coordinates,
-        updatedLocation.lastUpdated
-      );
-      
-      console.log('User location updated:', socket.user._id);
+      socket.emit('nearby_drivers', simplifiedDrivers);
       
     } catch (error) {
-      console.error('Error updating user location:', error);
+      console.error('Error getting nearby drivers:', error);
       SocketNotificationService.sendError(socket, 'location_error', error.message);
     }
   });

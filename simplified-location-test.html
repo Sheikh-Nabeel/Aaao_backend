@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simplified Live Location Tracking Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #d1ecf1; color: #0c5460; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .location-display {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border-left: 4px solid #007bff;
+        }
+        .coordinates {
+            font-family: monospace;
+            background-color: #e9ecef;
+            padding: 5px;
+            border-radius: 3px;
+            display: inline-block;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚗 Simplified Live Location Tracking Test</h1>
+        <p>This page tests the simplified Socket.IO API that only sends <strong>coordinates</strong> and <strong>user ID</strong>.</p>
+        
+        <div id="status" class="status info">Disconnected</div>
+        
+        <div>
+            <h3>Authentication</h3>
+            <input type="text" id="userToken" placeholder="Enter JWT token" value="">
+            <button onclick="connectSocket()">Connect</button>
+            <button onclick="disconnectSocket()">Disconnect</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📍 Send Location Updates</h3>
+        <div>
+            <label>Longitude:</label>
+            <input type="text" id="longitude" value="77.2090" placeholder="Longitude">
+        </div>
+        <div>
+            <label>Latitude:</label>
+            <input type="text" id="latitude" value="28.6139" placeholder="Latitude">
+        </div>
+        <div>
+            <label>User ID (optional):</label>
+            <input type="text" id="userId" placeholder="User ID (auto-detected if empty)">
+        </div>
+        <div>
+            <button onclick="sendUserLocation()">Send User Location</button>
+            <button onclick="sendDriverLocation()">Send Driver Location</button>
+            <button onclick="getNearbyDrivers()">Get Nearby Drivers</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📡 Received Location Updates</h3>
+        <div id="locationUpdates"></div>
+    </div>
+
+    <div class="container">
+        <h3>🚙 Nearby Drivers</h3>
+        <div id="nearbyDrivers"></div>
+    </div>
+
+    <div class="container">
+        <h3>📋 Event Log</h3>
+        <div id="eventLog" style="max-height: 300px; overflow-y: auto; background-color: #f8f9fa; padding: 10px; border-radius: 5px;"></div>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <script>
+        let socket = null;
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logDiv = document.getElementById('eventLog');
+            const logEntry = document.createElement('div');
+            logEntry.innerHTML = `<span style="color: #666;">[${timestamp}]</span> ${message}`;
+            logEntry.style.marginBottom = '5px';
+            if (type === 'error') logEntry.style.color = '#dc3545';
+            if (type === 'success') logEntry.style.color = '#28a745';
+            logDiv.appendChild(logEntry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+        
+        function connectSocket() {
+            const token = document.getElementById('userToken').value;
+            if (!token) {
+                alert('Please enter a JWT token');
+                return;
+            }
+            
+            if (socket) {
+                socket.disconnect();
+            }
+            
+            socket = io('http://localhost:3001', {
+                auth: { token },
+                transports: ['websocket', 'polling'],
+                timeout: 20000,
+                forceNew: true
+            });
+            
+            // Connection events
+            socket.on('connect', () => {
+                log('✅ Connected to server', 'success');
+                updateStatus('Connected', 'success');
+            });
+            
+            socket.on('disconnect', (reason) => {
+                log(`❌ Disconnected: ${reason}`, 'error');
+                updateStatus('Disconnected', 'error');
+            });
+            
+            socket.on('authenticated', (data) => {
+                log(`🔐 Authenticated as: ${data.user.email} (${data.user.role})`, 'success');
+                updateStatus(`Authenticated as ${data.user.role}`, 'success');
+            });
+            
+            // Location update confirmations
+            socket.on('location_updated', (data) => {
+                log(`📍 Location updated - User ID: ${data.userId}, Coordinates: [${data.coordinates.join(', ')}]`, 'success');
+            });
+            
+            // Receive location updates from other users/drivers
+            socket.on('location_update', (data) => {
+                const roleIcon = data.userRole === 'driver' ? '🚗' : '👤';
+                const roleText = data.userRole === 'driver' ? 'Driver' : 'User';
+                log(`${roleIcon} ${roleText} location update - User ID: ${data.userId}, Coordinates: [${data.coordinates.join(', ')}]`, 'info');
+                displayLocationUpdate(roleText, data);
+            });
+            
+            // Nearby drivers response
+            socket.on('nearby_drivers', (drivers) => {
+                log(`🚙 Received ${drivers.length} nearby drivers`, 'info');
+                displayNearbyDrivers(drivers);
+            });
+            
+            // Error handling
+            socket.on('location_error', (error) => {
+                log(`❌ Location error: ${error.message}`, 'error');
+            });
+            
+            socket.on('connect_error', (error) => {
+                log(`❌ Connection error: ${error.message}`, 'error');
+                updateStatus('Connection Error', 'error');
+            });
+        }
+        
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                log('🔌 Manually disconnected', 'info');
+                updateStatus('Disconnected', 'info');
+            }
+        }
+        
+        function sendUserLocation() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('longitude').value);
+            const latitude = parseFloat(document.getElementById('latitude').value);
+            const userId = document.getElementById('userId').value;
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            const locationData = {
+                coordinates: [longitude, latitude],
+                userRole: 'user'
+            };
+            
+            if (userId) {
+                locationData.userId = userId;
+            }
+            
+            socket.emit('location_update', locationData);
+            log(`📤 Sent user location: [${longitude}, ${latitude}]${userId ? ` for user ${userId}` : ''}`, 'info');
+        }
+        
+        function sendDriverLocation() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('longitude').value);
+            const latitude = parseFloat(document.getElementById('latitude').value);
+            const userId = document.getElementById('userId').value;
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            const locationData = {
+                coordinates: [longitude, latitude],
+                userRole: 'driver'
+            };
+            
+            if (userId) {
+                locationData.userId = userId;
+            }
+            
+            socket.emit('location_update', locationData);
+            log(`📤 Sent driver location: [${longitude}, ${latitude}]${userId ? ` for user ${userId}` : ''}`, 'info');
+        }
+        
+        function getNearbyDrivers() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('longitude').value);
+            const latitude = parseFloat(document.getElementById('latitude').value);
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            socket.emit('get_nearby_drivers', {
+                coordinates: [longitude, latitude],
+                radius: 10 // 10km radius
+            });
+            log(`📤 Requested nearby drivers for: [${longitude}, ${latitude}]`, 'info');
+        }
+        
+        function displayLocationUpdate(type, data) {
+            const container = document.getElementById('locationUpdates');
+            const updateDiv = document.createElement('div');
+            updateDiv.className = 'location-display';
+            updateDiv.innerHTML = `
+                <strong>${type} Location Update</strong><br>
+                User ID: <span class="coordinates">${data.userId}</span><br>
+                Coordinates: <span class="coordinates">[${data.coordinates.join(', ')}]</span><br>
+                <small>Received at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(updateDiv);
+            
+            // Keep only last 5 updates
+            while (container.children.length > 5) {
+                container.removeChild(container.firstChild);
+            }
+        }
+        
+        function displayNearbyDrivers(drivers) {
+            const container = document.getElementById('nearbyDrivers');
+            container.innerHTML = '';
+            
+            if (drivers.length === 0) {
+                container.innerHTML = '<div class="location-display">No nearby drivers found</div>';
+                return;
+            }
+            
+            drivers.forEach((driver, index) => {
+                const driverDiv = document.createElement('div');
+                driverDiv.className = 'location-display';
+                driverDiv.innerHTML = `
+                    <strong>Driver ${index + 1}</strong><br>
+                    User ID: <span class="coordinates">${driver.userId}</span><br>
+                    Coordinates: <span class="coordinates">[${driver.coordinates.join(', ')}]</span>
+                `;
+                container.appendChild(driverDiv);
+            });
+        }
+        
+        function clearLog() {
+            document.getElementById('eventLog').innerHTML = '';
+        }
+        
+        // Auto-generate random coordinates for testing
+        function generateRandomCoordinates() {
+            const baseLng = 77.2090;
+            const baseLat = 28.6139;
+            const randomLng = baseLng + (Math.random() - 0.5) * 0.1;
+            const randomLat = baseLat + (Math.random() - 0.5) * 0.1;
+            
+            document.getElementById('longitude').value = randomLng.toFixed(6);
+            document.getElementById('latitude').value = randomLat.toFixed(6);
+        }
+        
+        // Add button for random coordinates
+        window.onload = function() {
+            const coordContainer = document.querySelector('.container:nth-child(2)');
+            const randomBtn = document.createElement('button');
+            randomBtn.textContent = '🎲 Random Coordinates';
+            randomBtn.onclick = generateRandomCoordinates;
+            coordContainer.appendChild(randomBtn);
+        };
+    </script>
+</body>
+</html>
