@@ -167,6 +167,66 @@
     </div>
 
     <div class="container">
+        <h3>📞 Send Booking Request to Qualified Drivers</h3>
+        <div>
+            <label>Pickup Longitude:</label>
+            <input type="text" id="bookingPickupLongitude" value="73.0756609" placeholder="Pickup Longitude">
+        </div>
+        <div>
+            <label>Pickup Latitude:</label>
+            <input type="text" id="bookingPickupLatitude" value="33.6402842" placeholder="Pickup Latitude">
+        </div>
+        <div>
+            <label>Dropoff Longitude:</label>
+            <input type="text" id="bookingDropoffLongitude" value="73.0856609" placeholder="Dropoff Longitude">
+        </div>
+        <div>
+            <label>Dropoff Latitude:</label>
+            <input type="text" id="bookingDropoffLatitude" value="33.6502842" placeholder="Dropoff Latitude">
+        </div>
+        <div>
+            <label>Service Type:</label>
+            <select id="bookingServiceType">
+                <option value="car cab">Car Cab</option>
+                <option value="bike" selected>Bike</option>
+                <option value="car recovery">Car Recovery</option>
+                <option value="shifting & movers">Shifting & Movers</option>
+            </select>
+        </div>
+        <div>
+            <label>Vehicle Type:</label>
+            <select id="bookingVehicleType">
+                <option value="economy">Economy</option>
+                <option value="premium" selected>Premium</option>
+                <option value="vip">VIP</option>
+            </select>
+        </div>
+        <div>
+            <label>Route Type:</label>
+            <select id="routeType">
+                <option value="one_way" selected>One Way</option>
+                <option value="round_trip">Round Trip</option>
+            </select>
+        </div>
+        <div>
+            <label>Passenger Count:</label>
+            <input type="number" id="passengerCount" value="1" min="1" max="8">
+        </div>
+        <div>
+            <label>Payment Method:</label>
+            <select id="paymentMethod">
+                <option value="cash" selected>Cash</option>
+                <option value="card">Card</option>
+                <option value="wallet">Wallet</option>
+            </select>
+        </div>
+        <div>
+            <button onclick="sendBookingRequest()">📞 Send Booking Request</button>
+            <button onclick="setBookingDefaults()">🏍️ Set Booking Defaults</button>
+        </div>
+    </div>
+
+    <div class="container">
         <h3>📡 Received Location Updates</h3>
         <div id="locationUpdates"></div>
     </div>
@@ -184,6 +244,11 @@
     <div class="container">
         <h3>🎯 Qualified Drivers</h3>
         <div id="qualifiedDrivers"></div>
+    </div>
+
+    <div class="container">
+        <h3>📞 Booking Request Response</h3>
+        <div id="bookingRequestResponse"></div>
     </div>
 
     <div class="container">
@@ -334,6 +399,24 @@
                 log(`❌ Error: ${error.message}`, 'error');
             });
             
+            // Booking request response
+            socket.on('booking_request_sent', (data) => {
+                log(`📞 Booking request sent to ${data.driversCount} qualified drivers`, 'success');
+                log(`📡 Raw Booking Response: ${JSON.stringify(data, null, 2)}`, 'info');
+                displayBookingRequestResponse(data);
+            });
+            
+            // Booking request error
+            socket.on('booking_request_error', (error) => {
+                log(`❌ Booking request error: ${error.message}`, 'error');
+            });
+            
+            // New booking request notification (for drivers)
+            socket.on('new_booking_request', (data) => {
+                log(`🔔 New booking request received: ${JSON.stringify(data, null, 2)}`, 'info');
+                displayNewBookingRequest(data);
+            });
+            
             // Error handling
             socket.on('location_error', (error) => {
                 log(`❌ Location error: ${error.message}`, 'error');
@@ -481,6 +564,56 @@
             document.getElementById('vehicleType').value = 'economy';
             document.getElementById('serviceCategory').value = '';
             log('🏍️ Set bike defaults: serviceType=bike, vehicleType=economy', 'info');
+        }
+        
+        function sendBookingRequest() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const pickupLongitude = parseFloat(document.getElementById('bookingPickupLongitude').value);
+            const pickupLatitude = parseFloat(document.getElementById('bookingPickupLatitude').value);
+            const dropoffLongitude = parseFloat(document.getElementById('bookingDropoffLongitude').value);
+            const dropoffLatitude = parseFloat(document.getElementById('bookingDropoffLatitude').value);
+            const serviceType = document.getElementById('bookingServiceType').value;
+            const vehicleType = document.getElementById('bookingVehicleType').value;
+            const routeType = document.getElementById('routeType').value;
+            const passengerCount = parseInt(document.getElementById('passengerCount').value) || 1;
+            const paymentMethod = document.getElementById('paymentMethod').value;
+            
+            if (isNaN(pickupLongitude) || isNaN(pickupLatitude) || isNaN(dropoffLongitude) || isNaN(dropoffLatitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            const bookingData = {
+                pickupLocation: {
+                    type: 'Point',
+                    coordinates: [pickupLongitude, pickupLatitude]
+                },
+                dropoffLocation: {
+                    type: 'Point',
+                    coordinates: [dropoffLongitude, dropoffLatitude]
+                },
+                serviceType: serviceType,
+                vehicleType: vehicleType,
+                routeType: routeType,
+                passengerCount: passengerCount,
+                paymentMethod: paymentMethod
+            };
+            
+            socket.emit('send_booking_request_to_qualified_drivers', bookingData);
+            log(`📞 Sent booking request for ${vehicleType} ${serviceType} service from [${pickupLongitude}, ${pickupLatitude}] to [${dropoffLongitude}, ${dropoffLatitude}]`, 'info');
+        }
+        
+        function setBookingDefaults() {
+            document.getElementById('bookingServiceType').value = 'bike';
+            document.getElementById('bookingVehicleType').value = 'premium';
+            document.getElementById('routeType').value = 'one_way';
+            document.getElementById('passengerCount').value = '1';
+            document.getElementById('paymentMethod').value = 'cash';
+            log('🏍️ Set booking defaults: bike premium service, one way, 1 passenger, cash payment', 'info');
         }
         
         function displayLocationUpdate(type, data) {
@@ -645,9 +778,79 @@
             }
         }
         
+        function displayBookingRequestResponse(data) {
+            const container = document.getElementById('bookingRequestResponse');
+            container.innerHTML = '';
+            
+            const responseDiv = document.createElement('div');
+            responseDiv.className = 'location-display';
+            responseDiv.innerHTML = `
+                <strong>📞 Booking Request Sent Successfully</strong><br>
+                Drivers Notified: <span class="coordinates">${data.driversCount}</span><br>
+                Service: <span class="coordinates">${data.serviceType}</span><br>
+                Vehicle Type: <span class="coordinates">${data.vehicleType}</span><br>
+                Route: <span class="coordinates">${data.routeType}</span><br>
+                Passengers: <span class="coordinates">${data.passengerCount}</span><br>
+                Payment: <span class="coordinates">${data.paymentMethod}</span><br>
+                Request ID: <span class="coordinates">${data.requestId}</span><br>
+                <small>Sent at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(responseDiv);
+            
+            if (data.drivers && data.drivers.length > 0) {
+                data.drivers.forEach((driver, index) => {
+                    const driverDiv = document.createElement('div');
+                    driverDiv.className = 'location-display';
+                    driverDiv.innerHTML = `
+                        <strong>🚗 Notified Driver ${index + 1}</strong><br>
+                        Name: <span class="coordinates">${driver.firstName} ${driver.lastName}</span><br>
+                        Phone: <span class="coordinates">${driver.phoneNumber}</span><br>
+                        Distance: <span class="coordinates">${driver.distance?.toFixed(2)}km</span>
+                    `;
+                    container.appendChild(driverDiv);
+                });
+            }
+        }
+        
+        function displayNewBookingRequest(data) {
+            const container = document.getElementById('bookingRequestResponse');
+            const requestDiv = document.createElement('div');
+            requestDiv.className = 'location-display';
+            requestDiv.style.borderLeft = '4px solid #28a745';
+            requestDiv.innerHTML = `
+                <strong>🔔 New Booking Request Received</strong><br>
+                Request ID: <span class="coordinates">${data.requestId}</span><br>
+                Service: <span class="coordinates">${data.serviceType}</span><br>
+                Vehicle Type: <span class="coordinates">${data.vehicleType}</span><br>
+                Pickup: <span class="coordinates">[${data.pickupLocation.coordinates.join(', ')}]</span><br>
+                Dropoff: <span class="coordinates">[${data.dropoffLocation.coordinates.join(', ')}]</span><br>
+                Passengers: <span class="coordinates">${data.passengerCount}</span><br>
+                Payment: <span class="coordinates">${data.paymentMethod}</span><br>
+                <small>Received at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(requestDiv);
+        }
+        
         function clearLog() {
             document.getElementById('eventLog').innerHTML = '';
         }
+        
+        // Auto-set booking coordinates when qualified driver coordinates change
+        document.getElementById('pickupLongitude').addEventListener('input', function() {
+            document.getElementById('bookingPickupLongitude').value = this.value;
+        });
+        
+        document.getElementById('pickupLatitude').addEventListener('input', function() {
+            document.getElementById('bookingPickupLatitude').value = this.value;
+        });
+        
+        document.getElementById('serviceType').addEventListener('change', function() {
+            document.getElementById('bookingServiceType').value = this.value;
+        });
+        
+        document.getElementById('vehicleType').addEventListener('change', function() {
+            document.getElementById('bookingVehicleType').value = this.value;
+        });
         
         // Auto-generate random coordinates for testing
         function generateRandomCoordinates() {

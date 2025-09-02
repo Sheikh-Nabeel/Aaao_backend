@@ -3,6 +3,7 @@ import Booking from '../models/bookingModel.js';
 import Vehicle from '../models/vehicleModel.js';
 import { addMoneyToMLM } from './mlmHelper.js';
 import { calculateDistance } from "./distanceCalculator.js";
+import { getDriverSocketId } from './driverStatusSocket.js';
 import SocketValidationService from '../services/socketValidationService.js';
 import SocketNotificationService from '../services/socketNotificationService.js';
 import SocketDatabaseService from '../services/socketDatabaseService.js';
@@ -678,6 +679,210 @@ export const handleBookingEvents = (socket, io) => {
     } catch (error) {
       console.error('Error getting qualified drivers:', error);
       socket.emit('error', { message: 'Failed to get qualified drivers' });
+    }
+  });
+
+  // Send booking request to qualified drivers
+  socket.on('send_booking_request_to_qualified_drivers', async (data) => {
+    console.log('=== SOCKET: SEND BOOKING REQUEST TO QUALIFIED DRIVERS ===');
+    console.log('User:', socket.user.email);
+    console.log('Request Data:', data);
+    
+    try {
+      const {
+        pickupLocation,
+        dropoffLocation,
+        serviceType,
+        vehicleType,
+        driverPreference = 'any',
+        estimatedFare,
+        paymentMethod,
+        notes
+      } = data;
+      
+      // Validate required fields
+      if (!pickupLocation || !pickupLocation.coordinates || !Array.isArray(pickupLocation.coordinates)) {
+        socket.emit('booking_request_error', { message: 'Invalid pickup location' });
+        return;
+      }
+      
+      if (!dropoffLocation || !dropoffLocation.coordinates || !Array.isArray(dropoffLocation.coordinates)) {
+        socket.emit('booking_request_error', { message: 'Invalid dropoff location' });
+        return;
+      }
+      
+      if (!serviceType || !vehicleType) {
+        socket.emit('booking_request_error', { message: 'Service type and vehicle type are required' });
+        return;
+      }
+      
+      // Get qualified drivers using the same logic as request_qualified_drivers
+      const maxRadius = driverPreference === 'pink_captain' ? 50 : 10;
+      
+      // Find vehicles that match the service and vehicle type
+      const matchingVehicles = await Vehicle.find({
+        serviceType: serviceType,
+        vehicleType: vehicleType,
+        isActive: true
+      });
+      
+      if (matchingVehicles.length === 0) {
+        socket.emit('booking_request_error', { message: 'No vehicles available for this service' });
+        return;
+      }
+      
+      const vehicleOwnerIds = matchingVehicles.map(vehicle => vehicle.userId);
+      
+      // Find drivers within radius using the same criteria as qualified drivers
+      const driversWithDistance = [];
+      let driverQuery = {
+        _id: { $in: vehicleOwnerIds },
+        role: 'driver',
+        kycLevel: 2,
+        kycStatus: 'approved',
+        isActive: true,
+        driverStatus: 'online',
+        currentLocation: { $exists: true }
+      };
+      
+      // Handle Pink Captain preferences
+      if (driverPreference === 'pink_captain') {
+        driverQuery.gender = 'female';
+      }
+      
+      const potentialDrivers = await User.find(driverQuery);
+      console.log(`Found ${potentialDrivers.length} potential drivers`);
+      
+      if (potentialDrivers.length === 0) {
+        socket.emit('booking_request_error', { message: 'No qualified drivers available' });
+        return;
+      }
+      
+      // Get driver IDs for vehicle lookup
+      const driverIds = potentialDrivers.map(driver => driver._id);
+      
+      // Find vehicles that match the service type and vehicle type
+      let vehicleQuery = {
+        userId: { $in: driverIds },
+        serviceType: serviceType,
+        isActive: true
+      };
+      
+      // Add vehicle type filter if specified
+      if (vehicleType && vehicleType !== 'any') {
+        vehicleQuery.vehicleType = vehicleType;
+      }
+      
+      console.log('Vehicle Query:', vehicleQuery);
+      
+      // Find matching vehicles
+      const vehicles = await Vehicle.find(vehicleQuery);
+      console.log(`Found ${vehicles.length} matching vehicles`);
+      
+      if (vehicles.length === 0) {
+        socket.emit('booking_request_error', { message: 'No qualified drivers available' });
+        return;
+      }
+      
+      // Get driver IDs that have matching vehicles
+      const qualifiedDriverIds = vehicles.map(vehicle => vehicle.userId.toString());
+      
+      // Filter drivers to only those with matching vehicles and within radius
+      const qualifiedDrivers = potentialDrivers.filter(driver => 
+        qualifiedDriverIds.includes(driver._id.toString())
+      );
+      
+      console.log(`Found ${qualifiedDrivers.length} drivers with matching vehicles`);
+      
+      for (const driver of qualifiedDrivers) {
+        if (driver.currentLocation && driver.currentLocation.coordinates) {
+          const distance = calculateDistance(
+            { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
+            { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+          );
+          
+          if (distance <= maxRadius) {
+            driversWithDistance.push({
+              ...driver.toObject(),
+              distance: distance
+            });
+          }
+        }
+      }
+      
+      // Filter drivers based on preference
+      let filteredDrivers = driversWithDistance;
+      if (driverPreference === 'pink_captain') {
+        console.log('Filtering Pink Captain drivers based on preferences...');
+        
+        filteredDrivers = driversWithDistance.filter(driver => {
+          const driverPrefs = driver.driverSettings?.ridePreferences;
+          return driverPrefs && driverPrefs.pinkCaptainMode;
+        });
+        
+        console.log(`Filtered to ${filteredDrivers.length} Pink Captain drivers`);
+      }
+      
+      // Sort by distance
+      filteredDrivers.sort((a, b) => a.distance - b.distance);
+      
+      if (filteredDrivers.length === 0) {
+        socket.emit('booking_request_error', { message: 'No qualified drivers available' });
+        return;
+      }
+      
+      // Create booking request object
+      const bookingRequest = {
+        requestId: new Date().getTime().toString(),
+        userId: socket.user._id,
+        userInfo: {
+          name: socket.user.name,
+          email: socket.user.email,
+          phone: socket.user.phone
+        },
+        pickupLocation,
+        dropoffLocation,
+        serviceType,
+        vehicleType,
+        driverPreference,
+        estimatedFare,
+        paymentMethod,
+        notes,
+        timestamp: new Date(),
+        status: 'pending'
+      };
+      
+      // Send booking request to qualified drivers
+      let requestsSent = 0;
+      console.log(`Attempting to send booking requests to ${filteredDrivers.length} filtered drivers`);
+      
+      for (const driver of filteredDrivers) {
+        console.log(`Checking driver ${driver._id} for socket connection...`);
+        const driverSocketId = getDriverSocketId(driver._id);
+        console.log(`Driver ${driver._id} socket ID: ${driverSocketId}`);
+        
+        if (driverSocketId) {
+          console.log(`Sending booking request to driver ${driver._id} via socket ${driverSocketId}`);
+          io.to(driverSocketId).emit('new_booking_request', bookingRequest);
+          requestsSent++;
+        } else {
+          console.log(`Driver ${driver._id} is not connected via socket`);
+        }
+      }
+      
+      console.log(`Sent booking request to ${requestsSent} qualified drivers`);
+      
+      // Respond to the user
+      socket.emit('booking_request_sent', {
+        success: true,
+        requestId: bookingRequest.requestId,
+        driversNotified: requestsSent,
+        message: `Booking request sent to ${requestsSent} qualified drivers`
+      });
+      
+    } catch (error) {
+      console.error('Error sending booking request to qualified drivers:', error);
+      socket.emit('booking_request_error', { message: 'Failed to send booking request' });
     }
   });
 

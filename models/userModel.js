@@ -253,7 +253,7 @@ const userSchema = new mongoose.Schema(
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
-        required: false
+        default: [0, 0] // Default coordinates [longitude, latitude]
       }
     },
     isActive: {

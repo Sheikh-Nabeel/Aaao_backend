@@ -13,6 +13,12 @@ const driverSockets = new Map();
 export const initializeDriverStatusSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(`Socket connected: ${socket.id}`);
+    
+    // Add driver to socket map if they are a driver
+    if (socket.user && socket.user.role === 'driver') {
+      driverSockets.set(socket.user._id.toString(), socket.id);
+      console.log(`Driver ${socket.user._id} connected with socket ID: ${socket.id}`);
+    }
 
     // Driver go online
   socket.on('driver:go-online', async (data) => {
@@ -40,6 +46,10 @@ export const initializeDriverStatusSocket = (io) => {
           updateData,
           { new: true }
         ).select('driverStatus isActive currentLocation lastActiveAt');
+        
+        // Add driver to socket map for booking notifications
+        driverSockets.set(userId.toString(), socket.id);
+        console.log(`Driver ${userId} added to socket map with socket ID: ${socket.id}`);
         
         // Join online drivers room
         socket.join('online-drivers');
@@ -80,6 +90,10 @@ export const initializeDriverStatusSocket = (io) => {
           { new: true }
         ).select('driverStatus isActive currentLocation lastActiveAt');
         
+        // Remove driver from socket map when going offline
+        driverSockets.delete(userId.toString());
+        console.log(`Driver ${userId} removed from socket map (went offline)`);
+        
         // Join offline drivers room
         socket.join('offline-drivers');
         socket.leave('online-drivers');
@@ -103,11 +117,11 @@ export const initializeDriverStatusSocket = (io) => {
     // Handle disconnect
     socket.on('disconnect', async () => {
       try {
-        const userId = socket.user?.id;
+        const userId = socket.user?._id;
         
         if (userId && socket.user?.role === 'driver') {
           // Remove from driver sockets map
-          driverSockets.delete(userId);
+          driverSockets.delete(userId.toString());
           
           // Optionally set driver offline on disconnect (uncomment if needed)
           // await User.findByIdAndUpdate(userId, {
@@ -116,7 +130,7 @@ export const initializeDriverStatusSocket = (io) => {
           //   lastActiveAt: new Date()
           // });
           
-          console.log(`Driver ${userId} disconnected`);
+          console.log(`Driver ${userId} disconnected and removed from socket map`);
         }
       } catch (error) {
         console.error('Error handling disconnect:', error);
