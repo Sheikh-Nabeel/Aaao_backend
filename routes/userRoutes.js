@@ -30,7 +30,8 @@ import {
   editUser,
   getAllCustomers,
   getAllDrivers,
-  editDriver, // New import
+  editDriver,
+  addAdmin, // New import
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -166,5 +167,5 @@ router.put(
   ]),
   editDriver
 );
-
+router.post("/admin/add-admin", authHandler, adminMiddleware, addAdmin);
 export default router;

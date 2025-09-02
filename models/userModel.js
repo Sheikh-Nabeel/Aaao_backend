@@ -50,7 +50,7 @@ const userSchema = new mongoose.Schema(
     },
     dateOfBirth: {
       type: Date,
-      required: false
+      required: false,
     },
     password: {
       type: String,
@@ -110,8 +110,8 @@ const userSchema = new mongoose.Schema(
     assignedVehicles: {
       type: [mongoose.Schema.Types.ObjectId],
       ref: "VehicleRegistration",
-      default:[],
-},
+      default: [],
+    },
     hasVehicle: { type: String, enum: ["yes", "no", null], default: null },
     otp: { type: String, default: null },
     otpExpires: { type: Date, default: null },
@@ -122,6 +122,24 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "customer",
       enum: ["customer", "driver", "admin", "superadmin"],
+    },
+    adminPermissions: {
+      type: [String],
+      default: [],
+      enum: [
+        "mlm",
+        "home",
+        "dispatch",
+        "drivermanagement",
+        "customermanagement",
+        "proposalmanagement",
+        "overview",
+        "paymentoverview",
+        "chatdetail",
+        "kycverification",
+        "reportanalytics",
+        "reviewandrating",
+      ],
     },
     services: [
       {
@@ -148,56 +166,70 @@ const userSchema = new mongoose.Schema(
       pgp: {
         monthly: { type: Number, default: 0 },
         accumulated: { type: Number, default: 0 },
-        lastResetDate: { type: Date, default: Date.now }
+        lastResetDate: { type: Date, default: Date.now },
       },
       tgp: {
         monthly: { type: Number, default: 0 },
         accumulated: { type: Number, default: 0 },
-        lastResetDate: { type: Date, default: Date.now }
+        lastResetDate: { type: Date, default: Date.now },
       },
       transactions: {
-        type: [{
-          points: { type: Number, required: true },
-          rideId: { type: String, required: true },
-          type: { type: String, enum: ['pgp', 'tgp'], required: true },
-          rideType: { type: String, default: 'personal' },
-          rideFare: { type: Number, default: 0 },
-          timestamp: { type: Date, default: Date.now },
-          month: { type: Number, required: true },
-          year: { type: Number, required: true }
-        }],
-        default: []
-      }
+        type: [
+          {
+            points: { type: Number, required: true },
+            rideId: { type: String, required: true },
+            type: { type: String, enum: ["pgp", "tgp"], required: true },
+            rideType: { type: String, default: "personal" },
+            rideFare: { type: Number, default: 0 },
+            timestamp: { type: Date, default: Date.now },
+            month: { type: Number, required: true },
+            year: { type: Number, required: true },
+          },
+        ],
+        default: [],
+      },
     },
     crrRank: {
-      current: { type: String, enum: ['None', 'Challenger', 'Warrior', 'Tycoon', 'CHAMPION', 'BOSS'], default: 'None' },
+      current: {
+        type: String,
+        enum: ["None", "Challenger", "Warrior", "Tycoon", "CHAMPION", "BOSS"],
+        default: "None",
+      },
       lastUpdated: { type: Date, default: Date.now },
       rewardClaimed: { type: Boolean, default: false },
       rewardAmount: { type: Number, default: 0 },
       history: {
-        type: [{
-          rank: { type: String, enum: ['Challenger', 'Warrior', 'Tycoon', 'CHAMPION', 'BOSS'], required: true },
-          achievedAt: { type: Date, default: Date.now },
-          pgpPoints: { type: Number, required: true, default: 0 },
-          tgpPoints: { type: Number, required: true, default: 0 },
-          rewardAmount: { type: Number, default: 0 },
-          rewardClaimed: { type: Boolean, default: false }
-        }],
-        default: []
-      }
+        type: [
+          {
+            rank: {
+              type: String,
+              enum: ["Challenger", "Warrior", "Tycoon", "CHAMPION", "BOSS"],
+              required: true,
+            },
+            achievedAt: { type: Date, default: Date.now },
+            pgpPoints: { type: Number, required: true, default: 0 },
+            tgpPoints: { type: Number, required: true, default: 0 },
+            rewardAmount: { type: Number, default: 0 },
+            rewardClaimed: { type: Boolean, default: false },
+          },
+        ],
+        default: [],
+      },
     },
     wallet: {
       balance: { type: Number, default: 0 },
       lastUpdated: { type: Date, default: Date.now },
       transactions: {
-        type: [{
-          amount: { type: Number, required: true },
-          type: { type: String, enum: ['credit', 'debit'], required: true },
-          description: { type: String, required: true },
-          timestamp: { type: Date, default: Date.now }
-        }],
-        default: []
-      }
+        type: [
+          {
+            amount: { type: Number, required: true },
+            type: { type: String, enum: ["credit", "debit"], required: true },
+            description: { type: String, required: true },
+            timestamp: { type: Date, default: Date.now },
+          },
+        ],
+        default: [],
+      },
     },
     bbrParticipation: {
       currentCampaign: {
@@ -207,25 +239,27 @@ const userSchema = new mongoose.Schema(
         teamRides: { type: Number, default: 0 },
         achieved: { type: Boolean, default: false },
         joinedAt: { type: Date, default: Date.now },
-        lastRideAt: { type: Date }
+        lastRideAt: { type: Date },
       },
       totalWins: { type: Number, default: 0 },
       totalRewardsEarned: { type: Number, default: 0 },
       history: {
-        type: [{
-          campaignId: { type: mongoose.Schema.Types.ObjectId },
-          campaignName: { type: String },
-          totalRides: { type: Number },
-          soloRides: { type: Number },
-          teamRides: { type: Number },
-          achieved: { type: Boolean },
-          isWinner: { type: Boolean },
-          rewardAmount: { type: Number },
-          participatedAt: { type: Date },
-          completedAt: { type: Date }
-        }],
-        default: []
-      }
+        type: [
+          {
+            campaignId: { type: mongoose.Schema.Types.ObjectId },
+            campaignName: { type: String },
+            totalRides: { type: Number },
+            soloRides: { type: Number },
+            teamRides: { type: Number },
+            achieved: { type: Boolean },
+            isWinner: { type: Boolean },
+            rewardAmount: { type: Number },
+            participatedAt: { type: Date },
+            completedAt: { type: Date },
+          },
+        ],
+        default: [],
+      },
     },
     // HLR Qualification
     hlrQualification: {
@@ -233,83 +267,85 @@ const userSchema = new mongoose.Schema(
       qualifiedAt: { type: Date },
       rewardClaimed: { type: Boolean, default: false },
       claimedAt: { type: Date },
-      claimReason: { 
-        type: String, 
-        enum: ['retirement', 'deceased'], 
-        default: null 
+      claimReason: {
+        type: String,
+        enum: ["retirement", "deceased"],
+        default: null,
       },
-      notes: [{
-        note: { type: String, required: true },
-        addedAt: { type: Date, default: Date.now },
-        addedBy: { type: String, required: true }
-      }]
+      notes: [
+        {
+          note: { type: String, required: true },
+          addedAt: { type: Date, default: Date.now },
+          addedBy: { type: String, required: true },
+        },
+      ],
     },
     // Driver-specific fields
     currentLocation: {
       type: {
         type: String,
-        enum: ['Point'],
-        default: 'Point'
+        enum: ["Point"],
+        default: "Point",
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
-        default: [0, 0] // Default coordinates [longitude, latitude]
-      }
+        default: [0, 0], // Default coordinates [longitude, latitude]
+      },
     },
     isActive: {
       type: Boolean,
-      default: false
+      default: false,
     },
     driverStatus: {
       type: String,
-      enum: ['offline', 'online', 'busy', 'on_ride'],
-      default: 'offline'
+      enum: ["offline", "online", "busy", "on_ride"],
+      default: "offline",
     },
     lastActiveAt: {
       type: Date,
-      required: false
+      required: false,
     },
     driverSettings: {
       autoAccept: {
         enabled: {
           type: Boolean,
-          default: false
+          default: false,
         },
         maxDistance: {
           type: Number,
-          default: 10 // in kilometers
+          default: 10, // in kilometers
         },
         minFare: {
           type: Number,
-          default: 0
+          default: 0,
         },
         serviceTypes: {
           type: [String],
-          default: []
-        }
+          default: [],
+        },
       },
       ridePreferences: {
         acceptBike: {
           type: Boolean,
-          default: true
+          default: true,
         },
         acceptCar: {
           type: Boolean,
-          default: true
+          default: true,
         },
         pinkCaptainMode: {
           type: Boolean,
-          default: false
+          default: false,
         },
         acceptFemaleOnly: {
           type: Boolean,
-          default: false
+          default: false,
         },
         maxRideDistance: {
           type: Number,
-          default: 50 // in kilometers
-        }
-      }
+          default: 50, // in kilometers
+        },
+      },
     },
   },
   { timestamps: true }

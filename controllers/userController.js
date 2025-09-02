@@ -1418,13 +1418,13 @@ const deleteUser = asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   if (!userId) {
-    console.log('No userId provided');
+    console.log("No userId provided");
     res.status(400);
     throw new Error("User ID is required");
   }
 
   if (!mongoose.isValidObjectId(userId)) {
-    console.log('Invalid userId format:', userId);
+    console.log("Invalid userId format:", userId);
     res.status(400);
     throw new Error("Invalid user ID format");
   }
@@ -1432,21 +1432,25 @@ const deleteUser = asyncHandler(async (req, res) => {
   console.log(`Checking user existence: ${Date.now() - startTime}ms`);
   const user = await User.findById(userId);
   if (!user) {
-    console.log('User not found:', userId);
+    console.log("User not found:", userId);
     res.status(404);
     throw new Error("User not found");
   }
 
   // Prevent deletion of superadmin users
   if (user.role === "superadmin") {
-    console.log('Attempted to delete superadmin:', userId);
+    console.log("Attempted to delete superadmin:", userId);
     res.status(403);
     throw new Error("Cannot delete a superadmin user");
   }
 
   // Remove user from any sponsor's referral lists
   if (user.sponsorBy) {
-    console.log(`Fetching sponsor for user.sponsorBy: ${user.sponsorBy}, Time: ${Date.now() - startTime}ms`);
+    console.log(
+      `Fetching sponsor for user.sponsorBy: ${user.sponsorBy}, Time: ${
+        Date.now() - startTime
+      }ms`
+    );
     const sponsor = await User.findOne({
       $or: [{ sponsorId: user.sponsorBy }, { username: user.sponsorBy }],
     });
@@ -1458,13 +1462,19 @@ const deleteUser = asyncHandler(async (req, res) => {
         (id) => id.toString() !== userId
       );
       await sponsor.save();
-      console.log(`Sponsor updated: ${sponsor._id}, Time: ${Date.now() - startTime}ms`);
+      console.log(
+        `Sponsor updated: ${sponsor._id}, Time: ${Date.now() - startTime}ms`
+      );
       // Temporarily comment out updateAllLevels to test for delays
       // console.log(`Starting updateAllLevels for: ${sponsor._id}, Time: ${Date.now() - startTime}ms`);
       // await updateAllLevels(sponsor._id);
       // console.log(`updateAllLevels completed for: ${sponsor._id}, Time: ${Date.now() - startTime}ms`);
     } else {
-      console.log(`No sponsor found for: ${user.sponsorBy}, Time: ${Date.now() - startTime}ms`);
+      console.log(
+        `No sponsor found for: ${user.sponsorBy}, Time: ${
+          Date.now() - startTime
+        }ms`
+      );
     }
   }
 
@@ -1473,10 +1483,14 @@ const deleteUser = asyncHandler(async (req, res) => {
     if (imagePath) {
       const fullPath = path.join(process.cwd(), imagePath);
       if (fs.existsSync(fullPath)) {
-        console.log(`Deleting image: ${fullPath}, Time: ${Date.now() - startTime}ms`);
+        console.log(
+          `Deleting image: ${fullPath}, Time: ${Date.now() - startTime}ms`
+        );
         fs.unlinkSync(fullPath);
       } else {
-        console.log(`Image not found: ${fullPath}, Time: ${Date.now() - startTime}ms`);
+        console.log(
+          `Image not found: ${fullPath}, Time: ${Date.now() - startTime}ms`
+        );
       }
     }
   };
@@ -1489,15 +1503,25 @@ const deleteUser = asyncHandler(async (req, res) => {
 
   // Delete associated vehicle data
   if (user.pendingVehicleData) {
-    console.log(`Deleting vehicle: ${user.pendingVehicleData}, Time: ${Date.now() - startTime}ms`);
+    console.log(
+      `Deleting vehicle: ${user.pendingVehicleData}, Time: ${
+        Date.now() - startTime
+      }ms`
+    );
     await Vehicle.findByIdAndDelete(user.pendingVehicleData);
     console.log(`Vehicle deleted, Time: ${Date.now() - startTime}ms`);
   }
 
   // Delete the user
-  console.log(`Deleting user from database: ${userId}, Time: ${Date.now() - startTime}ms`);
+  console.log(
+    `Deleting user from database: ${userId}, Time: ${Date.now() - startTime}ms`
+  );
   await User.findByIdAndDelete(userId);
-  console.log(`User deleted successfully: ${userId}, Total time: ${Date.now() - startTime}ms`);
+  console.log(
+    `User deleted successfully: ${userId}, Total time: ${
+      Date.now() - startTime
+    }ms`
+  );
 
   res.status(200).json({
     success: true,
@@ -1655,7 +1679,6 @@ const editUser = asyncHandler(async (req, res) => {
     },
   });
 });
-
 
 const editDriver = asyncHandler(async (req, res) => {
   const { userId } = req.params;
@@ -1999,9 +2022,9 @@ const editDriver = asyncHandler(async (req, res) => {
 });
 
 const getAllCustomers = asyncHandler(async (req, res) => {
-  const customers = await User.find({ 
-    role: "customer", 
-    kycLevel: 1 
+  const customers = await User.find({
+    role: "customer",
+    kycLevel: 1,
   })
     .select(
       "username firstName lastName email phoneNumber gender country kycLevel kycStatus hasVehicle createdAt cnicImages selfieImage"
@@ -2022,7 +2045,6 @@ const getAllCustomers = asyncHandler(async (req, res) => {
 const getAllDrivers = asyncHandler(async (req, res) => {
   const drivers = await User.find({
     role: "driver",
-    kycLevel: 1,
   })
     .select(
       "username firstName lastName email phoneNumber gender country kycLevel kycStatus hasVehicle createdAt cnicImages selfieImage"
@@ -2043,6 +2065,116 @@ const getAllDrivers = asyncHandler(async (req, res) => {
       vehicle: driver.pendingVehicleData || null,
     })),
     totalDrivers: drivers.length,
+  });
+});
+
+const addAdmin = asyncHandler(async (req, res) => {
+  const { username,firstName, email, phoneNumber, password, permissions } = req.body;
+
+  // Validate required fields
+  if (
+    !username ||
+    !firstName ||
+    !email ||
+    !phoneNumber ||
+    !password ||
+    !permissions
+  ) {
+    res.status(400);
+    throw new Error(
+      "Username,firstName, email, phone number, password, and permissions are required"
+    );
+  }
+
+  // Check if the requesting user is a superadmin
+  const requestingUser = await User.findById(req.user._id);
+  if (!requestingUser || requestingUser.role !== "superadmin") {
+    res.status(403);
+    throw new Error("Only superadmins can add admins");
+  }
+
+  // Validate email and phone number uniqueness
+  const existingEmail = await User.findOne({ email });
+  const existingPhone = await User.findOne({ phoneNumber });
+  if (existingEmail) {
+    res.status(400);
+    throw new Error("This email is already registered");
+  }
+  if (existingPhone) {
+    res.status(400);
+    throw new Error("This phone number is already registered");
+  }
+
+  // Validate username
+  if (
+    !/^[a-zA-Z0-9_]+$/.test(username) ||
+    username.length < 3 ||
+    username.length > 30
+  ) {
+    res.status(400);
+    throw new Error(
+      "Username must be between 3 and 30 characters and contain only letters, numbers, and underscores"
+    );
+  }
+
+  // Validate phone number length (10-13 characters)
+  if (phoneNumber.length < 10 || phoneNumber.length > 13) {
+    res.status(400);
+    throw new Error(
+      "Phone number must be between 10 and 13 characters including country code"
+    );
+  }
+
+  // Validate permissions
+  const validPermissions = [
+    "mlm",
+    "home",
+    "dispatch",
+    "drivermanagement",
+    "customermanagement",
+    "proposalmanagement",
+    "overview",
+    "paymentoverview",
+    "chatdetail",
+    "kycverification",
+    "reportanalytics",
+    "reviewandrating",
+  ];
+  if (
+    !Array.isArray(permissions) ||
+    !permissions.every((p) => validPermissions.includes(p))
+  ) {
+    res.status(400);
+    throw new Error(
+      "Permissions must be a valid array containing mlm, kycApproval, userManagement, or dashboard"
+    );
+  }
+
+  // Create the admin user
+  const admin = await User.create({
+    username,
+    firstName,
+    email: email.trim().toLowerCase(),
+    phoneNumber,
+    password,
+    role: "admin",
+    adminPermissions: permissions,
+    isVerified: true,
+    sponsorId: `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Admin added successfully",
+    admin: {
+      userId: admin._id,
+      username: admin.username,
+      firstName: admin.firstName,
+      email: admin.email,
+      phoneNumber: admin.phoneNumber,
+      role: admin.role,
+      adminPermissions: admin.adminPermissions,
+    },
   });
 });
 
@@ -2078,4 +2210,5 @@ export {
   editDriver,
   getAllCustomers, // Added new controller
   getAllDrivers,
+  addAdmin,
 };
