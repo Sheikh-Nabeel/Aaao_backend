@@ -568,12 +568,21 @@ export const handleBookingEvents = (socket, io) => {
         return;
       }
 
-      // Calculate distances and filter by radius
+      // Calculate distances and filter by radius and socket connection
       const driversWithDistance = [];
       const maxRadius = driverPreference === 'pink_captain' ? 50 : 10;
+      let driversNotConnected = 0;
 
       for (const driver of qualifiedDrivers) {
         if (driver.currentLocation && driver.currentLocation.coordinates) {
+          // Check if driver is actually connected via socket
+          const driverSocketId = getDriverSocketId(driver._id.toString());
+          if (!driverSocketId) {
+            driversNotConnected++;
+            console.log(`Driver ${driver._id} (${driver.firstName} ${driver.lastName}) is marked online but not connected via socket`);
+            continue; // Skip drivers who aren't connected via socket
+          }
+
           const distance = calculateDistance(
             { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
             { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
@@ -664,6 +673,7 @@ export const handleBookingEvents = (socket, io) => {
           totalVehiclesFound: vehicles.length,
           driversWithVehicles: qualifiedDrivers.length,
           driversInRadius: driversWithDistance.length,
+          driversNotConnectedViaSocket: driversNotConnected,
           finalQualifiedDrivers: topDrivers.length
         },
         timestamp: new Date()
@@ -795,6 +805,13 @@ export const handleBookingEvents = (socket, io) => {
       console.log(`Found ${qualifiedDrivers.length} drivers with matching vehicles`);
       
       for (const driver of qualifiedDrivers) {
+        // Check if driver is connected via socket before adding to qualified list
+        const driverSocketId = getDriverSocketId(driver._id.toString());
+        if (!driverSocketId) {
+          console.log(`Driver ${driver._id} is not connected via socket, skipping`);
+          continue;
+        }
+        
         if (driver.currentLocation && driver.currentLocation.coordinates) {
           const distance = calculateDistance(
             { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
@@ -857,17 +874,10 @@ export const handleBookingEvents = (socket, io) => {
       console.log(`Attempting to send booking requests to ${filteredDrivers.length} filtered drivers`);
       
       for (const driver of filteredDrivers) {
-        console.log(`Checking driver ${driver._id} for socket connection...`);
-        const driverSocketId = getDriverSocketId(driver._id);
-        console.log(`Driver ${driver._id} socket ID: ${driverSocketId}`);
-        
-        if (driverSocketId) {
-          console.log(`Sending booking request to driver ${driver._id} via socket ${driverSocketId}`);
-          io.to(driverSocketId).emit('new_booking_request', bookingRequest);
-          requestsSent++;
-        } else {
-          console.log(`Driver ${driver._id} is not connected via socket`);
-        }
+        const driverSocketId = getDriverSocketId(driver._id.toString());
+        console.log(`Sending booking request to driver ${driver._id} via socket ${driverSocketId}`);
+        io.to(driverSocketId).emit('new_booking_request', bookingRequest);
+        requestsSent++;
       }
       
       console.log(`Sent booking request to ${requestsSent} qualified drivers`);

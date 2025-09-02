@@ -143,7 +143,18 @@ export const initializeDriverStatusSocket = (io) => {
  * Get driver socket ID by user ID
  */
 export const getDriverSocketId = (driverId) => {
-  return driverSockets.get(driverId);
+  console.log(`🔍 Looking for driver socket ID for: ${driverId} (type: ${typeof driverId})`);
+  console.log(`📋 Current drivers in socket map:`, Array.from(driverSockets.keys()));
+  const socketId = driverSockets.get(driverId);
+  console.log(`🎯 Found socket ID: ${socketId}`);
+  return socketId;
+};
+
+/**
+ * Get all connected drivers (for debugging)
+ */
+export const getConnectedDrivers = () => {
+  return Array.from(driverSockets.keys());
 };
 
 /**

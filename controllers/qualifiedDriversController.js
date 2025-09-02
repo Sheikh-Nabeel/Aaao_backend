@@ -2,6 +2,7 @@ import asyncHandler from "express-async-handler";
 import User from '../models/userModel.js';
 import Vehicle from '../models/vehicleModel.js';
 import { calculateDistance } from '../utils/distanceCalculator.js';
+import { getDriverSocketId } from '../utils/driverStatusSocket.js';
 
 // Get qualified drivers with comprehensive information
 const getQualifiedDrivers = asyncHandler(async (req, res) => {
@@ -157,12 +158,21 @@ const getQualifiedDrivers = asyncHandler(async (req, res) => {
       });
     }
 
-    // Calculate distances and filter by radius
+    // Calculate distances and filter by radius and socket connection
     const driversWithDistance = [];
     const maxRadius = driverPreference === 'pink_captain' ? 50 : parseFloat(radius);
+    let driversNotConnected = 0;
 
     for (const driver of qualifiedDrivers) {
       if (driver.currentLocation && driver.currentLocation.coordinates) {
+        // Check if driver is actually connected via socket
+        const driverSocketId = getDriverSocketId(driver._id.toString());
+        if (!driverSocketId) {
+          driversNotConnected++;
+          console.log(`Driver ${driver._id} (${driver.firstName} ${driver.lastName}) is marked online but not connected via socket`);
+          continue; // Skip drivers who aren't connected via socket
+        }
+
         const distance = calculateDistance(
           { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
           { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
@@ -247,6 +257,7 @@ const getQualifiedDrivers = asyncHandler(async (req, res) => {
           totalDriversFound: drivers.length,
           totalVehiclesFound: vehicles.length,
           driversWithVehicles: qualifiedDrivers.length,
+          driversNotConnectedViaSocket: driversNotConnected,
           driversInRadius: driversWithDistance.length,
           finalQualifiedDrivers: topDrivers.length
         }
@@ -337,8 +348,19 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
       driverVehiclesMap[vehicle.userId.toString()].push(vehicle);
     });
 
-    // Format driver data with comprehensive information
-    const formattedDrivers = nearbyDrivers.map(driver => {
+    // Format driver data with comprehensive information (only socket-connected drivers)
+    const formattedDrivers = [];
+    let driversNotConnected = 0;
+    
+    for (const driver of nearbyDrivers) {
+      // Check if driver is actually connected via socket
+      const driverSocketId = getDriverSocketId(driver._id.toString());
+      if (!driverSocketId) {
+        driversNotConnected++;
+        console.log(`Nearby driver ${driver._id} (${driver.firstName} ${driver.lastName}) is not connected via socket`);
+        continue; // Skip drivers who aren't connected via socket
+      }
+
       const distance = calculateDistance(
         parseFloat(lat), parseFloat(lon),
         driver.currentLocation.coordinates[1], driver.currentLocation.coordinates[0]
@@ -346,7 +368,7 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
 
       const driverVehicles = driverVehiclesMap[driver._id.toString()] || [];
 
-      return {
+      formattedDrivers.push({
         id: driver._id,
         firstName: driver.firstName,
         lastName: driver.lastName,
@@ -383,8 +405,8 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
         distance: Math.round(distance * 100) / 100,
         estimatedArrival: Math.ceil(distance / 0.5), // Assuming 30km/h average speed
         driverSettings: driver.driverSettings
-      };
-    });
+      });
+    }
 
     // Sort by distance
     formattedDrivers.sort((a, b) => a.distance - b.distance);
@@ -401,6 +423,8 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
         searchStats: {
           totalDriversFound: nearbyDrivers.length,
           totalVehiclesFound: vehicles.length,
+          driversNotConnectedViaSocket: driversNotConnected,
+          connectedDriversReturned: formattedDrivers.length,
           averageDistance: formattedDrivers.length > 0 
             ? Math.round((formattedDrivers.reduce((sum, d) => sum + d.distance, 0) / formattedDrivers.length) * 100) / 100 
             : 0

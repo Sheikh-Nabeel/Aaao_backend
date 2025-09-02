@@ -2892,7 +2892,7 @@ const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
     if (io) {
       // Send booking request to qualified drivers
       for (const driver of filteredDrivers) {
-        const driverSocketId = getDriverSocketId(driver._id);
+        const driverSocketId = getDriverSocketId(driver._id.toString());
         if (driverSocketId) {
           io.to(driverSocketId).emit('new_booking_request', bookingRequest);
           requestsSent++;
