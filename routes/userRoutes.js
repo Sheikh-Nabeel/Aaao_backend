@@ -29,7 +29,8 @@ import {
   deleteUser, // New import
   editUser,
   getAllCustomers,
-  getAllDrivers, // New import
+  getAllDrivers,
+  editDriver, // New import
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -152,5 +153,18 @@ router.delete("/delete/:userId", authHandler, adminMiddleware, deleteUser);
 router.patch("/edit/:userId", authHandler, adminMiddleware, editUser);
 router.get("/customers", authHandler, adminMiddleware, getAllCustomers);
 router.get("/drivers", authHandler, adminMiddleware, getAllDrivers);
+router.put(
+  "/edit-driver/:userId",
+  authHandler,
+  adminMiddleware,
+  upload.fields([
+    { name: "licenseImage", maxCount: 1 },
+    { name: "vehicleRegistrationCard", maxCount: 1 },
+    { name: "roadAuthorityCertificate", maxCount: 1 },
+    { name: "insuranceCertificate", maxCount: 1 },
+    { name: "vehicleImages", maxCount: 10 },
+  ]),
+  editDriver
+);
 
 export default router;
