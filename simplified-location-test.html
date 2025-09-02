@@ -55,16 +55,467 @@
             border-radius: 3px;
             display: inline-block;
         }
-        input[type="text"] {
+        input[type="text"], input[type="number"] {
             width: 100%;
             padding: 8px;
             margin: 5px 0;
             border: 1px solid #ddd;
             border-radius: 4px;
         }
+        .negotiation-card {
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+            border: 2px solid #ffc107;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 15px 0;
+            box-shadow: 0 4px 15px rgba(255, 193, 7, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+        .negotiation-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #ffc107, #ff9800, #ffc107);
+            animation: shimmer 2s infinite;
+        }
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        /* Notification System Styles */
+        .notification-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            display: none;
+            animation: fadeIn 0.3s ease-in;
+        }
+        
+        .notification-popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            z-index: 1001;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            animation: slideIn 0.4s ease-out;
+        }
+        
+        .notification-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            animation: bounce 1s infinite;
+        }
+        
+        .notification-title {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .notification-message {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        
+        .notification-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        .btn-notification {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-notification.primary {
+            background: #007bff;
+            color: white;
+        }
+        
+        .btn-notification.primary:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+        }
+        
+        .btn-notification.secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-notification.secondary:hover {
+            background: #545b62;
+            transform: translateY(-2px);
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translate(-50%, -60%);
+            }
+            to {
+                opacity: 1;
+                transform: translate(-50%, -50%);
+            }
+        }
+        
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% {
+                transform: translateY(0);
+            }
+            40% {
+                transform: translateY(-10px);
+            }
+            60% {
+                transform: translateY(-5px);
+            }
+        }
+        
+        /* Toast Notification Styles */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1002;
+        }
+        
+        .toast {
+            background: #333;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            animation: toastSlideIn 0.3s ease-out;
+            max-width: 300px;
+            position: relative;
+        }
+        
+        .toast.success {
+            background: #28a745;
+        }
+        
+        .toast.warning {
+            background: #ffc107;
+            color: #333;
+        }
+        
+        .toast.error {
+            background: #dc3545;
+        }
+        
+        .toast.info {
+            background: #17a2b8;
+        }
+        
+        @keyframes toastSlideIn {
+            from {
+                opacity: 0;
+                transform: translateX(100%);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        @keyframes toastSlideOut {
+            from {
+                opacity: 1;
+                transform: translateX(0);
+            }
+            to {
+                opacity: 0;
+                transform: translateX(100%);
+            }
+        }
+        .fare-comparison {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        .fare-item {
+            text-align: center;
+            flex: 1;
+        }
+        .fare-amount {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+        }
+        .fare-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+        .fare-change {
+            font-size: 1.2em;
+            font-weight: bold;
+            padding: 8px 15px;
+            border-radius: 20px;
+            margin: 0 10px;
+        }
+        .fare-increase {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .fare-decrease {
+            background: #e8f5e8;
+            color: #2e7d32;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+        .btn-accept {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex: 1;
+            min-width: 120px;
+        }
+        .btn-reject {
+            background: linear-gradient(135deg, #dc3545, #e74c3c);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex: 1;
+            min-width: 120px;
+        }
+        .btn-counter {
+            background: linear-gradient(135deg, #ffc107, #ff9800);
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex: 1;
+            min-width: 120px;
+        }
+        .btn-accept:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3); }
+        .btn-reject:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3); }
+        .btn-counter:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(255, 193, 7, 0.3); }
+        .negotiation-form {
+            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+            border: 2px solid #2196f3;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 15px 0;
+        }
+        .form-row {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+        .form-group {
+            flex: 1;
+            min-width: 150px;
+        }
+        .form-group label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #2196f3;
+            box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+        }
+        .counter-offer-helper {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 6px;
+            margin: 10px 0;
+            font-size: 0.9em;
+        }
+        .driver-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .driver-avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .driver-details h4 {
+            margin: 0;
+            color: #333;
+        }
+        .driver-details p {
+            margin: 5px 0 0 0;
+            color: #666;
+            font-size: 0.9em;
+        }
+        .history-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #f8f9fa;
+        }
+        .history-item {
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+            background: white;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .history-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .history-driver {
+            font-weight: bold;
+            color: #495057;
+        }
+        .history-timestamp {
+            font-size: 12px;
+            color: #6c757d;
+        }
+        .history-offers {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .offer-item {
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .offer-driver {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        .offer-user {
+            background: #f3e5f5;
+            border-left: 4px solid #9c27b0;
+        }
+        .offer-accepted {
+            background: #e8f5e8;
+            border-left: 4px solid #4caf50;
+        }
+        .offer-rejected {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+        }
+        .timer-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+            padding: 8px 12px;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+            border-radius: 20px;
+            color: white;
+            font-weight: bold;
+        }
+        .timer-urgent {
+            background: linear-gradient(135deg, #ff4757, #ff3742) !important;
+            animation: pulse 1s infinite;
+        }
+        .timer-warning {
+            background: linear-gradient(135deg, #ffa502, #ff6348) !important;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        .timer-expired {
+            background: linear-gradient(135deg, #747d8c, #57606f) !important;
+            opacity: 0.7;
+        }
     </style>
 </head>
 <body>
+    <!-- Notification System -->
+    <div id="notificationOverlay" class="notification-overlay">
+        <div id="notificationPopup" class="notification-popup">
+            <div id="notificationIcon" class="notification-icon">🔔</div>
+            <div id="notificationTitle" class="notification-title">New Fare Negotiation</div>
+            <div id="notificationMessage" class="notification-message">You have received a new fare negotiation request.</div>
+            <div class="notification-buttons">
+                <button id="notificationView" class="btn-notification primary">View Request</button>
+                <button id="notificationDismiss" class="btn-notification secondary">Dismiss</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
+    
     <div class="container">
         <h1>🚗 Simplified Live Location Tracking Test</h1>
         <p>This page tests the simplified Socket.IO API that only sends <strong>coordinates</strong> and <strong>user ID</strong>.</p>
@@ -261,6 +712,138 @@
     </div>
 
     <div class="container">
+        <h3>💸 Initiate Fare Negotiation (User)</h3>
+        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 15px;">
+            <p style="margin-bottom: 15px; color: #495057;">💡 <strong>Tip:</strong> You can negotiate the fare with your driver before or during the ride.</p>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                <div>
+                    <label for="userNegotiationBookingId">Booking ID:</label>
+                    <input type="text" id="userNegotiationBookingId" placeholder="Enter booking ID" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                <div>
+                    <label for="userProposedFare">Proposed Fare (AED):</label>
+                    <input type="number" id="userProposedFare" placeholder="Enter your proposed fare" step="0.01" min="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label for="userNegotiationReason">Reason (Optional):</label>
+                <input type="text" id="userNegotiationReason" placeholder="Why this fare? (e.g., short distance, traffic conditions)" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            
+            <div style="text-align: center;">
+                <button onclick="initiateUserFareNegotiation()" style="background: linear-gradient(135deg, #28a745, #20c997); color: white; border: none; padding: 12px 30px; border-radius: 25px; font-weight: bold; cursor: pointer; font-size: 16px; box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);">💸 Send Negotiation Request</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>💰 Fare Negotiation Requests (From Driver)</h3>
+        <div id="fareNegotiationRequests"></div>
+        
+        <div class="negotiation-form">
+            <h4 style="margin-top: 0; color: #1976d2;">📝 Manual Negotiation Response</h4>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="negotiationRequestId">Request ID</label>
+                    <input type="text" id="negotiationRequestId" placeholder="Enter request ID">
+                </div>
+                <div class="form-group">
+                    <label for="negotiationResponse">Response Type</label>
+                    <select id="negotiationResponse">
+                        <option value="accept">✅ Accept Offer</option>
+                        <option value="reject">❌ Reject Offer</option>
+                        <option value="counter">🔄 Make Counter Offer</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="form-row" id="counterOfferRow" style="display: none;">
+                <div class="form-group">
+                    <label for="counterOfferAmount">Counter Offer Amount (AED)</label>
+                    <input type="number" id="counterOfferAmount" placeholder="Enter your counter offer" step="0.01" min="0">
+                    <div class="counter-offer-helper" id="counterOfferHelper"></div>
+                </div>
+                <div class="form-group">
+                    <label for="negotiationReason">Reason (Optional)</label>
+                    <input type="text" id="negotiationReason" placeholder="Why this amount?">
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+                <button onclick="respondToFareNegotiation()" style="background: linear-gradient(135deg, #2196f3, #1976d2); color: white; border: none; padding: 12px 30px; border-radius: 25px; font-weight: bold; cursor: pointer; font-size: 16px;">💬 Send Response</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📜 Negotiation History</h3>
+        <div style="margin-bottom: 15px;">
+            <button onclick="toggleHistoryView()" style="background: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer;">📊 Toggle History View</button>
+            <button onclick="clearNegotiationHistory()" style="background: #dc3545; color: white; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; margin-left: 10px;">🗑️ Clear History</button>
+        </div>
+        <div id="negotiationHistory" style="display: none;"></div>
+    </div>
+
+    <div class="container">
+        <h3>⚙️ Bulk Response Preferences</h3>
+        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 15px;">
+            <div style="margin-bottom: 20px;">
+                <h4 style="margin-bottom: 10px; color: #495057;">🎯 Auto-Accept Rules</h4>
+                <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 10px;">
+                    <label style="display: flex; align-items: center; gap: 5px;">
+                        <input type="checkbox" id="enableAutoAccept"> Enable Auto-Accept
+                    </label>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                    <div>
+                        <label>Max Fare Increase (%):</label>
+                        <input type="number" id="maxAcceptIncrease" value="10" min="0" max="50" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <div>
+                        <label>Max Fare Decrease (%):</label>
+                        <input type="number" id="maxAcceptDecrease" value="20" min="0" max="50" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+                <h4 style="margin-bottom: 10px; color: #495057;">❌ Auto-Reject Rules</h4>
+                <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 10px;">
+                    <label style="display: flex; align-items: center; gap: 5px;">
+                        <input type="checkbox" id="enableAutoReject"> Enable Auto-Reject
+                    </label>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                    <div>
+                        <label>Reject if Increase > (%):</label>
+                        <input type="number" id="rejectIncreaseThreshold" value="30" min="0" max="100" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <div>
+                        <label>Reject if Decrease > (%):</label>
+                        <input type="number" id="rejectDecreaseThreshold" value="50" min="0" max="100" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+                <h4 style="margin-bottom: 10px; color: #495057;">🚫 Driver Blacklist</h4>
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <input type="text" id="blacklistDriverInput" placeholder="Enter driver phone number" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <button onclick="addToBlacklist()" style="background: #dc3545; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Add to Blacklist</button>
+                </div>
+                <div id="blacklistDisplay" style="max-height: 100px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 4px; padding: 10px;"></div>
+            </div>
+            
+            <div style="text-align: center;">
+                <button onclick="savePreferences()" style="background: #28a745; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; margin-right: 10px;">💾 Save Preferences</button>
+                <button onclick="resetPreferences()" style="background: #6c757d; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer;">🔄 Reset to Defaults</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
         <h3>🏍️ Bike Service Reference</h3>
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 12px;">
             <strong>Bike Service Types:</strong><br>
@@ -347,6 +930,17 @@
             socket.on('authenticated', (data) => {
                 log(`🔐 Authenticated as: ${data.user.email} (${data.user.role})`, 'success');
                 updateStatus(`Authenticated as ${data.user.role}`, 'success');
+                
+                // Join user room to receive negotiation requests
+                if (data.user._id) {
+                    socket.emit('join_user_room', data.user._id);
+                    log(`🏠 Joining user room: user_${data.user._id}`, 'info');
+                }
+            });
+            
+            // Room joined confirmation
+            socket.on('room_joined', (data) => {
+                log(`🏠 Successfully joined room: ${data.room}`, 'success');
             });
             
             // Location update confirmations
@@ -424,6 +1018,46 @@
             socket.on('new_booking_request', (data) => {
                 log(`🔔 New booking request received: ${JSON.stringify(data, null, 2)}`, 'info');
                 displayNewBookingRequest(data);
+            });
+            
+            // Fare negotiation events
+            socket.on('driver_fare_negotiation_request', (data) => {
+                log(`💰 Fare negotiation request from driver: ${data.driver.name} - Proposed: ${data.proposedFare} AED (Original: ${data.originalFare} AED)`, 'info');
+                displayFareNegotiationRequest(data);
+            });
+            
+            socket.on('fare_negotiation_responded', (data) => {
+                log(`✅ Fare negotiation response sent: ${data.response} for request ${data.requestId}`, 'success');
+            });
+            
+            socket.on('fare_negotiation_counter_offer', (data) => {
+                log(`🔄 Counter-offer received from user: ${data.counterOffer} AED for request ${data.requestId}`, 'info');
+                updateFareNegotiationWithCounterOffer(data);
+            });
+            
+            socket.on('fare_negotiation_error', (error) => {
+                log(`❌ Fare negotiation error: ${error.message}`, 'error');
+            });
+            
+            // User-initiated fare negotiation events
+            socket.on('user_fare_negotiation_sent', (data) => {
+                log(`📤 User fare negotiation sent: ${data.proposedFare} AED for booking ${data.bookingId}`, 'success');
+                showToast('Fare negotiation sent to driver', 'success');
+            });
+            
+            socket.on('user_fare_negotiation_accepted', (data) => {
+                log(`✅ Driver accepted your fare proposal: ${data.acceptedFare} AED`, 'success');
+                showToast(`Driver accepted your fare proposal: ${data.acceptedFare} AED`, 'success');
+            });
+            
+            socket.on('user_fare_negotiation_rejected', (data) => {
+                log(`❌ Driver rejected your fare proposal: ${data.reason}`, 'error');
+                showToast(`Driver rejected your fare proposal: ${data.reason}`, 'error');
+            });
+            
+            socket.on('user_fare_negotiation_counter_offer', (data) => {
+                log(`🔄 Driver made counter-offer: ${data.counterOffer} AED (Your proposal: ${data.originalProposal} AED)`, 'info');
+                displayDriverCounterOffer(data);
             });
             
             // Error handling
@@ -926,8 +1560,323 @@
             container.appendChild(requestDiv);
         }
         
+        function respondToFareNegotiation() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const requestId = document.getElementById('negotiationRequestId').value.trim();
+            const response = document.getElementById('negotiationResponse').value;
+            const counterOffer = parseFloat(document.getElementById('counterOfferAmount').value);
+            const reason = document.getElementById('negotiationReason').value.trim();
+            
+            if (!requestId) {
+                alert('Please enter a request ID');
+                return;
+            }
+            
+            if (response === 'counter' && (isNaN(counterOffer) || counterOffer <= 0)) {
+                alert('Please enter a valid counter-offer amount');
+                return;
+            }
+            
+            // Find the booking ID from the displayed requests
+            const requestElement = document.querySelector(`[data-request-id="${requestId}"]`);
+            if (!requestElement) {
+                alert('Request ID not found in current negotiations');
+                return;
+            }
+            
+            const bookingId = requestElement.getAttribute('data-booking-id');
+            
+            const responseData = {
+                bookingId: bookingId,
+                requestId: requestId,
+                response: response
+            };
+            
+            if (response === 'counter') {
+                responseData.counterOffer = counterOffer;
+            }
+            
+            if (reason) {
+                responseData.reason = reason;
+            }
+            
+            socket.emit('respond_to_fare_negotiation', responseData);
+            log(`📤 Sent fare negotiation response: ${response} for request ${requestId}${response === 'counter' ? ` with counter-offer ${counterOffer} AED` : ''}`, 'info');
+            
+            // Stop the timer for this request
+            stopNegotiationTimer(requestId);
+            
+            // Add to negotiation history
+            const fareAmounts = requestElement.querySelectorAll('.fare-amount');
+            if (fareAmounts.length >= 2) {
+                const originalFare = parseFloat(fareAmounts[0].textContent.replace(' AED', ''));
+                const proposedFare = parseFloat(fareAmounts[1].textContent.replace(' AED', ''));
+                const driverName = requestElement.querySelector('.driver-details h4')?.textContent || 'Unknown Driver';
+                
+                addToHistory(requestId, driverName, originalFare, proposedFare, response, 
+                    response === 'counter' ? counterOffer : null, reason || null);
+            }
+            
+            // Clear the form
+            document.getElementById('negotiationRequestId').value = '';
+            document.getElementById('counterOfferAmount').value = '';
+            document.getElementById('negotiationReason').value = '';
+        }
+        
+        function displayFareNegotiationRequest(data) {
+            const container = document.getElementById('fareNegotiationRequests');
+            
+            // Create or update the request display
+            let requestDiv = document.querySelector(`[data-request-id="${data.requestId}"]`);
+            if (!requestDiv) {
+                requestDiv = document.createElement('div');
+                requestDiv.className = 'negotiation-card';
+                requestDiv.setAttribute('data-request-id', data.requestId);
+                requestDiv.setAttribute('data-booking-id', data.bookingId);
+                container.appendChild(requestDiv);
+            }
+            
+            const priceDifference = data.proposedFare - data.originalFare;
+            const percentageChange = ((priceDifference/data.originalFare)*100).toFixed(1);
+            const isIncrease = priceDifference > 0;
+            
+            const driverInitials = data.driver.name.split(' ').map(n => n[0]).join('').toUpperCase();
+            
+            // Set expiration time (5 minutes from now)
+            const expirationTime = Date.now() + (5 * 60 * 1000);
+            requestDiv.setAttribute('data-expiration', expirationTime);
+            
+            requestDiv.innerHTML = `
+                <div class="timer-container" id="timer-${data.requestId}">
+                    ⏰ <span id="countdown-${data.requestId}">05:00</span> remaining
+                </div>
+                <div class="driver-info">
+                    <div class="driver-avatar">${driverInitials}</div>
+                    <div class="driver-details">
+                        <h4>${data.driver.name}</h4>
+                        <p>📞 ${data.driver.phoneNumber}</p>
+                        <p>🚗 ${data.bookingData.serviceType} - ${data.bookingData.vehicleType}</p>
+                    </div>
+                </div>
+                
+                <div class="fare-comparison">
+                    <div class="fare-item">
+                        <div class="fare-amount">${data.originalFare} AED</div>
+                        <div class="fare-label">Original Fare</div>
+                    </div>
+                    <div class="fare-change ${isIncrease ? 'fare-increase' : 'fare-decrease'}">
+                        ${isIncrease ? '📈' : '📉'} ${isIncrease ? '+' : ''}${priceDifference.toFixed(2)} AED
+                        <br><small>(${percentageChange}%)</small>
+                    </div>
+                    <div class="fare-item">
+                        <div class="fare-amount">${data.proposedFare} AED</div>
+                        <div class="fare-label">Proposed Fare</div>
+                    </div>
+                </div>
+                
+                <div style="background: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 6px; margin: 10px 0;">
+                    <strong>💬 Reason:</strong> ${data.reason}<br>
+                    <strong>📍 Route:</strong> ${data.bookingData.pickupLocation.coordinates.join(', ')} → ${data.bookingData.destinationLocation.coordinates.join(', ')}<br>
+                    <strong>📏 Distance:</strong> ${data.bookingData.distance ? data.bookingData.distance.toFixed(2) + 'km' : 'N/A'}<br>
+                    <strong>🆔 Request ID:</strong> <span class="coordinates">${data.requestId}</span>
+                </div>
+                
+                <div class="action-buttons" id="actions-${data.requestId}">
+                    <button class="btn-accept" onclick="quickRespond('${data.requestId}', '${data.bookingId}', 'accept')">✅ Accept Offer</button>
+                    <button class="btn-reject" onclick="quickRespond('${data.requestId}', '${data.bookingId}', 'reject')">❌ Reject Offer</button>
+                    <button class="btn-counter" onclick="fillNegotiationForm('${data.requestId}', ${data.proposedFare})">🔄 Make Counter Offer</button>
+                </div>
+                
+                <div style="text-align: center; margin-top: 15px; color: #666; font-size: 0.9em;">
+                    ⏰ Received at: ${new Date(data.requestedAt).toLocaleString()}
+                </div>
+            `;
+            
+            // Start the countdown timer
+            startNegotiationTimer(data.requestId, expirationTime);
+            
+            // Show notifications for new requests
+            if (isNewRequest) {
+                const priceDifference = data.proposedFare - data.originalFare;
+                const isIncrease = priceDifference > 0;
+                const changeText = isIncrease ? `+${priceDifference.toFixed(2)} AED` : `${priceDifference.toFixed(2)} AED`;
+                
+                // Show popup notification
+                showNotificationPopup(
+                    `New Fare Negotiation from ${data.driver.name}`,
+                    `${isIncrease ? 'Increased' : 'Decreased'} fare by ${changeText} (${data.originalFare} → ${data.proposedFare} AED)`,
+                    '💰'
+                );
+                
+                // Show toast notification
+                showToast(
+                    `${data.driver.name} ${isIncrease ? 'increased' : 'decreased'} fare by ${changeText}`,
+                    isIncrease ? 'warning' : 'info',
+                    5000
+                );
+                
+                // Play notification sound
+                playNotificationSound();
+            }
+            
+            // Check for auto-response based on preferences
+            const autoResponse = shouldAutoRespond(data);
+            if (autoResponse) {
+                // Show auto-response notification
+                showToast(
+                    `Auto-${autoResponse.action}ed: ${autoResponse.reason}`,
+                    autoResponse.action === 'accept' ? 'success' : 'error',
+                    3000
+                );
+                
+                // Delay the auto-response slightly to show the request first
+                setTimeout(() => {
+                    quickRespond(data.requestId, data.bookingId, autoResponse.action);
+                }, 1500);
+            }
+        }
+        
+        function updateFareNegotiationWithCounterOffer(data) {
+            const requestDiv = document.querySelector(`[data-request-id="${data.requestId}"]`);
+            if (requestDiv) {
+                const counterOfferDiv = document.createElement('div');
+                counterOfferDiv.style.marginTop = '10px';
+                counterOfferDiv.style.padding = '10px';
+                counterOfferDiv.style.backgroundColor = '#e8f4fd';
+                counterOfferDiv.style.borderRadius = '5px';
+                counterOfferDiv.innerHTML = `
+                    <strong>🔄 User Counter-Offer:</strong> ${data.counterOffer} AED<br>
+                    <strong>Reason:</strong> ${data.reason}<br>
+                    <small>Received at: ${new Date().toLocaleString()}</small>
+                `;
+                requestDiv.appendChild(counterOfferDiv);
+            }
+        }
+        
+        function quickRespond(requestId, bookingId, response) {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const responseData = {
+                bookingId: bookingId,
+                requestId: requestId,
+                response: response
+            };
+            
+            socket.emit('respond_to_fare_negotiation', responseData);
+            log(`📤 Quick response: ${response} for request ${requestId}`, 'info');
+            
+            // Update the UI to show response sent
+            const requestDiv = document.querySelector(`[data-request-id="${requestId}"]`);
+            if (requestDiv) {
+                const responseIndicator = document.createElement('div');
+                responseIndicator.style.marginTop = '10px';
+                responseIndicator.style.padding = '5px';
+                responseIndicator.style.backgroundColor = response === 'accept' ? '#d4edda' : '#f8d7da';
+                responseIndicator.style.borderRadius = '3px';
+                responseIndicator.innerHTML = `<strong>Response sent:</strong> ${response.toUpperCase()}`;
+                requestDiv.appendChild(responseIndicator);
+                
+                // Disable buttons
+                const buttons = requestDiv.querySelectorAll('button');
+                buttons.forEach(btn => btn.disabled = true);
+            }
+        }
+        
+        function fillNegotiationForm(requestId, currentProposal) {
+            document.getElementById('negotiationRequestId').value = requestId;
+            document.getElementById('negotiationResponse').value = 'counter';
+            document.getElementById('counterOfferAmount').value = currentProposal;
+            document.getElementById('negotiationReason').value = '';
+            
+            // Scroll to the form
+            document.getElementById('negotiationRequestId').scrollIntoView({ behavior: 'smooth' });
+        }
+        
         function clearLog() {
             document.getElementById('eventLog').innerHTML = '';
+        }
+        
+        // Enhanced negotiation form functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const responseSelect = document.getElementById('negotiationResponse');
+            const counterOfferRow = document.getElementById('counterOfferRow');
+            const counterOfferAmount = document.getElementById('counterOfferAmount');
+            const counterOfferHelper = document.getElementById('counterOfferHelper');
+            
+            responseSelect.addEventListener('change', function() {
+                if (this.value === 'counter') {
+                    counterOfferRow.style.display = 'flex';
+                    updateCounterOfferHelper();
+                } else {
+                    counterOfferRow.style.display = 'none';
+                }
+            });
+            
+            counterOfferAmount.addEventListener('input', updateCounterOfferHelper);
+            
+            function updateCounterOfferHelper() {
+                const requestId = document.getElementById('negotiationRequestId').value.trim();
+                const requestDiv = document.querySelector(`[data-request-id="${requestId}"]`);
+                
+                if (!requestDiv) {
+                    counterOfferHelper.innerHTML = '💡 Enter a valid Request ID to see suggestions';
+                    return;
+                }
+                
+                // Extract original and proposed fares from the request
+                const fareAmounts = requestDiv.querySelectorAll('.fare-amount');
+                if (fareAmounts.length >= 2) {
+                    const originalFare = parseFloat(fareAmounts[0].textContent.replace(' AED', ''));
+                    const proposedFare = parseFloat(fareAmounts[1].textContent.replace(' AED', ''));
+                    const currentCounter = parseFloat(counterOfferAmount.value) || 0;
+                    
+                    // Calculate percentage limits (assuming 20% as admin setting)
+                    const maxIncrease = originalFare * 1.20;
+                    const maxDecrease = originalFare * 0.80;
+                    
+                    let helperText = `<strong>💰 Original:</strong> ${originalFare} AED | <strong>🔄 Driver's Offer:</strong> ${proposedFare} AED<br>`;
+                    helperText += `<strong>📊 Allowed Range:</strong> ${maxDecrease.toFixed(2)} - ${maxIncrease.toFixed(2)} AED<br>`;
+                    
+                    if (currentCounter > 0) {
+                        if (currentCounter < maxDecrease || currentCounter > maxIncrease) {
+                            helperText += `<span style="color: #dc3545;">⚠️ Your offer is outside the allowed range!</span>`;
+                        } else {
+                            const percentageFromOriginal = ((currentCounter - originalFare) / originalFare * 100).toFixed(1);
+                            helperText += `<span style="color: #28a745;">✅ Valid offer (${percentageFromOriginal > 0 ? '+' : ''}${percentageFromOriginal}% from original)</span>`;
+                        }
+                    } else {
+                        // Suggest smart counter offers
+                        const midPoint = (originalFare + proposedFare) / 2;
+                        const slightlyLower = proposedFare * 0.95;
+                        const slightlyHigher = proposedFare * 1.05;
+                        
+                        helperText += `<strong>💡 Suggestions:</strong> `;
+                        helperText += `<button onclick="setCounterOffer(${midPoint.toFixed(2)})" style="margin: 2px; padding: 4px 8px; border: none; background: #e3f2fd; border-radius: 4px; cursor: pointer;">Mid: ${midPoint.toFixed(2)}</button> `;
+                        if (slightlyLower >= maxDecrease) {
+                            helperText += `<button onclick="setCounterOffer(${slightlyLower.toFixed(2)})" style="margin: 2px; padding: 4px 8px; border: none; background: #e8f5e8; border-radius: 4px; cursor: pointer;">-5%: ${slightlyLower.toFixed(2)}</button> `;
+                        }
+                        if (slightlyHigher <= maxIncrease) {
+                            helperText += `<button onclick="setCounterOffer(${slightlyHigher.toFixed(2)})" style="margin: 2px; padding: 4px 8px; border: none; background: #fff3cd; border-radius: 4px; cursor: pointer;">+5%: ${slightlyHigher.toFixed(2)}</button>`;
+                        }
+                    }
+                    
+                    counterOfferHelper.innerHTML = helperText;
+                } else {
+                    counterOfferHelper.innerHTML = '💡 Unable to find fare information for this request';
+                }
+            }
+        });
+        
+        function setCounterOffer(amount) {
+            document.getElementById('counterOfferAmount').value = amount;
+            updateCounterOfferHelper();
         }
         
         // Auto-set booking coordinates when qualified driver coordinates change
@@ -961,11 +1910,590 @@
         // Add button for random coordinates
         window.onload = function() {
             const coordContainer = document.querySelector('.container:nth-child(2)');
-            const randomBtn = document.createElement('button');
-            randomBtn.textContent = '🎲 Random Coordinates';
-            randomBtn.onclick = generateRandomCoordinates;
-            coordContainer.appendChild(randomBtn);
+            if (coordContainer) {
+                const randomBtn = document.createElement('button');
+                randomBtn.textContent = '🎲 Random Coordinates';
+                randomBtn.onclick = generateRandomCoordinates;
+                coordContainer.appendChild(randomBtn);
+            }
         };
+        
+        // Negotiation History Management
+        let negotiationHistory = JSON.parse(localStorage.getItem('negotiationHistory')) || [];
+        
+        function addToHistory(requestId, driverName, originalFare, proposedFare, userResponse, counterOffer = null, reason = null) {
+            const timestamp = new Date().toLocaleString();
+            const historyItem = {
+                id: requestId,
+                driverName: driverName,
+                timestamp: timestamp,
+                originalFare: originalFare,
+                offers: [
+                    { type: 'driver', amount: proposedFare, timestamp: timestamp },
+                    { type: 'user', response: userResponse, amount: counterOffer, reason: reason, timestamp: timestamp }
+                ]
+            };
+            
+            // Check if this request already exists in history
+            const existingIndex = negotiationHistory.findIndex(item => item.id === requestId);
+            if (existingIndex !== -1) {
+                // Add to existing history
+                negotiationHistory[existingIndex].offers.push({ type: 'user', response: userResponse, amount: counterOffer, reason: reason, timestamp: timestamp });
+            } else {
+                // Add new history item
+                negotiationHistory.unshift(historyItem);
+            }
+            
+            // Keep only last 50 negotiations
+            if (negotiationHistory.length > 50) {
+                negotiationHistory = negotiationHistory.slice(0, 50);
+            }
+            
+            localStorage.setItem('negotiationHistory', JSON.stringify(negotiationHistory));
+            updateHistoryDisplay();
+        }
+        
+        function toggleHistoryView() {
+            const historyDiv = document.getElementById('negotiationHistory');
+            if (historyDiv.style.display === 'none') {
+                historyDiv.style.display = 'block';
+                updateHistoryDisplay();
+            } else {
+                historyDiv.style.display = 'none';
+            }
+        }
+        
+        function clearNegotiationHistory() {
+            if (confirm('Are you sure you want to clear all negotiation history?')) {
+                negotiationHistory = [];
+                localStorage.removeItem('negotiationHistory');
+                updateHistoryDisplay();
+            }
+        }
+        
+        function updateHistoryDisplay() {
+            const historyDiv = document.getElementById('negotiationHistory');
+            
+            if (negotiationHistory.length === 0) {
+                historyDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #6c757d;">📭 No negotiation history yet</div>';
+                return;
+            }
+            
+            let historyHTML = '<div class="history-container">';
+            
+            negotiationHistory.forEach(item => {
+                historyHTML += `
+                    <div class="history-item">
+                        <div class="history-header">
+                            <div class="history-driver">🚗 ${item.driverName}</div>
+                            <div class="history-timestamp">${item.timestamp}</div>
+                        </div>
+                        <div style="margin-bottom: 8px; font-size: 14px; color: #666;">
+                            📍 Request ID: ${item.id} | 💰 Original Fare: ${item.originalFare} AED
+                        </div>
+                        <div class="history-offers">`;
+                
+                item.offers.forEach(offer => {
+                    if (offer.type === 'driver') {
+                        historyHTML += `<div class="offer-item offer-driver">🚗 Driver offered: ${offer.amount} AED</div>`;
+                    } else {
+                        if (offer.response === 'accept') {
+                            historyHTML += `<div class="offer-item offer-accepted">✅ You accepted the offer</div>`;
+                        } else if (offer.response === 'reject') {
+                            historyHTML += `<div class="offer-item offer-rejected">❌ You rejected the offer${offer.reason ? ': ' + offer.reason : ''}</div>`;
+                        } else if (offer.response === 'counter') {
+                            historyHTML += `<div class="offer-item offer-user">🔄 You counter-offered: ${offer.amount} AED${offer.reason ? ' (' + offer.reason + ')' : ''}</div>`;
+                        }
+                    }
+                });
+                
+                historyHTML += '</div></div>';
+            });
+            
+            historyHTML += '</div>';
+             historyDiv.innerHTML = historyHTML;
+         }
+         
+         // Timer Management
+         const activeTimers = new Map();
+         
+         function startNegotiationTimer(requestId, expirationTime) {
+             // Clear existing timer if any
+             if (activeTimers.has(requestId)) {
+                 clearInterval(activeTimers.get(requestId));
+             }
+             
+             const timer = setInterval(() => {
+                 const now = Date.now();
+                 const timeLeft = expirationTime - now;
+                 
+                 if (timeLeft <= 0) {
+                     // Timer expired
+                     expireNegotiationRequest(requestId);
+                     clearInterval(timer);
+                     activeTimers.delete(requestId);
+                     return;
+                 }
+                 
+                 // Update countdown display
+                 const minutes = Math.floor(timeLeft / 60000);
+                 const seconds = Math.floor((timeLeft % 60000) / 1000);
+                 const timeString = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                 
+                 const countdownElement = document.getElementById(`countdown-${requestId}`);
+                 const timerContainer = document.getElementById(`timer-${requestId}`);
+                 
+                 if (countdownElement) {
+                     countdownElement.textContent = timeString;
+                     
+                     // Update timer styling based on time left
+                     if (timeLeft <= 60000) { // Last minute - urgent
+                         timerContainer.className = 'timer-container timer-urgent';
+                         countdownElement.parentElement.innerHTML = `🚨 <span id="countdown-${requestId}">${timeString}</span> URGENT!`;
+                     } else if (timeLeft <= 120000) { // Last 2 minutes - warning
+                         timerContainer.className = 'timer-container timer-warning';
+                         countdownElement.parentElement.innerHTML = `⚠️ <span id="countdown-${requestId}">${timeString}</span> remaining`;
+                     }
+                 }
+             }, 1000);
+             
+             activeTimers.set(requestId, timer);
+         }
+         
+         function expireNegotiationRequest(requestId) {
+             const requestDiv = document.querySelector(`[data-request-id="${requestId}"]`);
+             if (requestDiv) {
+                 const timerContainer = document.getElementById(`timer-${requestId}`);
+                 const actionsContainer = document.getElementById(`actions-${requestId}`);
+                 
+                 if (timerContainer) {
+                     timerContainer.className = 'timer-container timer-expired';
+                     timerContainer.innerHTML = '⏰ EXPIRED - Request timed out';
+                 }
+                 
+                 if (actionsContainer) {
+                     actionsContainer.innerHTML = '<div style="text-align: center; color: #666; font-style: italic;">⏰ This negotiation request has expired</div>';
+                 }
+                 
+                 // Add expired styling to the entire card
+                 requestDiv.style.opacity = '0.6';
+                 requestDiv.style.filter = 'grayscale(50%)';
+             }
+         }
+         
+         function stopNegotiationTimer(requestId) {
+             if (activeTimers.has(requestId)) {
+                 clearInterval(activeTimers.get(requestId));
+                 activeTimers.delete(requestId);
+             }
+         }
+         
+         // Notification System Functions
+         let notificationAudio = null;
+         
+         function initializeNotificationSystem() {
+             // Create audio for notifications
+             notificationAudio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT');
+             notificationAudio.volume = 0.3;
+             
+             // Setup notification event listeners
+             document.getElementById('notificationView').addEventListener('click', function() {
+                 hideNotificationPopup();
+                 // Scroll to the negotiation section
+                 const negotiationSection = document.querySelector('.negotiation-card');
+                 if (negotiationSection) {
+                     negotiationSection.scrollIntoView({ behavior: 'smooth' });
+                 }
+             });
+             
+             document.getElementById('notificationDismiss').addEventListener('click', function() {
+                 hideNotificationPopup();
+             });
+             
+             document.getElementById('notificationOverlay').addEventListener('click', function(e) {
+                 if (e.target === this) {
+                     hideNotificationPopup();
+                 }
+             });
+         }
+         
+         function showNotificationPopup(title, message, icon = '🔔') {
+             const overlay = document.getElementById('notificationOverlay');
+             const titleEl = document.getElementById('notificationTitle');
+             const messageEl = document.getElementById('notificationMessage');
+             const iconEl = document.getElementById('notificationIcon');
+             
+             titleEl.textContent = title;
+             messageEl.textContent = message;
+             iconEl.textContent = icon;
+             
+             overlay.style.display = 'block';
+             
+             // Play notification sound
+             if (notificationAudio) {
+                 notificationAudio.currentTime = 0;
+                 notificationAudio.play().catch(e => console.log('Audio play failed:', e));
+             }
+             
+             // Auto-dismiss after 10 seconds
+             setTimeout(() => {
+                 if (overlay.style.display === 'block') {
+                     hideNotificationPopup();
+                 }
+             }, 10000);
+         }
+         
+         function hideNotificationPopup() {
+             document.getElementById('notificationOverlay').style.display = 'none';
+         }
+         
+         function showToast(message, type = 'info', duration = 3000) {
+             const container = document.getElementById('toastContainer');
+             const toast = document.createElement('div');
+             toast.className = `toast ${type}`;
+             toast.textContent = message;
+             
+             container.appendChild(toast);
+             
+             // Auto-remove toast
+             setTimeout(() => {
+                 toast.style.animation = 'toastSlideOut 0.3s ease-in';
+                 setTimeout(() => {
+                     if (container.contains(toast)) {
+                         container.removeChild(toast);
+                     }
+                 }, 300);
+             }, duration);
+         }
+         
+         function playNotificationSound() {
+             if (notificationAudio) {
+                 notificationAudio.currentTime = 0;
+                 notificationAudio.play().catch(e => console.log('Audio play failed:', e));
+             }
+         }
+         
+         // Bulk Response Preferences Functions
+         let bulkResponsePreferences = {
+             autoAccept: {
+                 enabled: false,
+                 maxIncrease: 10,
+                 maxDecrease: 20
+             },
+             autoReject: {
+                 enabled: false,
+                 increaseThreshold: 30,
+                 decreaseThreshold: 50
+             },
+             blacklist: []
+         };
+         
+         function loadPreferences() {
+             const saved = localStorage.getItem('bulkResponsePreferences');
+             if (saved) {
+                 bulkResponsePreferences = JSON.parse(saved);
+             }
+             updatePreferencesUI();
+         }
+         
+         function savePreferences() {
+             // Get values from UI
+             bulkResponsePreferences.autoAccept.enabled = document.getElementById('enableAutoAccept').checked;
+             bulkResponsePreferences.autoAccept.maxIncrease = parseInt(document.getElementById('maxAcceptIncrease').value);
+             bulkResponsePreferences.autoAccept.maxDecrease = parseInt(document.getElementById('maxAcceptDecrease').value);
+             
+             bulkResponsePreferences.autoReject.enabled = document.getElementById('enableAutoReject').checked;
+             bulkResponsePreferences.autoReject.increaseThreshold = parseInt(document.getElementById('rejectIncreaseThreshold').value);
+             bulkResponsePreferences.autoReject.decreaseThreshold = parseInt(document.getElementById('rejectDecreaseThreshold').value);
+             
+             // Save to localStorage
+             localStorage.setItem('bulkResponsePreferences', JSON.stringify(bulkResponsePreferences));
+             
+             showToast('Preferences saved successfully!', 'success');
+         }
+         
+         function resetPreferences() {
+             if (confirm('Are you sure you want to reset all preferences to defaults?')) {
+                 bulkResponsePreferences = {
+                     autoAccept: {
+                         enabled: false,
+                         maxIncrease: 10,
+                         maxDecrease: 20
+                     },
+                     autoReject: {
+                         enabled: false,
+                         increaseThreshold: 30,
+                         decreaseThreshold: 50
+                     },
+                     blacklist: []
+                 };
+                 
+                 localStorage.removeItem('bulkResponsePreferences');
+                 updatePreferencesUI();
+                 showToast('Preferences reset to defaults', 'info');
+             }
+         }
+         
+         function updatePreferencesUI() {
+             document.getElementById('enableAutoAccept').checked = bulkResponsePreferences.autoAccept.enabled;
+             document.getElementById('maxAcceptIncrease').value = bulkResponsePreferences.autoAccept.maxIncrease;
+             document.getElementById('maxAcceptDecrease').value = bulkResponsePreferences.autoAccept.maxDecrease;
+             
+             document.getElementById('enableAutoReject').checked = bulkResponsePreferences.autoReject.enabled;
+             document.getElementById('rejectIncreaseThreshold').value = bulkResponsePreferences.autoReject.increaseThreshold;
+             document.getElementById('rejectDecreaseThreshold').value = bulkResponsePreferences.autoReject.decreaseThreshold;
+             
+             updateBlacklistDisplay();
+         }
+         
+         function addToBlacklist() {
+             const input = document.getElementById('blacklistDriverInput');
+             const phoneNumber = input.value.trim();
+             
+             if (!phoneNumber) {
+                 showToast('Please enter a phone number', 'error');
+                 return;
+             }
+             
+             if (bulkResponsePreferences.blacklist.includes(phoneNumber)) {
+                 showToast('Driver already in blacklist', 'warning');
+                 return;
+             }
+             
+             bulkResponsePreferences.blacklist.push(phoneNumber);
+             input.value = '';
+             updateBlacklistDisplay();
+             showToast('Driver added to blacklist', 'success');
+         }
+         
+         function removeFromBlacklist(phoneNumber) {
+             const index = bulkResponsePreferences.blacklist.indexOf(phoneNumber);
+             if (index > -1) {
+                 bulkResponsePreferences.blacklist.splice(index, 1);
+                 updateBlacklistDisplay();
+                 showToast('Driver removed from blacklist', 'info');
+             }
+         }
+         
+         function updateBlacklistDisplay() {
+             const display = document.getElementById('blacklistDisplay');
+             
+             if (bulkResponsePreferences.blacklist.length === 0) {
+                 display.innerHTML = '<div style="text-align: center; color: #6c757d; font-style: italic;">No drivers blacklisted</div>';
+                 return;
+             }
+             
+             display.innerHTML = bulkResponsePreferences.blacklist.map(phone => 
+                 `<div style="display: flex; justify-content: space-between; align-items: center; padding: 5px; border-bottom: 1px solid #eee;">
+                     <span>${phone}</span>
+                     <button onclick="removeFromBlacklist('${phone}')" style="background: #dc3545; color: white; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;">Remove</button>
+                 </div>`
+             ).join('');
+         }
+         
+         function shouldAutoRespond(data) {
+             const priceDifference = data.proposedFare - data.originalFare;
+             const percentageChange = Math.abs((priceDifference / data.originalFare) * 100);
+             const isIncrease = priceDifference > 0;
+             
+             // Check blacklist first
+             if (bulkResponsePreferences.blacklist.includes(data.driver.phoneNumber)) {
+                 return { action: 'reject', reason: 'Driver is blacklisted' };
+             }
+             
+             // Check auto-reject rules
+             if (bulkResponsePreferences.autoReject.enabled) {
+                 if (isIncrease && percentageChange > bulkResponsePreferences.autoReject.increaseThreshold) {
+                     return { action: 'reject', reason: `Fare increase (${percentageChange.toFixed(1)}%) exceeds threshold` };
+                 }
+                 if (!isIncrease && percentageChange > bulkResponsePreferences.autoReject.decreaseThreshold) {
+                     return { action: 'reject', reason: `Fare decrease (${percentageChange.toFixed(1)}%) exceeds threshold` };
+                 }
+             }
+             
+             // Check auto-accept rules
+             if (bulkResponsePreferences.autoAccept.enabled) {
+                 if (isIncrease && percentageChange <= bulkResponsePreferences.autoAccept.maxIncrease) {
+                     return { action: 'accept', reason: `Fare increase (${percentageChange.toFixed(1)}%) within acceptable range` };
+                 }
+                 if (!isIncrease && percentageChange <= bulkResponsePreferences.autoAccept.maxDecrease) {
+                     return { action: 'accept', reason: `Fare decrease (${percentageChange.toFixed(1)}%) within acceptable range` };
+                 }
+             }
+             
+             return null; // No auto-response
+         }
+         
+         // Initialize notification system and preferences on page load
+         document.addEventListener('DOMContentLoaded', function() {
+             initializeNotificationSystem();
+             loadPreferences();
+             
+             // Add event listeners for bulk response preferences
+             const saveBtn = document.getElementById('savePreferences');
+             const resetBtn = document.getElementById('resetPreferences');
+             const addBlacklistBtn = document.getElementById('addToBlacklist');
+             const blacklistInput = document.getElementById('blacklistDriverInput');
+             
+             if (saveBtn) saveBtn.addEventListener('click', savePreferences);
+             if (resetBtn) resetBtn.addEventListener('click', resetPreferences);
+             if (addBlacklistBtn) addBlacklistBtn.addEventListener('click', addToBlacklist);
+             
+             // Allow Enter key to add to blacklist
+             if (blacklistInput) {
+                 blacklistInput.addEventListener('keypress', function(e) {
+                     if (e.key === 'Enter') {
+                         addToBlacklist();
+                     }
+                 });
+             }
+         });
+         
+         // User-initiated fare negotiation functions
+         function initiateUserFareNegotiation() {
+             const bookingId = document.getElementById('userNegotiationBookingId').value.trim();
+             const proposedFare = parseFloat(document.getElementById('userProposedFare').value);
+             const reason = document.getElementById('userNegotiationReason').value.trim();
+             
+             if (!bookingId) {
+                 showToast('Please enter a booking ID', 'error');
+                 return;
+             }
+             
+             if (!proposedFare || proposedFare <= 0) {
+                 showToast('Please enter a valid proposed fare', 'error');
+                 return;
+             }
+             
+             if (!socket || !socket.connected) {
+                 showToast('Please connect to the server first', 'error');
+                 return;
+             }
+             
+             const negotiationData = {
+                 bookingId: bookingId,
+                 proposedFare: proposedFare,
+                 reason: reason || 'User fare negotiation'
+             };
+             
+             log(`📤 Initiating user fare negotiation: ${JSON.stringify(negotiationData)}`, 'info');
+             socket.emit('user_initiate_fare_negotiation', negotiationData);
+             
+             // Clear form
+             document.getElementById('userNegotiationBookingId').value = '';
+             document.getElementById('userProposedFare').value = '';
+             document.getElementById('userNegotiationReason').value = '';
+         }
+         
+         function displayDriverCounterOffer(data) {
+             const container = document.getElementById('fareNegotiationRequests');
+             
+             const counterOfferHtml = `
+                 <div class="negotiation-request" style="border: 2px solid #ff9800; background: linear-gradient(135deg, #fff3e0, #ffe0b2); margin-bottom: 15px; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(255, 152, 0, 0.2);">
+                     <div class="negotiation-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                         <h4 style="margin: 0; color: #e65100; display: flex; align-items: center; gap: 8px;">
+                             🔄 Driver Counter-Offer
+                             <span style="background: #ff9800; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: normal;">NEW</span>
+                         </h4>
+                         <div class="negotiation-id" style="font-size: 12px; color: #666; background: white; padding: 4px 8px; border-radius: 4px;">ID: ${data.requestId}</div>
+                     </div>
+                     
+                     <div class="fare-comparison">
+                         <div class="fare-item">
+                             <div class="fare-amount" style="color: #666;">${data.originalProposal} AED</div>
+                             <div class="fare-label">Your Proposal</div>
+                         </div>
+                         <div class="fare-change fare-increase">
+                             <span style="font-size: 1.5em;">→</span>
+                         </div>
+                         <div class="fare-item">
+                             <div class="fare-amount" style="color: #ff9800;">${data.counterOffer} AED</div>
+                             <div class="fare-label">Driver's Counter</div>
+                         </div>
+                     </div>
+                     
+                     <div style="background: white; padding: 12px; border-radius: 8px; margin: 15px 0;">
+                         <strong>Driver's Reason:</strong> ${data.reason}
+                     </div>
+                     
+                     <div class="action-buttons" style="display: flex; gap: 10px; justify-content: center;">
+                         <button onclick="respondToDriverCounter('${data.requestId}', '${data.bookingId}', 'accept', ${data.counterOffer})" 
+                                 style="background: linear-gradient(135deg, #4caf50, #45a049); color: white; border: none; padding: 12px 20px; border-radius: 25px; cursor: pointer; font-weight: bold; flex: 1; max-width: 150px;">
+                             ✅ Accept ${data.counterOffer} AED
+                         </button>
+                         <button onclick="respondToDriverCounter('${data.requestId}', '${data.bookingId}', 'reject')" 
+                                 style="background: linear-gradient(135deg, #f44336, #d32f2f); color: white; border: none; padding: 12px 20px; border-radius: 25px; cursor: pointer; font-weight: bold; flex: 1; max-width: 150px;">
+                             ❌ Reject
+                         </button>
+                         <button onclick="showCounterOfferForm('${data.requestId}', '${data.bookingId}', ${data.counterOffer})" 
+                                 style="background: linear-gradient(135deg, #ff9800, #f57c00); color: white; border: none; padding: 12px 20px; border-radius: 25px; cursor: pointer; font-weight: bold; flex: 1; max-width: 150px;">
+                             🔄 Counter Again
+                         </button>
+                     </div>
+                 </div>
+             `;
+             
+             container.insertAdjacentHTML('afterbegin', counterOfferHtml);
+             showToast(`Driver made counter-offer: ${data.counterOffer} AED`, 'info');
+         }
+         
+         function respondToDriverCounter(requestId, bookingId, response, acceptedFare = null) {
+             if (!socket || !socket.connected) {
+                 showToast('Please connect to the server first', 'error');
+                 return;
+             }
+             
+             const responseData = {
+                 bookingId: bookingId,
+                 requestId: requestId,
+                 response: response
+             };
+             
+             if (response === 'accept' && acceptedFare) {
+                 log(`✅ Accepting driver's counter-offer: ${acceptedFare} AED`, 'success');
+             } else if (response === 'reject') {
+                 log(`❌ Rejecting driver's counter-offer`, 'info');
+             }
+             
+             socket.emit('respond_to_fare_negotiation', responseData);
+             
+             // Remove the negotiation request from UI
+             const negotiationElement = event.target.closest('.negotiation-request');
+             if (negotiationElement) {
+                 negotiationElement.remove();
+             }
+         }
+         
+         function showCounterOfferForm(requestId, bookingId, currentOffer) {
+             const newCounterOffer = prompt(`Driver offered ${currentOffer} AED. Enter your counter-offer:`);
+             
+             if (newCounterOffer === null) return; // User cancelled
+             
+             const counterAmount = parseFloat(newCounterOffer);
+             if (!counterAmount || counterAmount <= 0) {
+                 showToast('Please enter a valid counter-offer amount', 'error');
+                 return;
+             }
+             
+             const reason = prompt('Reason for counter-offer (optional):') || 'User counter-offer';
+             
+             const responseData = {
+                 bookingId: bookingId,
+                 requestId: requestId,
+                 response: 'counter',
+                 counterOffer: counterAmount,
+                 reason: reason
+             };
+             
+             log(`🔄 Making counter-offer: ${counterAmount} AED`, 'info');
+             socket.emit('respond_to_fare_negotiation', responseData);
+             
+             // Remove the negotiation request from UI
+             const negotiationElement = event.target.closest('.negotiation-request');
+             if (negotiationElement) {
+                 negotiationElement.remove();
+             }
+         }
     </script>
 </body>
 </html>

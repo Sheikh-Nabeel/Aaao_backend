@@ -1437,6 +1437,499 @@ export const handleBookingEvents = (socket, io) => {
      }
    });
 
+  // Driver initiates fare negotiation (new event for bargaining)
+  socket.on('initiate_fare_negotiation', async (data) => {
+    console.log('=== SOCKET: INITIATE FARE NEGOTIATION ===');
+    console.log('Driver:', socket.user.email);
+    console.log('Data:', data);
+    
+    try {
+      // Validate driver role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', roleValidation.error);
+      }
+      
+      const { bookingId, proposedFare, reason } = data;
+      
+      // Validate request data
+      if (!bookingId || !proposedFare || proposedFare <= 0) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Invalid booking ID or proposed fare');
+      }
+      
+      // Get booking and validate access
+      const bookingValidation = await SocketValidationService.validateBookingAccess(bookingId, socket.user._id, 'driver');
+      if (!bookingValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', bookingValidation.error);
+      }
+      const booking = bookingValidation.booking;
+      
+      // Validate fare is within admin percentage limits
+      const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
+      const originalFare = parseFloat(booking.fare);
+      const maxAllowedFare = originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
+      const minAllowedFare = originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
+      
+      if (proposedFare < minAllowedFare || proposedFare > maxAllowedFare) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 
+          `Proposed fare must be between ${minAllowedFare.toFixed(2)} and ${maxAllowedFare.toFixed(2)} AED (±${fareSettings.allowedAdjustmentPercentage}%)`);
+      }
+      
+      // Initialize or update fare negotiation requests array
+      if (!booking.driverFareIncreaseRequests) {
+        booking.driverFareIncreaseRequests = [];
+      }
+      
+      // Check if driver already has a pending request
+      const existingRequestIndex = booking.driverFareIncreaseRequests.findIndex(
+        req => req.requestedBy.toString() === socket.user._id.toString() && req.status === 'pending'
+      );
+      
+      const negotiationRequest = {
+        requestId: new Date().getTime().toString(),
+        requestedBy: socket.user._id,
+        requestedFare: proposedFare,
+        reason: reason || 'Driver fare negotiation',
+        requestedAt: new Date(),
+        status: 'pending'
+      };
+      
+      if (existingRequestIndex !== -1) {
+        // Update existing request
+        booking.driverFareIncreaseRequests[existingRequestIndex] = negotiationRequest;
+      } else {
+        // Add new request
+        booking.driverFareIncreaseRequests.push(negotiationRequest);
+      }
+      
+      await booking.save();
+      
+      // Notify user about fare negotiation with all booking data
+      const userRoom = `user_${booking.user._id}`;
+      io.to(userRoom).emit('driver_fare_negotiation_request', {
+        bookingId: booking._id,
+        requestId: negotiationRequest.requestId,
+        originalFare: originalFare,
+        proposedFare: proposedFare,
+        reason: reason || 'Driver fare negotiation',
+        driver: {
+          id: socket.user._id,
+          name: `${socket.user.firstName} ${socket.user.lastName}`,
+          phoneNumber: socket.user.phoneNumber
+        },
+        bookingData: {
+          serviceType: booking.serviceType,
+          vehicleType: booking.vehicleType,
+          pickupLocation: booking.pickupLocation,
+          destinationLocation: booking.destinationLocation,
+          distance: booking.distance,
+          estimatedDuration: booking.estimatedDuration
+        },
+        requestedAt: negotiationRequest.requestedAt
+      });
+      
+      // Confirm to driver
+      socket.emit('fare_negotiation_sent', {
+        bookingId: booking._id,
+        requestId: negotiationRequest.requestId,
+        message: 'Fare negotiation request sent to user',
+        originalFare: originalFare,
+        proposedFare: proposedFare
+      });
+      
+      console.log('Fare negotiation initiated:', bookingId, 'by driver:', socket.user._id);
+      
+    } catch (error) {
+      console.error('Error initiating fare negotiation:', error);
+      SocketNotificationService.sendError(socket, 'fare_negotiation_error', error.message);
+    }
+  });
+  
+  // User initiates fare negotiation (new event for user-initiated bargaining)
+  socket.on('user_initiate_fare_negotiation', async (data) => {
+    console.log('=== SOCKET: USER INITIATE FARE NEGOTIATION ===');
+    console.log('User:', socket.user.email);
+    console.log('Data:', data);
+    
+    try {
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'user');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', roleValidation.error);
+      }
+      
+      const { bookingId, proposedFare, reason } = data;
+      
+      // Validate request data
+      if (!bookingId || !proposedFare || proposedFare <= 0) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Invalid booking ID or proposed fare');
+      }
+      
+      // Get booking and validate access
+      const bookingValidation = await SocketValidationService.validateBookingAccess(bookingId, socket.user._id, 'user');
+      if (!bookingValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', bookingValidation.error);
+      }
+      const booking = bookingValidation.booking;
+      
+      // Validate fare is within admin percentage limits
+      const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
+      const originalFare = parseFloat(booking.fare);
+      const maxAllowedFare = originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
+      const minAllowedFare = originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
+      
+      if (proposedFare < minAllowedFare || proposedFare > maxAllowedFare) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 
+          `Proposed fare must be between ${minAllowedFare.toFixed(2)} and ${maxAllowedFare.toFixed(2)} AED (±${fareSettings.allowedAdjustmentPercentage}%)`);
+      }
+      
+      // Initialize or update user fare negotiation requests array
+      if (!booking.userFareNegotiationRequests) {
+        booking.userFareNegotiationRequests = [];
+      }
+      
+      // Check if user already has a pending request
+      const existingRequestIndex = booking.userFareNegotiationRequests.findIndex(
+        req => req.requestedBy.toString() === socket.user._id.toString() && req.status === 'pending'
+      );
+      
+      const negotiationRequest = {
+        requestId: new Date().getTime().toString(),
+        requestedBy: socket.user._id,
+        requestedFare: proposedFare,
+        reason: reason || 'User fare negotiation',
+        requestedAt: new Date(),
+        status: 'pending'
+      };
+      
+      if (existingRequestIndex !== -1) {
+        // Update existing request
+        booking.userFareNegotiationRequests[existingRequestIndex] = negotiationRequest;
+      } else {
+        // Add new request
+        booking.userFareNegotiationRequests.push(negotiationRequest);
+      }
+      
+      await booking.save();
+      
+      // Notify driver about user fare negotiation
+      const driverRoom = `driver_${booking.driver._id}`;
+      io.to(driverRoom).emit('user_fare_negotiation_request', {
+        bookingId: booking._id,
+        requestId: negotiationRequest.requestId,
+        originalFare: originalFare,
+        proposedFare: proposedFare,
+        reason: reason || 'User fare negotiation',
+        user: {
+          id: socket.user._id,
+          name: `${socket.user.firstName} ${socket.user.lastName}`,
+          phoneNumber: socket.user.phoneNumber
+        },
+        bookingData: {
+          serviceType: booking.serviceType,
+          vehicleType: booking.vehicleType,
+          pickupLocation: booking.pickupLocation,
+          destinationLocation: booking.destinationLocation,
+          distance: booking.distance,
+          estimatedDuration: booking.estimatedDuration
+        },
+        requestedAt: negotiationRequest.requestedAt
+      });
+      
+      // Confirm to user
+      socket.emit('user_fare_negotiation_sent', {
+        bookingId: booking._id,
+        requestId: negotiationRequest.requestId,
+        message: 'Fare negotiation request sent to driver',
+        originalFare: originalFare,
+        proposedFare: proposedFare
+      });
+      
+      console.log('User fare negotiation initiated:', bookingId, 'by user:', socket.user._id);
+      
+    } catch (error) {
+      console.error('Error initiating user fare negotiation:', error);
+      SocketNotificationService.sendError(socket, 'fare_negotiation_error', error.message);
+    }
+  });
+  
+  // User responds to fare negotiation (accept, reject, or counter-offer)
+  socket.on('respond_to_fare_negotiation', async (data) => {
+    console.log('=== SOCKET: RESPOND TO FARE NEGOTIATION ===');
+    console.log('User:', socket.user.email);
+    console.log('Data:', data);
+    
+    try {
+      // Validate user role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'user');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', roleValidation.error);
+      }
+      
+      const { bookingId, requestId, response, counterOffer, reason } = data;
+      
+      // Validate request data
+      if (!bookingId || !requestId || !response) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Missing required fields');
+      }
+      
+      if (!['accept', 'reject', 'counter'].includes(response)) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Response must be accept, reject, or counter');
+      }
+      
+      // Get booking and validate access
+      const bookingValidation = await SocketValidationService.validateBookingAccess(bookingId, socket.user._id, 'user');
+      if (!bookingValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', bookingValidation.error);
+      }
+      const booking = bookingValidation.booking;
+      
+      // Find the specific request
+      const requestIndex = booking.driverFareIncreaseRequests.findIndex(
+        req => req.requestId === requestId && req.status === 'pending'
+      );
+      
+      if (requestIndex === -1) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Negotiation request not found or already processed');
+      }
+      
+      const negotiationRequest = booking.driverFareIncreaseRequests[requestIndex];
+      const driverId = negotiationRequest.requestedBy;
+      
+      if (response === 'accept') {
+        // Accept the proposed fare
+        booking.fare = negotiationRequest.requestedFare;
+        booking.driverFareIncreaseRequests[requestIndex].status = 'accepted';
+        booking.driverFareIncreaseRequests[requestIndex].respondedAt = new Date();
+        
+        // Reject all other pending requests
+        booking.driverFareIncreaseRequests.forEach((req, index) => {
+          if (index !== requestIndex && req.status === 'pending') {
+            req.status = 'rejected';
+            req.respondedAt = new Date();
+          }
+        });
+        
+        await booking.save();
+        
+        // Notify the driver whose offer was accepted
+        const driverRoom = `driver_${driverId}`;
+        io.to(driverRoom).emit('fare_negotiation_response', {
+          bookingId: booking._id,
+          requestId: requestId,
+          response: 'accepted',
+          finalFare: booking.fare,
+          message: 'User accepted your fare proposal!'
+        });
+        
+        // Notify other drivers whose offers were rejected
+        booking.driverFareIncreaseRequests.forEach(req => {
+          if (req.requestedBy.toString() !== driverId.toString() && req.status === 'rejected') {
+            const otherDriverRoom = `driver_${req.requestedBy}`;
+            io.to(otherDriverRoom).emit('fare_negotiation_response', {
+              bookingId: booking._id,
+              requestId: req.requestId,
+              response: 'rejected',
+              message: 'User accepted another driver\'s offer'
+            });
+          }
+        });
+        
+      } else if (response === 'reject') {
+        // Reject the proposed fare
+        booking.driverFareIncreaseRequests[requestIndex].status = 'rejected';
+        booking.driverFareIncreaseRequests[requestIndex].respondedAt = new Date();
+        await booking.save();
+        
+        // Notify driver
+        const driverRoom = `driver_${driverId}`;
+        io.to(driverRoom).emit('fare_negotiation_response', {
+          bookingId: booking._id,
+          requestId: requestId,
+          response: 'rejected',
+          reason: reason || 'User rejected the proposal',
+          message: 'User rejected your fare proposal'
+        });
+        
+      } else if (response === 'counter') {
+        // User makes a counter-offer
+        if (!counterOffer || counterOffer <= 0) {
+          return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Invalid counter-offer amount');
+        }
+        
+        // Validate counter-offer is within limits
+        const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
+        const originalFare = parseFloat(booking.fare);
+        const maxAllowedFare = originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
+        const minAllowedFare = originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
+        
+        if (counterOffer < minAllowedFare || counterOffer > maxAllowedFare) {
+          return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 
+            `Counter-offer must be between ${minAllowedFare.toFixed(2)} and ${maxAllowedFare.toFixed(2)} AED`);
+        }
+        
+        // Update the request with counter-offer
+        booking.driverFareIncreaseRequests[requestIndex].status = 'counter_offered';
+        booking.driverFareIncreaseRequests[requestIndex].counterOffer = counterOffer;
+        booking.driverFareIncreaseRequests[requestIndex].counterReason = reason || 'User counter-offer';
+        booking.driverFareIncreaseRequests[requestIndex].respondedAt = new Date();
+        await booking.save();
+        
+        // Notify driver about counter-offer
+        const driverRoom = `driver_${driverId}`;
+        io.to(driverRoom).emit('fare_negotiation_counter_offer', {
+          bookingId: booking._id,
+          requestId: requestId,
+          originalProposal: negotiationRequest.requestedFare,
+          counterOffer: counterOffer,
+          reason: reason || 'User counter-offer',
+          message: `User made a counter-offer: ${counterOffer} AED`
+        });
+      }
+      
+      // Confirm response to user
+      socket.emit('fare_negotiation_responded', {
+        bookingId: booking._id,
+        requestId: requestId,
+        response: response,
+        message: `Fare negotiation ${response}${response === 'counter' ? ' with counter-offer' : ''}ed successfully`
+      });
+      
+      console.log('Fare negotiation response:', bookingId, 'response:', response, 'by user:', socket.user._id);
+      
+    } catch (error) {
+      console.error('Error responding to fare negotiation:', error);
+      SocketNotificationService.sendError(socket, 'fare_negotiation_error', error.message);
+    }
+  });
+
+  // Driver responds to user-initiated fare negotiation (accept, reject, or counter-offer)
+  socket.on('driver_respond_to_user_negotiation', async (data) => {
+    console.log('=== SOCKET: DRIVER RESPOND TO USER NEGOTIATION ===');
+    console.log('Driver:', socket.user.email);
+    console.log('Data:', data);
+    
+    try {
+      // Validate driver role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', roleValidation.error);
+      }
+      
+      const { bookingId, requestId, response, counterOffer, reason } = data;
+      
+      // Validate request data
+      if (!bookingId || !requestId || !response) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Missing required fields');
+      }
+      
+      if (!['accept', 'reject', 'counter'].includes(response)) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Response must be accept, reject, or counter');
+      }
+      
+      // Get booking and validate access
+      const bookingValidation = await SocketValidationService.validateBookingAccess(bookingId, socket.user._id, 'driver');
+      if (!bookingValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', bookingValidation.error);
+      }
+      const booking = bookingValidation.booking;
+      
+      // Find the specific user negotiation request
+      const requestIndex = booking.userFareNegotiationRequests.findIndex(
+        req => req.requestId === requestId && req.status === 'pending'
+      );
+      
+      if (requestIndex === -1) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'User negotiation request not found or already processed');
+      }
+      
+      const negotiationRequest = booking.userFareNegotiationRequests[requestIndex];
+      const userId = booking.user._id;
+      
+      if (response === 'accept') {
+        // Driver accepts user's proposed fare
+        booking.userFareNegotiationRequests[requestIndex].status = 'accepted';
+        booking.userFareNegotiationRequests[requestIndex].respondedAt = new Date();
+        booking.fare = negotiationRequest.requestedFare;
+        await booking.save();
+        
+        // Notify user about acceptance
+        const userRoom = `user_${userId}`;
+        io.to(userRoom).emit('user_fare_negotiation_accepted', {
+          bookingId: booking._id,
+          requestId: requestId,
+          acceptedFare: negotiationRequest.requestedFare,
+          message: 'Driver accepted your fare proposal'
+        });
+        
+      } else if (response === 'reject') {
+        // Driver rejects user's proposed fare
+        booking.userFareNegotiationRequests[requestIndex].status = 'rejected';
+        booking.userFareNegotiationRequests[requestIndex].rejectionReason = reason || 'Driver rejected';
+        booking.userFareNegotiationRequests[requestIndex].respondedAt = new Date();
+        await booking.save();
+        
+        // Notify user about rejection
+        const userRoom = `user_${userId}`;
+        io.to(userRoom).emit('user_fare_negotiation_rejected', {
+          bookingId: booking._id,
+          requestId: requestId,
+          reason: reason || 'Driver rejected your proposal',
+          message: 'Driver rejected your fare proposal'
+        });
+        
+      } else if (response === 'counter') {
+        // Driver makes a counter-offer
+        if (!counterOffer || counterOffer <= 0) {
+          return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Invalid counter-offer amount');
+        }
+        
+        // Validate counter-offer is within limits
+        const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
+        const originalFare = parseFloat(booking.fare);
+        const maxAllowedFare = originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
+        const minAllowedFare = originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
+        
+        if (counterOffer < minAllowedFare || counterOffer > maxAllowedFare) {
+          return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 
+            `Counter-offer must be between ${minAllowedFare.toFixed(2)} and ${maxAllowedFare.toFixed(2)} AED`);
+        }
+        
+        // Update the request with counter-offer
+        booking.userFareNegotiationRequests[requestIndex].status = 'counter_offered';
+        booking.userFareNegotiationRequests[requestIndex].counterOffer = counterOffer;
+        booking.userFareNegotiationRequests[requestIndex].counterReason = reason || 'Driver counter-offer';
+        booking.userFareNegotiationRequests[requestIndex].respondedAt = new Date();
+        await booking.save();
+        
+        // Notify user about counter-offer
+        const userRoom = `user_${userId}`;
+        io.to(userRoom).emit('user_fare_negotiation_counter_offer', {
+          bookingId: booking._id,
+          requestId: requestId,
+          originalProposal: negotiationRequest.requestedFare,
+          counterOffer: counterOffer,
+          reason: reason || 'Driver counter-offer',
+          message: `Driver made a counter-offer: ${counterOffer} AED`
+        });
+      }
+      
+      // Confirm response to driver
+      socket.emit('driver_user_negotiation_responded', {
+        bookingId: booking._id,
+        requestId: requestId,
+        response: response,
+        message: `User fare negotiation ${response}${response === 'counter' ? ' with counter-offer' : ''}ed successfully`
+      });
+      
+      console.log('Driver response to user negotiation:', bookingId, 'response:', response, 'by driver:', socket.user._id);
+      
+    } catch (error) {
+      console.error('Error responding to user fare negotiation:', error);
+      SocketNotificationService.sendError(socket, 'fare_negotiation_error', error.message);
+    }
+  });
+
   // Cancel booking request (User action)
   socket.on('cancel_booking_request', async (data) => {
     console.log('=== SOCKET: CANCEL BOOKING REQUEST ===');
@@ -1493,6 +1986,131 @@ export const handleBookingEvents = (socket, io) => {
     }
   });
 
+  // Driver responds to user counter-offer (accept or reject)
+  socket.on('respond_to_user_counter_offer', async (data) => {
+    console.log('=== SOCKET: RESPOND TO USER COUNTER OFFER ===');
+    console.log('Driver:', socket.user.email);
+    console.log('Data:', data);
+    
+    try {
+      // Validate driver role
+      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
+      if (!roleValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', roleValidation.error);
+      }
+      
+      const { bookingId, requestId, response, reason } = data;
+      
+      // Validate request data
+      if (!bookingId || !requestId || !response) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Missing required fields');
+      }
+      
+      if (!['accept', 'reject'].includes(response)) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Response must be accept or reject');
+      }
+      
+      // Get booking and validate access
+      const bookingValidation = await SocketValidationService.validateBookingAccess(bookingId, socket.user._id, 'driver');
+      if (!bookingValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', bookingValidation.error);
+      }
+      const booking = bookingValidation.booking;
+      
+      // Find the specific request
+      const requestIndex = booking.driverFareIncreaseRequests.findIndex(
+        req => req.requestId === requestId && req.requestedBy.toString() === socket.user._id.toString() && req.status === 'counter_offered'
+      );
+      
+      if (requestIndex === -1) {
+        return SocketNotificationService.sendError(socket, 'fare_negotiation_error', 'Counter-offer request not found or not in correct state');
+      }
+      
+      const negotiationRequest = booking.driverFareIncreaseRequests[requestIndex];
+      
+      if (response === 'accept') {
+        // Accept the user's counter-offer
+        booking.fare = negotiationRequest.counterOffer;
+        booking.driverFareIncreaseRequests[requestIndex].status = 'accepted';
+        booking.driverFareIncreaseRequests[requestIndex].finalResponse = 'accepted';
+        booking.driverFareIncreaseRequests[requestIndex].finalRespondedAt = new Date();
+        
+        // Reject all other pending requests
+        booking.driverFareIncreaseRequests.forEach((req, index) => {
+          if (index !== requestIndex && ['pending', 'counter_offered'].includes(req.status)) {
+            req.status = 'rejected';
+            req.finalResponse = 'rejected';
+            req.finalRespondedAt = new Date();
+          }
+        });
+        
+        await booking.save();
+        
+        // Notify user that driver accepted counter-offer
+        const userRoom = `user_${booking.user._id}`;
+        io.to(userRoom).emit('fare_negotiation_accepted', {
+          bookingId: booking._id,
+          requestId: requestId,
+          finalFare: booking.fare,
+          message: 'Driver accepted your counter-offer! Ride can now start.',
+          driver: {
+            id: socket.user._id,
+            name: `${socket.user.firstName} ${socket.user.lastName}`,
+            phoneNumber: socket.user.phoneNumber
+          }
+        });
+        
+        // Notify other drivers whose offers were rejected
+        booking.driverFareIncreaseRequests.forEach(req => {
+          if (req.requestedBy.toString() !== socket.user._id.toString() && req.status === 'rejected') {
+            const otherDriverRoom = `driver_${req.requestedBy}`;
+            io.to(otherDriverRoom).emit('fare_negotiation_rejected', {
+              bookingId: booking._id,
+              requestId: req.requestId,
+              message: 'User accepted another driver\'s counter-offer'
+            });
+          }
+        });
+        
+      } else if (response === 'reject') {
+        // Reject the user's counter-offer
+        booking.driverFareIncreaseRequests[requestIndex].status = 'rejected';
+        booking.driverFareIncreaseRequests[requestIndex].finalResponse = 'rejected';
+        booking.driverFareIncreaseRequests[requestIndex].rejectionReason = reason || 'Driver rejected counter-offer';
+        booking.driverFareIncreaseRequests[requestIndex].finalRespondedAt = new Date();
+        await booking.save();
+        
+        // Notify user that driver rejected counter-offer
+        const userRoom = `user_${booking.user._id}`;
+        io.to(userRoom).emit('fare_negotiation_rejected', {
+          bookingId: booking._id,
+          requestId: requestId,
+          reason: reason || 'Driver rejected counter-offer',
+          message: 'Driver rejected your counter-offer',
+          driver: {
+            id: socket.user._id,
+            name: `${socket.user.firstName} ${socket.user.lastName}`,
+            phoneNumber: socket.user.phoneNumber
+          }
+        });
+      }
+      
+      // Confirm response to driver
+      socket.emit('counter_offer_responded', {
+        bookingId: booking._id,
+        requestId: requestId,
+        response: response,
+        message: `Counter-offer ${response}ed successfully`
+      });
+      
+      console.log('Counter-offer response:', bookingId, 'response:', response, 'by driver:', socket.user._id);
+      
+    } catch (error) {
+      console.error('Error responding to counter-offer:', error);
+      SocketNotificationService.sendError(socket, 'fare_negotiation_error', error.message);
+    }
+  });
+
   // User increases fare when no drivers respond
   socket.on('increase_fare_and_resend', async (data) => {
     console.log('=== SOCKET: INCREASE FARE AND RESEND ===');
@@ -1514,8 +2132,11 @@ export const handleBookingEvents = (socket, io) => {
       }
       
       // Validate booking access
-      const booking = await SocketValidationService.validateBookingAccess(socket, bookingId, 'user', 'fare_increase_error');
-      if (!booking) return;
+      const bookingValidation = await SocketValidationService.validateBookingAccess(bookingId, socket.user._id, 'user');
+      if (!bookingValidation.isValid) {
+        return SocketNotificationService.sendError(socket, 'fare_increase_error', bookingValidation.error);
+      }
+      const booking = bookingValidation.booking;
       
       // Increase fare and resend
       const { booking: updatedBooking, originalFare } = await SocketDatabaseService.increaseFareAndResend(bookingId, newFare, reason);
