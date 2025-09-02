@@ -18,7 +18,8 @@ const findQualifiedDriversForEstimation = async (pickupLocation, serviceType, ve
       role: 'driver',
       kycLevel: 2,
       kycStatus: 'approved',
-      isActive: true
+      isActive: true,
+      driverStatus: 'online'
     };
 
     // Handle Pink Captain preferences
@@ -27,16 +28,11 @@ const findQualifiedDriversForEstimation = async (pickupLocation, serviceType, ve
       console.log('Pink Captain requested - filtering for female drivers');
     }
 
-    // Handle vehicle type filtering
-    if (vehicleType && vehicleType !== 'any') {
-      driverQuery.vehicleType = vehicleType;
-    }
-
     console.log('Driver Query:', driverQuery);
 
     // Find drivers based on query
     const drivers = await User.find(driverQuery).select(
-      'firstName lastName email phoneNumber vehicleType currentLocation gender driverSettings vehicleDetails profilePicture rating totalRides'
+      'firstName lastName email phoneNumber currentLocation gender driverSettings vehicleDetails profilePicture rating totalRides'
     );
     console.log(`Found ${drivers.length} potential drivers`);
 
@@ -45,11 +41,54 @@ const findQualifiedDriversForEstimation = async (pickupLocation, serviceType, ve
       return [];
     }
 
+    // Get driver IDs for vehicle lookup
+    const driverIds = drivers.map(driver => driver._id);
+    
+    // Find vehicles that match the service type and vehicle type
+    let vehicleQuery = {
+      userId: { $in: driverIds },
+      serviceType: serviceType
+    };
+    
+    // Add vehicle type filter if specified
+    if (vehicleType && vehicleType !== 'any') {
+      vehicleQuery.vehicleType = vehicleType;
+    }
+    
+    console.log('Vehicle Query:', vehicleQuery);
+    
+    // Import Vehicle model
+    const Vehicle = (await import('../models/vehicleModel.js')).default;
+    
+    // Find matching vehicles
+    const vehicles = await Vehicle.find(vehicleQuery).select('userId vehicleType serviceType');
+    console.log(`Found ${vehicles.length} matching vehicles`);
+    
+    if (vehicles.length === 0) {
+      console.log('No vehicles found matching service and vehicle type criteria');
+      return [];
+    }
+    
+    // Get driver IDs that have matching vehicles
+    const qualifiedDriverIds = vehicles.map(vehicle => vehicle.userId.toString());
+    
+    // Filter drivers to only those with matching vehicles
+    const qualifiedDrivers = drivers.filter(driver => 
+      qualifiedDriverIds.includes(driver._id.toString())
+    );
+    
+    console.log(`Found ${qualifiedDrivers.length} drivers with matching vehicles`);
+
+    if (qualifiedDrivers.length === 0) {
+      console.log('No qualified drivers found with matching vehicles');
+      return [];
+    }
+
     // Calculate distances and filter by radius
     const driversWithDistance = [];
     const maxRadius = driverPreference === 'pink_captain' ? 50 : 10; // 50km for Pink Captain, 10km for estimation
 
-    for (const driver of drivers) {
+    for (const driver of qualifiedDrivers) {
       if (driver.currentLocation && driver.currentLocation.coordinates) {
         const distance = calculateDistance(
           { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
@@ -86,7 +125,7 @@ const findQualifiedDriversForEstimation = async (pickupLocation, serviceType, ve
       console.log('Filtering Pink Captain drivers based on preferences...');
       
       filteredDrivers = driversWithDistance.filter(driver => {
-        const driverData = drivers.find(d => d._id.toString() === driver.id.toString());
+        const driverData = qualifiedDrivers.find(d => d._id.toString() === driver.id.toString());
         const driverPrefs = driverData?.driverSettings?.ridePreferences;
         return driverPrefs && driverPrefs.pinkCaptainMode;
       });
@@ -522,5 +561,6 @@ const adjustFareEstimation = asyncHandler(async (req, res) => {
 
 export {
   getFareEstimation,
-  adjustFareEstimation
+  adjustFareEstimation,
+  findQualifiedDriversForEstimation
 };

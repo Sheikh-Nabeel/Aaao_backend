@@ -6,6 +6,20 @@ import jwt from "jsonwebtoken";
 import asyncHandler from "express-async-handler";
 import { calculateShiftingMoversFare, calculateCarRecoveryFare, calculateAppointmentServiceFare } from "../utils/fareCalculator.js";
 import { addMoneyToMLM } from "../utils/mlmHelper.js";
+import { calculateDistance } from "../utils/distanceCalculator.js";
+
+// Helper function to get driver socket ID
+const getDriverSocketId = (driverId) => {
+  // This function should return the socket ID for a driver
+  // Implementation depends on how socket connections are managed
+  // For now, returning a placeholder - this should be implemented based on your socket management
+  return `driver_${driverId}`;
+};
+
+// Helper function to get Socket.IO instance
+const getSocketIO = (req) => {
+  return req.app.get('io');
+};
 
 // Helper function to get fare adjustment settings from admin configuration
 const getFareAdjustmentSettings = async (serviceType) => {
@@ -2736,6 +2750,180 @@ const updateRidePreferences = asyncHandler(async (req, res) => {
   });
 });
 
+// Send booking request to qualified drivers (REST API endpoint)
+const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
+  const {
+    pickupLocation,
+    dropoffLocation,
+    serviceType,
+    vehicleType,
+    driverPreference = 'any',
+    estimatedFare,
+    paymentMethod,
+    notes
+  } = req.body;
+  const userId = req.user._id;
+
+  // Validate required fields
+  if (!pickupLocation || !pickupLocation.coordinates || !Array.isArray(pickupLocation.coordinates)) {
+    return res.status(400).json({
+      message: 'Invalid pickup location',
+      token: req.cookies.token,
+    });
+  }
+
+  if (!dropoffLocation || !dropoffLocation.coordinates || !Array.isArray(dropoffLocation.coordinates)) {
+    return res.status(400).json({
+      message: 'Invalid dropoff location',
+      token: req.cookies.token,
+    });
+  }
+
+  if (!serviceType || !vehicleType) {
+    return res.status(400).json({
+      message: 'Service type and vehicle type are required',
+      token: req.cookies.token,
+    });
+  }
+
+  try {
+    // Get qualified drivers using the same logic as socket handler
+    const maxRadius = driverPreference === 'pink_captain' ? 50 : 10;
+    
+    // Find vehicles that match the service and vehicle type
+    const matchingVehicles = await Vehicle.find({
+      serviceType: serviceType,
+      vehicleType: vehicleType,
+      isActive: true
+    });
+    
+    if (matchingVehicles.length === 0) {
+      return res.status(404).json({
+        message: 'No vehicles available for this service',
+        token: req.cookies.token,
+      });
+    }
+    
+    const vehicleOwnerIds = matchingVehicles.map(vehicle => vehicle.userId);
+    
+    // Find drivers within radius using the same criteria as qualified drivers
+    const driversWithDistance = [];
+    let driverQuery = {
+      _id: { $in: vehicleOwnerIds },
+      role: 'driver',
+      kycLevel: 2,
+      kycStatus: 'approved',
+      isActive: true,
+      driverStatus: 'online',
+      currentLocation: { $exists: true }
+    };
+    
+    // Handle Pink Captain preferences
+    if (driverPreference === 'pink_captain') {
+      driverQuery.gender = 'female';
+    }
+    
+    const potentialDrivers = await User.find(driverQuery);
+    
+    for (const driver of potentialDrivers) {
+      if (driver.currentLocation && driver.currentLocation.coordinates) {
+        const distance = calculateDistance(
+          { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
+          { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+        );
+        
+        if (distance <= maxRadius) {
+          driversWithDistance.push({
+            ...driver.toObject(),
+            distance: distance
+          });
+        }
+      }
+    }
+    
+    // Filter drivers based on preference
+    let filteredDrivers = driversWithDistance;
+    if (driverPreference === 'pink_captain') {
+      console.log('Filtering Pink Captain drivers based on preferences...');
+      
+      filteredDrivers = driversWithDistance.filter(driver => {
+        const driverPrefs = driver.driverSettings?.ridePreferences;
+        return driverPrefs && driverPrefs.pinkCaptainMode;
+      });
+      
+      console.log(`Filtered to ${filteredDrivers.length} Pink Captain drivers`);
+    }
+    
+    // Sort by distance
+    filteredDrivers.sort((a, b) => a.distance - b.distance);
+    
+    if (filteredDrivers.length === 0) {
+      return res.status(404).json({
+        message: 'No qualified drivers available',
+        token: req.cookies.token,
+      });
+    }
+    
+    // Create booking request object
+    const bookingRequest = {
+      requestId: new Date().getTime().toString(),
+      userId: userId,
+      userInfo: {
+        name: req.user.name,
+        email: req.user.email,
+        phone: req.user.phone
+      },
+      pickupLocation,
+      dropoffLocation,
+      serviceType,
+      vehicleType,
+      driverPreference,
+      estimatedFare,
+      paymentMethod,
+      notes,
+      timestamp: new Date(),
+      status: 'pending'
+    };
+    
+    // Get Socket.IO instance for real-time notification
+    const io = req.app.get('io');
+    let requestsSent = 0;
+    
+    if (io) {
+      // Send booking request to qualified drivers
+      for (const driver of filteredDrivers) {
+        const driverSocketId = getDriverSocketId(driver._id.toString());
+        if (driverSocketId) {
+          io.to(driverSocketId).emit('new_booking_request', bookingRequest);
+          requestsSent++;
+        }
+      }
+    }
+    
+    const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRY,
+    });
+    res.cookie('token', token, { httpOnly: true, maxAge: 3600000 });
+    
+    res.status(200).json({
+      success: true,
+      message: `Booking request sent to ${requestsSent} qualified drivers`,
+      requestId: bookingRequest.requestId,
+      driversNotified: requestsSent,
+      qualifiedDriversCount: filteredDrivers.length,
+      token,
+    });
+    
+  } catch (error) {
+    console.error('Error sending booking request to qualified drivers:', error);
+    return res.status(500).json({
+      message: 'Failed to send booking request',
+      error: error.message,
+      token: req.cookies.token,
+    });
+  }
+});
+
 export {
   createBooking,
   getNearbyDrivers,
@@ -2763,4 +2951,5 @@ export {
   updateDriverStatus,
   updateAutoAcceptSettings,
   updateRidePreferences,
+  sendBookingRequestToQualifiedDrivers,
 };

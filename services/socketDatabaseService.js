@@ -54,11 +54,7 @@ class SocketDatabaseService {
       if (currentLocation && currentLocation.coordinates) {
         driver.currentLocation = {
           type: 'Point',
-          coordinates: currentLocation.coordinates,
-          address: currentLocation.address || '',
-          heading: currentLocation.heading || 0,
-          speed: currentLocation.speed || 0,
-          lastUpdated: new Date()
+          coordinates: currentLocation.coordinates
         };
       }
 
@@ -74,6 +70,18 @@ class SocketDatabaseService {
   }
 
   /**
+   * Get user by ID with location data
+   */
+  static async getUserById(userId) {
+    try {
+      const user = await User.findById(userId).select('_id username email role currentLocation');
+      return user;
+    } catch (error) {
+      throw new Error(`Failed to get user: ${error.message}`);
+    }
+  }
+
+  /**
    * Update user location
    */
   static async updateUserLocation(userId, locationData) {
@@ -85,45 +93,17 @@ class SocketDatabaseService {
 
       user.currentLocation = {
         type: 'Point',
-        coordinates: locationData.coordinates,
-        address: locationData.address || '',
-        lastUpdated: new Date()
+        coordinates: locationData.coordinates
       };
 
       await user.save();
-      return user.currentLocation;
+      return user;
     } catch (error) {
       throw new Error(`Failed to update user location: ${error.message}`);
     }
   }
 
-  /**
-   * Update driver location with additional metadata
-   */
-  static async updateDriverLocation(driverId, locationData) {
-    try {
-      const driver = await User.findById(driverId);
-      if (!driver) {
-        throw new Error('Driver not found');
-      }
 
-      const { coordinates, address, heading, speed } = locationData;
-
-      driver.currentLocation = {
-        type: 'Point',
-        coordinates: coordinates,
-        address: address || '',
-        heading: heading || 0,
-        speed: speed || 0,
-        lastUpdated: new Date()
-      };
-
-      await driver.save();
-      return driver;
-    } catch (error) {
-      throw new Error(`Failed to update driver location: ${error.message}`);
-    }
-  }
 
   /**
    * Accept booking request

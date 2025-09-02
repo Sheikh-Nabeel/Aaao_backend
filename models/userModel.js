@@ -244,6 +244,73 @@ const userSchema = new mongoose.Schema(
         addedBy: { type: String, required: true }
       }]
     },
+    // Driver-specific fields
+    currentLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        default: [0, 0] // Default coordinates [longitude, latitude]
+      }
+    },
+    isActive: {
+      type: Boolean,
+      default: false
+    },
+    driverStatus: {
+      type: String,
+      enum: ['offline', 'online', 'busy', 'on_ride'],
+      default: 'offline'
+    },
+    lastActiveAt: {
+      type: Date,
+      required: false
+    },
+    driverSettings: {
+      autoAccept: {
+        enabled: {
+          type: Boolean,
+          default: false
+        },
+        maxDistance: {
+          type: Number,
+          default: 10 // in kilometers
+        },
+        minFare: {
+          type: Number,
+          default: 0
+        },
+        serviceTypes: {
+          type: [String],
+          default: []
+        }
+      },
+      ridePreferences: {
+        acceptBike: {
+          type: Boolean,
+          default: true
+        },
+        acceptCar: {
+          type: Boolean,
+          default: true
+        },
+        pinkCaptainMode: {
+          type: Boolean,
+          default: false
+        },
+        acceptFemaleOnly: {
+          type: Boolean,
+          default: false
+        },
+        maxRideDistance: {
+          type: Number,
+          default: 50 // in kilometers
+        }
+      }
+    },
   },
   { timestamps: true }
 );

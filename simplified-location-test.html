@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simplified Live Location Tracking Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #d1ecf1; color: #0c5460; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .location-display {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border-left: 4px solid #007bff;
+        }
+        .coordinates {
+            font-family: monospace;
+            background-color: #e9ecef;
+            padding: 5px;
+            border-radius: 3px;
+            display: inline-block;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚗 Simplified Live Location Tracking Test</h1>
+        <p>This page tests the simplified Socket.IO API that only sends <strong>coordinates</strong> and <strong>user ID</strong>.</p>
+        
+        <div id="status" class="status info">Disconnected</div>
+        
+        <div>
+            <h3>Authentication</h3>
+            <input type="text" id="userToken" placeholder="Enter JWT token" value="">
+            <button onclick="connectSocket()">Connect</button>
+            <button onclick="disconnectSocket()">Disconnect</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📍 Send Location Updates</h3>
+        <div>
+            <label>Longitude:</label>
+            <input type="text" id="longitude" value="77.2090" placeholder="Longitude">
+        </div>
+        <div>
+            <label>Latitude:</label>
+            <input type="text" id="latitude" value="28.6139" placeholder="Latitude">
+        </div>
+        <div>
+            <label>User ID (optional):</label>
+            <input type="text" id="userId" placeholder="User ID (auto-detected if empty)">
+        </div>
+        <div>
+            <button onclick="sendLocation()">📍 Send Location Update</button>
+            <button onclick="getNearbyDrivers()">🚙 Get Nearby Drivers</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📡 Get Live Location</h3>
+        <div>
+            <label>Target User ID (optional):</label>
+            <input type="text" id="targetUserId" placeholder="User ID (leave empty for your own location)">
+        </div>
+        <div>
+            <button onclick="getLiveLocation()">📡 Get Live Location</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>🗺️ Get Nearby Drivers (Radius)</h3>
+        <div>
+            <label>Longitude:</label>
+            <input type="text" id="radiusLongitude" value="73.0756609" placeholder="Longitude">
+        </div>
+        <div>
+            <label>Latitude:</label>
+            <input type="text" id="radiusLatitude" value="33.6402842" placeholder="Latitude">
+        </div>
+        <div>
+            <label>Radius (km):</label>
+            <input type="text" id="searchRadius" value="5" placeholder="Radius in kilometers">
+        </div>
+        <div>
+            <button onclick="getNearbyDriversRadius()">🗺️ Get Drivers in Radius</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>🎯 Get Qualified Drivers (For Map)</h3>
+        <div>
+            <label>Pickup Longitude:</label>
+            <input type="text" id="pickupLongitude" value="73.0756609" placeholder="Pickup Longitude">
+        </div>
+        <div>
+            <label>Pickup Latitude:</label>
+            <input type="text" id="pickupLatitude" value="33.6402842" placeholder="Pickup Latitude">
+        </div>
+        <div>
+            <label>Service Type:</label>
+            <select id="serviceType">
+                <option value="car cab">Car Cab</option>
+                <option value="bike" selected>Bike</option>
+                <option value="car recovery">Car Recovery</option>
+                <option value="shifting & movers">Shifting & Movers</option>
+            </select>
+        </div>
+        <div>
+            <label>Vehicle Type (Bike):</label>
+            <select id="vehicleType">
+                <option value="economy">Economy</option>
+                <option value="premium" selected>Premium</option>
+                <option value="vip">VIP</option>
+            </select>
+        </div>
+        <div>
+            <label>Service Category (Optional):</label>
+            <input type="text" id="serviceCategory" placeholder="Service Category (optional for bikes)">
+        </div>
+        <div>
+            <button onclick="getQualifiedDrivers()">🎯 Get Qualified Drivers</button>
+            <button onclick="setBikeDefaults()">🏍️ Set Bike Defaults</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📞 Send Booking Request to Qualified Drivers</h3>
+        <div>
+            <label>Pickup Longitude:</label>
+            <input type="text" id="bookingPickupLongitude" value="73.0756609" placeholder="Pickup Longitude">
+        </div>
+        <div>
+            <label>Pickup Latitude:</label>
+            <input type="text" id="bookingPickupLatitude" value="33.6402842" placeholder="Pickup Latitude">
+        </div>
+        <div>
+            <label>Dropoff Longitude:</label>
+            <input type="text" id="bookingDropoffLongitude" value="73.0856609" placeholder="Dropoff Longitude">
+        </div>
+        <div>
+            <label>Dropoff Latitude:</label>
+            <input type="text" id="bookingDropoffLatitude" value="33.6502842" placeholder="Dropoff Latitude">
+        </div>
+        <div>
+            <label>Service Type:</label>
+            <select id="bookingServiceType">
+                <option value="car cab">Car Cab</option>
+                <option value="bike" selected>Bike</option>
+                <option value="car recovery">Car Recovery</option>
+                <option value="shifting & movers">Shifting & Movers</option>
+            </select>
+        </div>
+        <div>
+            <label>Vehicle Type:</label>
+            <select id="bookingVehicleType">
+                <option value="economy">Economy</option>
+                <option value="premium" selected>Premium</option>
+                <option value="vip">VIP</option>
+            </select>
+        </div>
+        <div>
+            <label>Route Type:</label>
+            <select id="routeType">
+                <option value="one_way" selected>One Way</option>
+                <option value="round_trip">Round Trip</option>
+            </select>
+        </div>
+        <div>
+            <label>Passenger Count:</label>
+            <input type="number" id="passengerCount" value="1" min="1" max="8">
+        </div>
+        <div>
+            <label>Payment Method:</label>
+            <select id="paymentMethod">
+                <option value="cash" selected>Cash</option>
+                <option value="card">Card</option>
+                <option value="wallet">Wallet</option>
+            </select>
+        </div>
+        <div>
+            <button onclick="sendBookingRequest()">📞 Send Booking Request</button>
+            <button onclick="setBookingDefaults()">🏍️ Set Booking Defaults</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📡 Received Location Updates</h3>
+        <div id="locationUpdates"></div>
+    </div>
+
+    <div class="container">
+        <h3>🚙 Nearby Drivers</h3>
+        <div id="nearbyDrivers"></div>
+    </div>
+
+    <div class="container">
+        <h3>🗺️ Nearby Drivers (Radius)</h3>
+        <div id="nearbyDriversRadius"></div>
+    </div>
+
+    <div class="container">
+        <h3>🎯 Qualified Drivers</h3>
+        <div id="qualifiedDrivers"></div>
+    </div>
+
+    <div class="container">
+        <h3>📞 Booking Request Response</h3>
+        <div id="bookingRequestResponse"></div>
+    </div>
+
+    <div class="container">
+        <h3>🏍️ Bike Service Reference</h3>
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 12px;">
+            <strong>Bike Service Types:</strong><br>
+            • serviceType: "bike"<br>
+            • vehicleType: "economy", "premium", "vip"<br>
+            • serviceCategory: null (not required for bikes)<br><br>
+            
+            <strong>Complete Bike Request Example:</strong><br>
+            {
+              "pickupLocation": { "coordinates": [55.2708, 25.2048] },<br>
+              "dropoffLocation": { "coordinates": [55.2744, 25.1972] },<br>
+              "serviceType": "bike",<br>
+              "vehicleType": "economy",<br>
+              "routeType": "one_way",<br>
+              "passengerCount": 1,<br>
+              "paymentMethod": "cash",<br>
+              "serviceOptions": {<br>
+                "helmet": true,<br>
+                "rainCover": false,<br>
+                "extraHelmet": false,<br>
+                "baggageCarrier": false<br>
+              }<br>
+            }
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>📋 Event Log</h3>
+        <div id="eventLog" style="max-height: 300px; overflow-y: auto; background-color: #f8f9fa; padding: 10px; border-radius: 5px;"></div>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <script>
+        let socket = null;
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logDiv = document.getElementById('eventLog');
+            const logEntry = document.createElement('div');
+            logEntry.innerHTML = `<span style="color: #666;">[${timestamp}]</span> ${message}`;
+            logEntry.style.marginBottom = '5px';
+            if (type === 'error') logEntry.style.color = '#dc3545';
+            if (type === 'success') logEntry.style.color = '#28a745';
+            logDiv.appendChild(logEntry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+        
+        function connectSocket() {
+            const token = document.getElementById('userToken').value;
+            if (!token) {
+                alert('Please enter a JWT token');
+                return;
+            }
+            
+            if (socket) {
+                socket.disconnect();
+            }
+            
+            socket = io('http://localhost:3001', {
+                auth: { token },
+                transports: ['websocket', 'polling'],
+                timeout: 20000,
+                forceNew: true
+            });
+            
+            // Connection events
+            socket.on('connect', () => {
+                log('✅ Connected to server', 'success');
+                updateStatus('Connected', 'success');
+            });
+            
+            socket.on('disconnect', (reason) => {
+                log(`❌ Disconnected: ${reason}`, 'error');
+                updateStatus('Disconnected', 'error');
+            });
+            
+            socket.on('authenticated', (data) => {
+                log(`🔐 Authenticated as: ${data.user.email} (${data.user.role})`, 'success');
+                updateStatus(`Authenticated as ${data.user.role}`, 'success');
+            });
+            
+            // Location update confirmations
+            socket.on('location_updated', (data) => {
+                log(`📍 Location updated - User ID: ${data.userId}, Coordinates: [${data.coordinates.join(', ')}]`, 'success');
+            });
+            
+            // Receive location updates from other users/drivers
+            socket.on('location_update', (data) => {
+                const roleIcon = data.userRole === 'driver' ? '🚗' : '👤';
+                const roleText = data.userRole === 'driver' ? 'Driver' : 'User';
+                log(`${roleIcon} ${roleText} location update - User ID: ${data.userId}, Coordinates: [${data.coordinates.join(', ')}]`, 'info');
+                displayLocationUpdate(roleText, data);
+            });
+            
+            // Live location response
+            socket.on('live_location_response', (data) => {
+                if (data.location) {
+                    const roleIcon = data.role === 'driver' ? '🚗' : '👤';
+                    log(`${roleIcon} Live location for ${data.username} (${data.role}): [${data.location.coordinates.join(', ')}]`, 'success');
+                    displayLiveLocation(data);
+                } else {
+                    log(`📍 ${data.username} (${data.role}): ${data.message}`, 'info');
+                }
+            });
+            
+            // Live location error
+            socket.on('live_location_error', (error) => {
+                log(`❌ Live location error: ${error.message}`, 'error');
+            });
+
+            // Nearby drivers response
+            socket.on('nearby_drivers', (drivers) => {
+                log(`🚙 Received ${drivers.length} nearby drivers`, 'info');
+                displayNearbyDrivers(drivers);
+            });
+            
+            // Nearby drivers radius response
+            socket.on('nearby_drivers_radius_response', (data) => {
+                log(`🗺️ Found ${data.driversCount} drivers within ${data.radius}km radius`, 'success');
+                log(`📡 Raw Response Data: ${JSON.stringify(data, null, 2)}`, 'info');
+                displayNearbyDriversRadius(data);
+            });
+            
+            // Nearby drivers radius error
+            socket.on('nearby_drivers_radius_error', (error) => {
+                log(`❌ Nearby drivers radius error: ${error.message}`, 'error');
+            });
+            
+            // Qualified drivers response (enhanced for map)
+            socket.on('qualified_drivers_response', (data) => {
+                log(`🎯 Found ${data.driversCount} qualified drivers for ${data.serviceType} service`, 'success');
+                log(`📡 Raw Response Data: ${JSON.stringify(data, null, 2)}`, 'info');
+                displayQualifiedDrivers(data);
+            });
+            
+            // Qualified drivers error
+            socket.on('error', (error) => {
+                log(`❌ Error: ${error.message}`, 'error');
+            });
+            
+            // Booking request response
+            socket.on('booking_request_sent', (data) => {
+                log(`📞 Booking request sent to ${data.driversCount} qualified drivers`, 'success');
+                log(`📡 Raw Booking Response: ${JSON.stringify(data, null, 2)}`, 'info');
+                displayBookingRequestResponse(data);
+            });
+            
+            // Booking request error
+            socket.on('booking_request_error', (error) => {
+                log(`❌ Booking request error: ${error.message}`, 'error');
+            });
+            
+            // New booking request notification (for drivers)
+            socket.on('new_booking_request', (data) => {
+                log(`🔔 New booking request received: ${JSON.stringify(data, null, 2)}`, 'info');
+                displayNewBookingRequest(data);
+            });
+            
+            // Error handling
+            socket.on('location_error', (error) => {
+                log(`❌ Location error: ${error.message}`, 'error');
+            });
+            
+            socket.on('connect_error', (error) => {
+                log(`❌ Connection error: ${error.message}`, 'error');
+                updateStatus('Connection Error', 'error');
+            });
+        }
+        
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                log('🔌 Manually disconnected', 'info');
+                updateStatus('Disconnected', 'info');
+            }
+        }
+        
+        function sendLocation() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('longitude').value);
+            const latitude = parseFloat(document.getElementById('latitude').value);
+            const userId = document.getElementById('userId').value;
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            const locationData = {
+                coordinates: [longitude, latitude]
+            };
+            
+            if (userId) {
+                locationData.userId = userId;
+            }
+            
+            socket.emit('location_update', locationData);
+            log(`📤 Sent location update: [${longitude}, ${latitude}]${userId ? ` for user ${userId}` : ''}`, 'info');
+        }
+        
+        function getNearbyDrivers() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('longitude').value);
+            const latitude = parseFloat(document.getElementById('latitude').value);
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            socket.emit('get_nearby_drivers', {
+                coordinates: [longitude, latitude],
+                radius: 10 // 10km radius
+            });
+            log(`📤 Requested nearby drivers for: [${longitude}, ${latitude}]`, 'info');
+        }
+        
+        function getLiveLocation() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const targetUserId = document.getElementById('targetUserId').value.trim();
+            
+            const requestData = {};
+            if (targetUserId) {
+                requestData.userId = targetUserId;
+            }
+            
+            socket.emit('get_live_location', requestData);
+            log(`📤 Requested live location${targetUserId ? ` for user ${targetUserId}` : ' for current user'}`, 'info');
+        }
+        
+        function getNearbyDriversRadius() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('radiusLongitude').value);
+            const latitude = parseFloat(document.getElementById('radiusLatitude').value);
+            const radius = parseFloat(document.getElementById('searchRadius').value) || 5;
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            socket.emit('get_nearby_drivers_radius', {
+                coordinates: [longitude, latitude],
+                radius: radius
+            });
+            log(`📤 Requested drivers within ${radius}km of [${longitude}, ${latitude}]`, 'info');
+        }
+        
+        function getQualifiedDrivers() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const longitude = parseFloat(document.getElementById('pickupLongitude').value);
+            const latitude = parseFloat(document.getElementById('pickupLatitude').value);
+            const serviceType = document.getElementById('serviceType').value || 'bike';
+            const vehicleType = document.getElementById('vehicleType').value || 'economy';
+            const serviceCategory = document.getElementById('serviceCategory').value.trim() || null;
+            
+            if (isNaN(longitude) || isNaN(latitude)) {
+                alert('Please enter valid pickup coordinates');
+                return;
+            }
+            
+            const requestData = {
+                pickupLocation: {
+                    type: 'Point',
+                    coordinates: [longitude, latitude]
+                },
+                serviceType: serviceType,
+                vehicleType: vehicleType,
+                driverPreference: null
+            };
+            
+            if (serviceCategory) {
+                requestData.serviceCategory = serviceCategory;
+            }
+            
+            socket.emit('request_qualified_drivers', requestData);
+            log(`📤 Requested qualified ${vehicleType} drivers for ${serviceType} service at [${longitude}, ${latitude}]`, 'info');
+        }
+        
+        function setBikeDefaults() {
+            document.getElementById('serviceType').value = 'bike';
+            document.getElementById('vehicleType').value = 'economy';
+            document.getElementById('serviceCategory').value = '';
+            log('🏍️ Set bike defaults: serviceType=bike, vehicleType=economy', 'info');
+        }
+        
+        function sendBookingRequest() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            
+            const pickupLongitude = parseFloat(document.getElementById('bookingPickupLongitude').value);
+            const pickupLatitude = parseFloat(document.getElementById('bookingPickupLatitude').value);
+            const dropoffLongitude = parseFloat(document.getElementById('bookingDropoffLongitude').value);
+            const dropoffLatitude = parseFloat(document.getElementById('bookingDropoffLatitude').value);
+            const serviceType = document.getElementById('bookingServiceType').value;
+            const vehicleType = document.getElementById('bookingVehicleType').value;
+            const routeType = document.getElementById('routeType').value;
+            const passengerCount = parseInt(document.getElementById('passengerCount').value) || 1;
+            const paymentMethod = document.getElementById('paymentMethod').value;
+            
+            if (isNaN(pickupLongitude) || isNaN(pickupLatitude) || isNaN(dropoffLongitude) || isNaN(dropoffLatitude)) {
+                alert('Please enter valid coordinates');
+                return;
+            }
+            
+            const bookingData = {
+                pickupLocation: {
+                    type: 'Point',
+                    coordinates: [pickupLongitude, pickupLatitude]
+                },
+                dropoffLocation: {
+                    type: 'Point',
+                    coordinates: [dropoffLongitude, dropoffLatitude]
+                },
+                serviceType: serviceType,
+                vehicleType: vehicleType,
+                routeType: routeType,
+                passengerCount: passengerCount,
+                paymentMethod: paymentMethod
+            };
+            
+            socket.emit('send_booking_request_to_qualified_drivers', bookingData);
+            log(`📞 Sent booking request for ${vehicleType} ${serviceType} service from [${pickupLongitude}, ${pickupLatitude}] to [${dropoffLongitude}, ${dropoffLatitude}]`, 'info');
+        }
+        
+        function setBookingDefaults() {
+            document.getElementById('bookingServiceType').value = 'bike';
+            document.getElementById('bookingVehicleType').value = 'premium';
+            document.getElementById('routeType').value = 'one_way';
+            document.getElementById('passengerCount').value = '1';
+            document.getElementById('paymentMethod').value = 'cash';
+            log('🏍️ Set booking defaults: bike premium service, one way, 1 passenger, cash payment', 'info');
+        }
+        
+        function displayLocationUpdate(type, data) {
+            const container = document.getElementById('locationUpdates');
+            const updateDiv = document.createElement('div');
+            updateDiv.className = 'location-display';
+            updateDiv.innerHTML = `
+                <strong>${type} Location Update</strong><br>
+                User ID: <span class="coordinates">${data.userId}</span><br>
+                Coordinates: <span class="coordinates">[${data.coordinates.join(', ')}]</span><br>
+                <small>Received at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(updateDiv);
+            
+            // Keep only last 5 updates
+            while (container.children.length > 5) {
+                container.removeChild(container.firstChild);
+            }
+        }
+        
+        function displayLiveLocation(data) {
+            const container = document.getElementById('locationUpdates');
+            const updateDiv = document.createElement('div');
+            updateDiv.className = 'location-display';
+            const roleIcon = data.role === 'driver' ? '🚗' : '👤';
+            updateDiv.innerHTML = `
+                <strong>${roleIcon} Live Location Response</strong><br>
+                Username: <span class="coordinates">${data.username}</span><br>
+                Role: <span class="coordinates">${data.role}</span><br>
+                User ID: <span class="coordinates">${data.userId}</span><br>
+                ${data.location ? `Coordinates: <span class="coordinates">[${data.location.coordinates.join(', ')}]</span><br>
+                Last Updated: <span class="coordinates">${new Date(data.location.lastUpdated).toLocaleString()}</span>` : 'No location data available'}<br>
+                <small>Retrieved at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(updateDiv);
+            
+            // Keep only last 5 updates
+            while (container.children.length > 5) {
+                container.removeChild(container.firstChild);
+            }
+        }
+        
+        function displayNearbyDrivers(drivers) {
+            const container = document.getElementById('nearbyDrivers');
+            container.innerHTML = '';
+            
+            if (drivers.length === 0) {
+                container.innerHTML = '<div class="location-display">No nearby drivers found</div>';
+                return;
+            }
+            
+            drivers.forEach((driver, index) => {
+                const driverDiv = document.createElement('div');
+                driverDiv.className = 'location-display';
+                driverDiv.innerHTML = `
+                    <strong>Driver ${index + 1}</strong><br>
+                    User ID: <span class="coordinates">${driver.userId}</span><br>
+                    Coordinates: <span class="coordinates">[${driver.coordinates.join(', ')}]</span>
+                `;
+                container.appendChild(driverDiv);
+            });
+        }
+        
+        function displayNearbyDriversRadius(data) {
+            const container = document.getElementById('nearbyDriversRadius');
+            container.innerHTML = '';
+            
+            // Display raw response data
+            const rawDataDiv = document.createElement('div');
+            rawDataDiv.className = 'location-display';
+            rawDataDiv.style.backgroundColor = '#e8f4fd';
+            rawDataDiv.innerHTML = `
+                <strong>📡 Raw Socket Response Data:</strong><br>
+                <pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 11px;">${JSON.stringify(data, null, 2)}</pre>
+            `;
+            container.appendChild(rawDataDiv);
+            
+            if (data.driversCount === 0) {
+                const noDriversDiv = document.createElement('div');
+                noDriversDiv.className = 'location-display';
+                noDriversDiv.innerHTML = 'No drivers found within radius';
+                container.appendChild(noDriversDiv);
+                return;
+            }
+            
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'location-display';
+            headerDiv.innerHTML = `
+                <strong>🗺️ Found ${data.driversCount} drivers within ${data.radius}km</strong><br>
+                Search Center: <span class="coordinates">[${data.searchCenter.join(', ')}]</span>
+            `;
+            container.appendChild(headerDiv);
+            
+            data.drivers.forEach((driver, index) => {
+                const driverDiv = document.createElement('div');
+                driverDiv.className = 'location-display';
+                driverDiv.innerHTML = `
+                    <strong>🚗 ${driver.username || `Driver ${index + 1}`}</strong><br>
+                    ID: <span class="coordinates">${driver.driverId}</span><br>
+                    Distance: <span class="coordinates">${driver.distance.toFixed(2)}km</span><br>
+                    Coordinates: <span class="coordinates">[${driver.coordinates.join(', ')}]</span><br>
+                    Status: <span class="coordinates">${driver.isActive ? '🟢 Active' : '🔴 Inactive'}</span><br>
+                    ${driver.vehicleInfo ? `Vehicle: <span class="coordinates">${driver.vehicleInfo.type} - ${driver.vehicleInfo.model}</span><br>` : ''}
+                    ${driver.rating ? `Rating: <span class="coordinates">⭐ ${driver.rating}/5</span><br>` : ''}
+                    <small>Last Active: ${new Date(driver.lastActiveAt).toLocaleString()}</small>
+                `;
+                container.appendChild(driverDiv);
+            });
+        }
+        
+        function displayQualifiedDrivers(data) {
+            const container = document.getElementById('qualifiedDrivers');
+            container.innerHTML = '';
+            
+            // Display raw response data
+            const rawDataDiv = document.createElement('div');
+            rawDataDiv.className = 'location-display';
+            rawDataDiv.style.backgroundColor = '#fff3cd';
+            rawDataDiv.innerHTML = `
+                <strong>📡 Raw Socket Response Data:</strong><br>
+                <pre style="background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 11px;">${JSON.stringify(data, null, 2)}</pre>
+            `;
+            container.appendChild(rawDataDiv);
+            
+            if (data.driversCount === 0) {
+                const noDriversDiv = document.createElement('div');
+                noDriversDiv.className = 'location-display';
+                noDriversDiv.innerHTML = 'No qualified drivers found';
+                container.appendChild(noDriversDiv);
+                return;
+            }
+            
+            const headerDiv = document.createElement('div');
+            headerDiv.className = 'location-display';
+            headerDiv.innerHTML = `
+                <strong>🎯 Found ${data.driversCount} qualified drivers</strong><br>
+                Service: <span class="coordinates">${data.serviceType}</span> | 
+                Vehicle: <span class="coordinates">${data.vehicleType}</span><br>
+                Pickup: <span class="coordinates">[${data.pickupLocation ? data.pickupLocation.coordinates.join(', ') : 'N/A'}]</span>
+            `;
+            container.appendChild(headerDiv);
+            
+            if (data.drivers && data.drivers.length > 0) {
+                data.drivers.forEach((driver, index) => {
+                    const driverDiv = document.createElement('div');
+                    driverDiv.className = 'location-display';
+                    driverDiv.innerHTML = `
+                        <strong>🚗 ${driver.username || `Driver ${index + 1}`}</strong><br>
+                        ID: <span class="coordinates">${driver.driverId}</span><br>
+                        Email: <span class="coordinates">${driver.email}</span><br>
+                        Distance: <span class="coordinates">${driver.distance ? driver.distance.toFixed(2) : 'N/A'}km</span><br>
+                        Coordinates: <span class="coordinates">[${driver.coordinates ? driver.coordinates.join(', ') : 'N/A'}]</span><br>
+                        Status: <span class="coordinates">${driver.isActive ? '🟢 Active' : '🔴 Inactive'}</span><br>
+                        ${driver.vehicleInfo ? `Vehicle: <span class="coordinates">${driver.vehicleInfo.type} - ${driver.vehicleInfo.model}</span><br>` : ''}
+                        ${driver.rating ? `Rating: <span class="coordinates">⭐ ${driver.rating}/5 (${driver.completedRides} rides)</span><br>` : ''}
+                        ${driver.estimatedArrival ? `ETA: <span class="coordinates">${driver.estimatedArrival} min</span><br>` : ''}
+                        ${driver.fareMultiplier ? `Fare Multiplier: <span class="coordinates">${driver.fareMultiplier}x</span><br>` : ''}
+                        <small>Last Active: ${driver.lastActiveAt ? new Date(driver.lastActiveAt).toLocaleString() : 'N/A'}</small>
+                    `;
+                    container.appendChild(driverDiv);
+                });
+            }
+        }
+        
+        function displayBookingRequestResponse(data) {
+            const container = document.getElementById('bookingRequestResponse');
+            container.innerHTML = '';
+            
+            const responseDiv = document.createElement('div');
+            responseDiv.className = 'location-display';
+            responseDiv.innerHTML = `
+                <strong>📞 Booking Request Sent Successfully</strong><br>
+                Drivers Notified: <span class="coordinates">${data.driversCount}</span><br>
+                Service: <span class="coordinates">${data.serviceType}</span><br>
+                Vehicle Type: <span class="coordinates">${data.vehicleType}</span><br>
+                Route: <span class="coordinates">${data.routeType}</span><br>
+                Passengers: <span class="coordinates">${data.passengerCount}</span><br>
+                Payment: <span class="coordinates">${data.paymentMethod}</span><br>
+                Request ID: <span class="coordinates">${data.requestId}</span><br>
+                <small>Sent at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(responseDiv);
+            
+            if (data.drivers && data.drivers.length > 0) {
+                data.drivers.forEach((driver, index) => {
+                    const driverDiv = document.createElement('div');
+                    driverDiv.className = 'location-display';
+                    driverDiv.innerHTML = `
+                        <strong>🚗 Notified Driver ${index + 1}</strong><br>
+                        Name: <span class="coordinates">${driver.firstName} ${driver.lastName}</span><br>
+                        Phone: <span class="coordinates">${driver.phoneNumber}</span><br>
+                        Distance: <span class="coordinates">${driver.distance?.toFixed(2)}km</span>
+                    `;
+                    container.appendChild(driverDiv);
+                });
+            }
+        }
+        
+        function displayNewBookingRequest(data) {
+            const container = document.getElementById('bookingRequestResponse');
+            const requestDiv = document.createElement('div');
+            requestDiv.className = 'location-display';
+            requestDiv.style.borderLeft = '4px solid #28a745';
+            requestDiv.innerHTML = `
+                <strong>🔔 New Booking Request Received</strong><br>
+                Request ID: <span class="coordinates">${data.requestId}</span><br>
+                Service: <span class="coordinates">${data.serviceType}</span><br>
+                Vehicle Type: <span class="coordinates">${data.vehicleType}</span><br>
+                Pickup: <span class="coordinates">[${data.pickupLocation.coordinates.join(', ')}]</span><br>
+                Dropoff: <span class="coordinates">[${data.dropoffLocation.coordinates.join(', ')}]</span><br>
+                Passengers: <span class="coordinates">${data.passengerCount}</span><br>
+                Payment: <span class="coordinates">${data.paymentMethod}</span><br>
+                <small>Received at: ${new Date().toLocaleTimeString()}</small>
+            `;
+            container.appendChild(requestDiv);
+        }
+        
+        function clearLog() {
+            document.getElementById('eventLog').innerHTML = '';
+        }
+        
+        // Auto-set booking coordinates when qualified driver coordinates change
+        document.getElementById('pickupLongitude').addEventListener('input', function() {
+            document.getElementById('bookingPickupLongitude').value = this.value;
+        });
+        
+        document.getElementById('pickupLatitude').addEventListener('input', function() {
+            document.getElementById('bookingPickupLatitude').value = this.value;
+        });
+        
+        document.getElementById('serviceType').addEventListener('change', function() {
+            document.getElementById('bookingServiceType').value = this.value;
+        });
+        
+        document.getElementById('vehicleType').addEventListener('change', function() {
+            document.getElementById('bookingVehicleType').value = this.value;
+        });
+        
+        // Auto-generate random coordinates for testing
+        function generateRandomCoordinates() {
+            const baseLng = 77.2090;
+            const baseLat = 28.6139;
+            const randomLng = baseLng + (Math.random() - 0.5) * 0.1;
+            const randomLat = baseLat + (Math.random() - 0.5) * 0.1;
+            
+            document.getElementById('longitude').value = randomLng.toFixed(6);
+            document.getElementById('latitude').value = randomLat.toFixed(6);
+        }
+        
+        // Add button for random coordinates
+        window.onload = function() {
+            const coordContainer = document.querySelector('.container:nth-child(2)');
+            const randomBtn = document.createElement('button');
+            randomBtn.textContent = '🎲 Random Coordinates';
+            randomBtn.onclick = generateRandomCoordinates;
+            coordContainer.appendChild(randomBtn);
+        };
+    </script>
+</body>
+</html>

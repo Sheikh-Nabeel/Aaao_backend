@@ -26,6 +26,7 @@ import {
   updateDriverStatus,
   updateAutoAcceptSettings,
   updateRidePreferences,
+  sendBookingRequestToQualifiedDrivers,
 } from "../controllers/bookingController.js";
 import authHandler from "../middlewares/authMIddleware.js";
 
@@ -62,5 +63,6 @@ router.post("/user/location", authHandler, updateUserLocation);
 router.post("/driver/status", authHandler, updateDriverStatus);
 router.post("/driver/auto-accept-settings", authHandler, updateAutoAcceptSettings);
 router.post("/driver/ride-preferences", authHandler, updateRidePreferences);
+router.post("/send-booking-request", authHandler, sendBookingRequestToQualifiedDrivers);
 
 export default router;

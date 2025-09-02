@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Get Test Token</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        input, button { padding: 10px; margin: 5px; }
+        .token { background: #f0f0f0; padding: 10px; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Get Test Token for Location Testing</h1>
+        <div>
+            <input type="email" id="email" placeholder="Email" value="">
+            <input type="password" id="password" placeholder="Password" value="">
+            <button onclick="getToken()">Get Token</button>
+        </div>
+        <div id="result"></div>
+        <div id="token" class="token" style="display:none;"></div>
+        
+        <h3>Instructions:</h3>
+        <ol>
+            <li>Enter your email and password</li>
+            <li>Click "Get Token" to retrieve your JWT token</li>
+            <li>Copy the token and paste it in the location test interface</li>
+            <li>Use the location test interface to send location updates</li>
+        </ol>
+    </div>
+
+    <script>
+        async function getToken() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            if (!email || !password) {
+                document.getElementById('result').innerHTML = '<p style="color: red;">Please enter email and password</p>';
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/user/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('result').innerHTML = '<p style="color: green;">Token retrieved successfully!</p>';
+                    document.getElementById('token').style.display = 'block';
+                    document.getElementById('token').innerHTML = `<strong>Token:</strong><br>${data.token}<br><br><strong>User ID:</strong> ${data.userId}<br><strong>Role:</strong> ${data.role || 'user'}`;
+                } else {
+                    const error = await response.json();
+                    document.getElementById('result').innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+                }
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

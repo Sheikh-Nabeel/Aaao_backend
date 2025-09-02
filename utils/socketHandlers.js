@@ -1,7 +1,9 @@
 import User from '../models/userModel.js';
 import Booking from '../models/bookingModel.js';
+import Vehicle from '../models/vehicleModel.js';
 import { addMoneyToMLM } from './mlmHelper.js';
 import { calculateDistance } from "./distanceCalculator.js";
+import { getDriverSocketId } from './driverStatusSocket.js';
 import SocketValidationService from '../services/socketValidationService.js';
 import SocketNotificationService from '../services/socketNotificationService.js';
 import SocketDatabaseService from '../services/socketDatabaseService.js';
@@ -239,20 +241,15 @@ export const handleBookingEvents = (socket, io) => {
     }
   });
   
-  // Driver location update
-  socket.on('driver_location_update', async (data) => {
-    console.log('=== SOCKET: DRIVER LOCATION UPDATE ===');
-    console.log('Driver:', socket.user.email);
+  // Unified location update for both users and drivers
+  socket.on('location_update', async (data) => {
+    console.log('=== SOCKET: LOCATION UPDATE ===');
+    console.log('User:', socket.user.email, 'Role:', socket.user.role);
     console.log('Location Data:', data);
     
     try {
-      // Validate user role
-      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'driver');
-      if (!roleValidation.isValid) {
-        return SocketNotificationService.sendError(socket, 'location_error', roleValidation.error);
-      }
-      
-      const { coordinates, address, heading, speed } = data;
+      const { coordinates, userId } = data;
+      const userRole = socket.user.role;
       
       // Validate coordinates
       const coordValidation = SocketValidationService.validateCoordinates(coordinates);
@@ -260,66 +257,58 @@ export const handleBookingEvents = (socket, io) => {
         return SocketNotificationService.sendError(socket, 'location_error', coordValidation.error);
       }
       
-      // Update driver location
-      const updatedDriver = await SocketDatabaseService.updateDriverLocation(
+      // Update location using unified function
+      const updatedUser = await SocketDatabaseService.updateUserLocation(
         socket.user._id,
-        { coordinates, address, heading, speed }
+        { coordinates }
       );
       
-      // Notify users with active bookings
-      await SocketNotificationService.notifyDriverLocationUpdate(
-        io,
-        socket.user._id,
-        updatedDriver.currentLocation
-      );
+      // If user is a driver, notify users with active bookings
+      if (userRole === 'driver') {
+        await SocketNotificationService.notifyDriverLocationUpdate(
+          io,
+          socket.user._id,
+          updatedUser.currentLocation
+        );
+      }
       
-      // Broadcast to location tracking subscribers
+      // Broadcast simplified location update with user ID and coordinates only
       const locationUpdate = {
-        driverId: socket.user._id,
-        coordinates: updatedDriver.currentLocation.coordinates,
-        address: updatedDriver.currentLocation.address,
-        heading,
-        speed,
-        timestamp: new Date().toISOString(),
-        vehicleType: socket.user.vehicleType,
-        isActive: socket.user.isActive
+        userId: userId || socket.user._id,
+        coordinates: coordinates,
+        userRole: userRole
       };
       
       // Broadcast to nearby location subscribers
-      socket.to('location_nearby').emit('driver_location_broadcast', locationUpdate);
+      socket.to('location_nearby').emit('location_update', locationUpdate);
       
-      // Broadcast to specific driver subscribers
-      socket.to(`driver_${socket.user._id}`).emit('driver_location_broadcast', locationUpdate);
+      // Broadcast to specific user/driver subscribers
+      socket.to(`${userRole}_${socket.user._id}`).emit('location_update', locationUpdate);
       
-      // Send confirmation to driver
-      SocketNotificationService.confirmLocationUpdate(
-        socket,
-        updatedDriver.currentLocation.coordinates,
-        updatedDriver.currentLocation.lastUpdated
-      );
+      // Send confirmation
+      socket.emit('location_updated', {
+        userId: locationUpdate.userId,
+        coordinates: locationUpdate.coordinates,
+        userRole: userRole,
+        timestamp: new Date().toISOString()
+      });
       
-      console.log('Driver location updated:', socket.user._id);
+      console.log(`${userRole} location updated:`, socket.user._id);
       
     } catch (error) {
-      console.error('Error updating driver location:', error);
+      console.error('Error updating location:', error);
       SocketNotificationService.sendError(socket, 'location_error', error.message);
     }
   });
   
-  // User location update
-  socket.on('user_location_update', async (data) => {
-    console.log('=== SOCKET: USER LOCATION UPDATE ===');
+  // Get nearby drivers with simplified data
+  socket.on('get_nearby_drivers', async (data) => {
+    console.log('=== SOCKET: GET NEARBY DRIVERS ===');
     console.log('User:', socket.user.email);
-    console.log('Location Data:', data);
+    console.log('Request Data:', data);
     
     try {
-      // Validate user role
-      const roleValidation = SocketValidationService.validateUserRole(socket.user, 'user');
-      if (!roleValidation.isValid) {
-        return SocketNotificationService.sendError(socket, 'location_error', roleValidation.error);
-      }
-      
-      const { coordinates, address, bookingId } = data;
+      const { coordinates, radius = 10 } = data;
       
       // Validate coordinates
       const coordValidation = SocketValidationService.validateCoordinates(coordinates);
@@ -327,54 +316,32 @@ export const handleBookingEvents = (socket, io) => {
         return SocketNotificationService.sendError(socket, 'location_error', coordValidation.error);
       }
       
-      // Update user location
-      const updatedLocation = await SocketDatabaseService.updateUserLocation(
-        socket.user._id,
-        { coordinates, address }
-      );
-      
-      // If bookingId is provided, notify the assigned driver
-      if (bookingId) {
-        const booking = await Booking.findById(bookingId).populate('driver', '_id');
-        if (booking && booking.driver && ['accepted', 'started', 'in_progress'].includes(booking.status)) {
-          const driverRoom = `driver_${booking.driver._id}`;
-          io.to(driverRoom).emit('user_location_update', {
-            bookingId: booking._id,
-            userLocation: {
-              coordinates: updatedLocation.coordinates,
-              address: updatedLocation.address,
-              timestamp: updatedLocation.lastUpdated
-            }
-          });
+      // Find nearby active drivers
+      const nearbyDrivers = await User.find({
+        role: 'driver',
+        isActive: true,
+        currentLocation: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: coordinates
+            },
+            $maxDistance: radius * 1000 // Convert km to meters
+          }
         }
-      }
+      }).select('_id currentLocation');
       
-      // Broadcast to location tracking subscribers (for customers)
-      const customerLocationUpdate = {
-        customerId: socket.user._id,
-        coordinates: updatedLocation.coordinates,
-        address: updatedLocation.address,
-        timestamp: updatedLocation.lastUpdated,
-        bookingId: bookingId || null
-      };
+      // Send simplified nearby drivers data
+      const simplifiedDrivers = nearbyDrivers.map(driver => ({
+        userId: driver._id,
+        coordinates: driver.currentLocation.coordinates,
+        userRole: 'driver'
+      }));
       
-      // Broadcast to nearby location subscribers
-      socket.to('location_nearby').emit('customer_location_broadcast', customerLocationUpdate);
-      
-      // Broadcast to specific customer subscribers
-      socket.to(`customer_${socket.user._id}`).emit('customer_location_broadcast', customerLocationUpdate);
-      
-      // Send confirmation
-      SocketNotificationService.confirmLocationUpdate(
-        socket,
-        updatedLocation.coordinates,
-        updatedLocation.lastUpdated
-      );
-      
-      console.log('User location updated:', socket.user._id);
+      socket.emit('nearby_drivers', simplifiedDrivers);
       
     } catch (error) {
-      console.error('Error updating user location:', error);
+      console.error('Error getting nearby drivers:', error);
       SocketNotificationService.sendError(socket, 'location_error', error.message);
     }
   });
@@ -471,39 +438,653 @@ export const handleBookingEvents = (socket, io) => {
     console.log('Request Data:', data);
     
     try {
-      const { pickupLocation, serviceType, vehicleType, driverPreference } = data;
+      const { pickupLocation, serviceType, vehicleType, driverPreference = 'nearby' } = data;
       
       if (!pickupLocation || !pickupLocation.coordinates) {
         socket.emit('error', { message: 'Invalid pickup location' });
         return;
       }
       
-      // Import the function from fareEstimationController
-      const { findQualifiedDriversForEstimation } = await import('../controllers/fareEstimationController.js');
-      
-      // Find qualified drivers
-      const qualifiedDrivers = await findQualifiedDriversForEstimation(
-        pickupLocation,
-        serviceType,
-        vehicleType,
-        driverPreference
+      // Use the same logic as qualifiedDriversController
+      let driverQuery = {
+        role: 'driver',
+        kycLevel: 2,
+        kycStatus: 'approved',
+        isActive: true,
+        driverStatus: 'online'
+      };
+
+      // Handle Pink Captain preferences
+      if (driverPreference === 'pink_captain') {
+        driverQuery.gender = 'female';
+        console.log('Pink Captain requested - filtering for female drivers');
+      }
+
+      console.log('Driver Query:', driverQuery);
+
+      // Find drivers based on query
+      const drivers = await User.find(driverQuery).select(
+        'firstName lastName email phoneNumber currentLocation gender driverSettings vehicleDetails profilePicture rating totalRides createdAt lastActiveAt driverStatus isActive'
       );
+      console.log(`Found ${drivers.length} potential drivers`);
+
+      if (drivers.length === 0) {
+        socket.emit('qualified_drivers_response', {
+          success: true,
+          drivers: [],
+          driversCount: 0,
+          serviceType,
+          vehicleType,
+          searchCriteria: {
+            pickupLocation,
+            serviceType,
+            vehicleType,
+            driverPreference
+          },
+          timestamp: new Date()
+        });
+        console.log('No drivers found matching criteria');
+        return;
+      }
+
+      // Get driver IDs for vehicle lookup
+      const driverIds = drivers.map(driver => driver._id);
       
-      // Emit qualified drivers with their locations
+      // Find vehicles that match the service type and vehicle type
+      let vehicleQuery = {
+        userId: { $in: driverIds },
+        serviceType: serviceType,
+        isActive: true
+      };
+      
+      // Add vehicle type filter if specified
+      if (vehicleType && vehicleType !== 'any') {
+        vehicleQuery.vehicleType = vehicleType;
+      }
+      
+      console.log('Vehicle Query:', vehicleQuery);
+      
+      // Find matching vehicles
+      const vehicles = await Vehicle.find(vehicleQuery).select(
+        'userId vehicleType serviceType make model year color licensePlate registrationNumber'
+      );
+      console.log(`Found ${vehicles.length} matching vehicles`);
+      
+      if (vehicles.length === 0) {
+        socket.emit('qualified_drivers_response', {
+          success: true,
+          drivers: [],
+          driversCount: 0,
+          serviceType,
+          vehicleType,
+          searchCriteria: {
+            pickupLocation,
+            serviceType,
+            vehicleType,
+            driverPreference
+          },
+          availableDrivers: drivers.length,
+          availableVehicles: 0,
+          timestamp: new Date()
+        });
+        console.log('No vehicles found matching service and vehicle type criteria');
+        return;
+      }
+      
+      // Create a map of driver ID to vehicle info
+      const driverVehicleMap = {};
+      vehicles.forEach(vehicle => {
+        driverVehicleMap[vehicle.userId.toString()] = vehicle;
+      });
+      
+      // Get driver IDs that have matching vehicles
+      const qualifiedDriverIds = vehicles.map(vehicle => vehicle.userId.toString());
+      
+      // Filter drivers to only those with matching vehicles
+      const qualifiedDrivers = drivers.filter(driver => 
+        qualifiedDriverIds.includes(driver._id.toString())
+      );
+
+      console.log(`Found ${qualifiedDrivers.length} drivers with matching vehicles`);
+
+      if (qualifiedDrivers.length === 0) {
+        socket.emit('qualified_drivers_response', {
+          success: true,
+          drivers: [],
+          driversCount: 0,
+          serviceType,
+          vehicleType,
+          searchCriteria: {
+            pickupLocation,
+            serviceType,
+            vehicleType,
+            driverPreference
+          },
+          availableDrivers: drivers.length,
+          availableVehicles: vehicles.length,
+          timestamp: new Date()
+        });
+        console.log('No qualified drivers found with matching vehicles');
+        return;
+      }
+
+      // Calculate distances and filter by radius and socket connection
+      const driversWithDistance = [];
+      const maxRadius = driverPreference === 'pink_captain' ? 50 : 10;
+      let driversNotConnected = 0;
+
+      for (const driver of qualifiedDrivers) {
+        if (driver.currentLocation && driver.currentLocation.coordinates) {
+          // Check if driver is actually connected via socket
+          const driverSocketId = getDriverSocketId(driver._id.toString());
+          if (!driverSocketId) {
+            driversNotConnected++;
+            console.log(`Driver ${driver._id} (${driver.firstName} ${driver.lastName}) is marked online but not connected via socket`);
+            continue; // Skip drivers who aren't connected via socket
+          }
+
+          const distance = calculateDistance(
+            { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
+            { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+          );
+
+          if (distance <= maxRadius) {
+            const vehicle = driverVehicleMap[driver._id.toString()];
+            
+            driversWithDistance.push({
+              // Driver basic info
+              driverId: driver._id,
+              firstName: driver.firstName,
+              lastName: driver.lastName,
+              fullName: `${driver.firstName} ${driver.lastName}`,
+              email: driver.email,
+              phoneNumber: driver.phoneNumber,
+              profilePicture: driver.profilePicture,
+              
+              // Driver status and activity
+              isActive: driver.isActive,
+              driverStatus: driver.driverStatus,
+              lastActiveAt: driver.lastActiveAt,
+              
+              // Location and distance
+              coordinates: driver.currentLocation.coordinates,
+              currentLocation: driver.currentLocation,
+              distance: Math.round(distance * 100) / 100,
+              estimatedArrival: Math.ceil(distance / 0.5),
+              
+              // Driver performance
+              rating: driver.rating || 0,
+              totalRides: driver.totalRides || 0,
+              
+              // Vehicle information
+              vehicles: [{
+                id: vehicle._id,
+                serviceType: vehicle.serviceType,
+                vehicleType: vehicle.vehicleType,
+                make: vehicle.make,
+                model: vehicle.model,
+                year: vehicle.year,
+                color: vehicle.color,
+                licensePlate: vehicle.licensePlate,
+                registrationNumber: vehicle.registrationNumber
+              }],
+              
+              // Additional driver details
+              role: driver.role,
+              gender: driver.gender,
+              driverSettings: driver.driverSettings
+            });
+          }
+        }
+      }
+
+      // Filter Pink Captain drivers based on their preferences
+      let filteredDrivers = driversWithDistance;
+      if (driverPreference === 'pink_captain') {
+        console.log('Filtering Pink Captain drivers based on preferences...');
+        
+        filteredDrivers = driversWithDistance.filter(driver => {
+          const driverPrefs = driver.driverSettings?.ridePreferences;
+          return driverPrefs && driverPrefs.pinkCaptainMode;
+        });
+        
+        console.log(`Filtered to ${filteredDrivers.length} Pink Captain drivers`);
+      }
+
+      // Sort by distance and limit to top 20
+      filteredDrivers.sort((a, b) => a.distance - b.distance);
+      const topDrivers = filteredDrivers.slice(0, 20);
+      
+      // Emit qualified drivers response
       socket.emit('qualified_drivers_response', {
         success: true,
-        drivers: qualifiedDrivers,
-        driversCount: qualifiedDrivers.length,
+        drivers: topDrivers,
+        driversCount: topDrivers.length,
         serviceType,
         vehicleType,
+        searchCriteria: {
+          pickupLocation,
+          serviceType,
+          vehicleType,
+          driverPreference
+        },
+        searchStats: {
+          totalDriversFound: drivers.length,
+          totalVehiclesFound: vehicles.length,
+          driversWithVehicles: qualifiedDrivers.length,
+          driversInRadius: driversWithDistance.length,
+          driversNotConnectedViaSocket: driversNotConnected,
+          finalQualifiedDrivers: topDrivers.length
+        },
         timestamp: new Date()
       });
       
-      console.log(`Sent ${qualifiedDrivers.length} qualified drivers to user ${socket.user._id}`);
+      console.log(`Sent ${topDrivers.length} qualified drivers to user ${socket.user._id}`);
+      console.log('Response data:', JSON.stringify({
+        success: true,
+        drivers: topDrivers,
+        driversCount: topDrivers.length
+      }, null, 2));
       
     } catch (error) {
       console.error('Error getting qualified drivers:', error);
       socket.emit('error', { message: 'Failed to get qualified drivers' });
+    }
+  });
+
+  // Send booking request to qualified drivers
+  socket.on('send_booking_request_to_qualified_drivers', async (data) => {
+    console.log('=== SOCKET: SEND BOOKING REQUEST TO QUALIFIED DRIVERS ===');
+    console.log('User:', socket.user.email);
+    console.log('Request Data:', data);
+    
+    try {
+      const {
+        pickupLocation,
+        dropoffLocation,
+        serviceType,
+        vehicleType,
+        driverPreference = 'any',
+        estimatedFare,
+        paymentMethod,
+        notes
+      } = data;
+      
+      // Validate required fields
+      if (!pickupLocation || !pickupLocation.coordinates || !Array.isArray(pickupLocation.coordinates)) {
+        socket.emit('booking_request_error', { message: 'Invalid pickup location' });
+        return;
+      }
+      
+      if (!dropoffLocation || !dropoffLocation.coordinates || !Array.isArray(dropoffLocation.coordinates)) {
+        socket.emit('booking_request_error', { message: 'Invalid dropoff location' });
+        return;
+      }
+      
+      if (!serviceType || !vehicleType) {
+        socket.emit('booking_request_error', { message: 'Service type and vehicle type are required' });
+        return;
+      }
+      
+      // Get qualified drivers using the same logic as request_qualified_drivers
+      const maxRadius = driverPreference === 'pink_captain' ? 50 : 10;
+      
+      // Find vehicles that match the service and vehicle type
+      const matchingVehicles = await Vehicle.find({
+        serviceType: serviceType,
+        vehicleType: vehicleType,
+        isActive: true
+      });
+      
+      if (matchingVehicles.length === 0) {
+        socket.emit('booking_request_error', { message: 'No vehicles available for this service' });
+        return;
+      }
+      
+      const vehicleOwnerIds = matchingVehicles.map(vehicle => vehicle.userId);
+      
+      // Find drivers within radius using the same criteria as qualified drivers
+      const driversWithDistance = [];
+      let driverQuery = {
+        _id: { $in: vehicleOwnerIds },
+        role: 'driver',
+        kycLevel: 2,
+        kycStatus: 'approved',
+        isActive: true,
+        driverStatus: 'online',
+        currentLocation: { $exists: true }
+      };
+      
+      // Handle Pink Captain preferences
+      if (driverPreference === 'pink_captain') {
+        driverQuery.gender = 'female';
+      }
+      
+      const potentialDrivers = await User.find(driverQuery);
+      console.log(`Found ${potentialDrivers.length} potential drivers`);
+      
+      if (potentialDrivers.length === 0) {
+        socket.emit('booking_request_error', { message: 'No qualified drivers available' });
+        return;
+      }
+      
+      // Get driver IDs for vehicle lookup
+      const driverIds = potentialDrivers.map(driver => driver._id);
+      
+      // Find vehicles that match the service type and vehicle type
+      let vehicleQuery = {
+        userId: { $in: driverIds },
+        serviceType: serviceType,
+        isActive: true
+      };
+      
+      // Add vehicle type filter if specified
+      if (vehicleType && vehicleType !== 'any') {
+        vehicleQuery.vehicleType = vehicleType;
+      }
+      
+      console.log('Vehicle Query:', vehicleQuery);
+      
+      // Find matching vehicles
+      const vehicles = await Vehicle.find(vehicleQuery);
+      console.log(`Found ${vehicles.length} matching vehicles`);
+      
+      if (vehicles.length === 0) {
+        socket.emit('booking_request_error', { message: 'No qualified drivers available' });
+        return;
+      }
+      
+      // Get driver IDs that have matching vehicles
+      const qualifiedDriverIds = vehicles.map(vehicle => vehicle.userId.toString());
+      
+      // Filter drivers to only those with matching vehicles and within radius
+      const qualifiedDrivers = potentialDrivers.filter(driver => 
+        qualifiedDriverIds.includes(driver._id.toString())
+      );
+      
+      console.log(`Found ${qualifiedDrivers.length} drivers with matching vehicles`);
+      
+      for (const driver of qualifiedDrivers) {
+        // Check if driver is connected via socket before adding to qualified list
+        const driverSocketId = getDriverSocketId(driver._id.toString());
+        if (!driverSocketId) {
+          console.log(`Driver ${driver._id} is not connected via socket, skipping`);
+          continue;
+        }
+        
+        if (driver.currentLocation && driver.currentLocation.coordinates) {
+          const distance = calculateDistance(
+            { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
+            { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+          );
+          
+          if (distance <= maxRadius) {
+            driversWithDistance.push({
+              ...driver.toObject(),
+              distance: distance
+            });
+          }
+        }
+      }
+      
+      // Filter drivers based on preference
+      let filteredDrivers = driversWithDistance;
+      if (driverPreference === 'pink_captain') {
+        console.log('Filtering Pink Captain drivers based on preferences...');
+        
+        filteredDrivers = driversWithDistance.filter(driver => {
+          const driverPrefs = driver.driverSettings?.ridePreferences;
+          return driverPrefs && driverPrefs.pinkCaptainMode;
+        });
+        
+        console.log(`Filtered to ${filteredDrivers.length} Pink Captain drivers`);
+      }
+      
+      // Sort by distance
+      filteredDrivers.sort((a, b) => a.distance - b.distance);
+      
+      if (filteredDrivers.length === 0) {
+        socket.emit('booking_request_error', { message: 'No qualified drivers available' });
+        return;
+      }
+      
+      // Create booking request object
+      const bookingRequest = {
+        requestId: new Date().getTime().toString(),
+        userId: socket.user._id,
+        userInfo: {
+          name: socket.user.name,
+          email: socket.user.email,
+          phone: socket.user.phone
+        },
+        pickupLocation,
+        dropoffLocation,
+        serviceType,
+        vehicleType,
+        driverPreference,
+        estimatedFare,
+        paymentMethod,
+        notes,
+        timestamp: new Date(),
+        status: 'pending'
+      };
+      
+      // Send booking request to qualified drivers
+      let requestsSent = 0;
+      console.log(`Attempting to send booking requests to ${filteredDrivers.length} filtered drivers`);
+      
+      for (const driver of filteredDrivers) {
+        const driverSocketId = getDriverSocketId(driver._id.toString());
+        console.log(`Sending booking request to driver ${driver._id} via socket ${driverSocketId}`);
+        io.to(driverSocketId).emit('new_booking_request', bookingRequest);
+        requestsSent++;
+      }
+      
+      console.log(`Sent booking request to ${requestsSent} qualified drivers`);
+      
+      // Respond to the user
+      socket.emit('booking_request_sent', {
+        success: true,
+        requestId: bookingRequest.requestId,
+        driversNotified: requestsSent,
+        message: `Booking request sent to ${requestsSent} qualified drivers`
+      });
+      
+    } catch (error) {
+      console.error('Error sending booking request to qualified drivers:', error);
+      socket.emit('booking_request_error', { message: 'Failed to send booking request' });
+    }
+  });
+
+  // Get all drivers within specified radius (default 5km)
+  socket.on('get_nearby_drivers_radius', async (data) => {
+    console.log('=== SOCKET: GET NEARBY DRIVERS RADIUS ===');
+    console.log('User:', socket.user.email);
+    console.log('Request Data:', data);
+    
+    try {
+      const { coordinates, radius = 5 } = data;
+      
+      if (!coordinates || !Array.isArray(coordinates) || coordinates.length !== 2) {
+        socket.emit('nearby_drivers_radius_error', { 
+          message: 'Invalid coordinates. Please provide [longitude, latitude]' 
+        });
+        return;
+      }
+      
+      const [longitude, latitude] = coordinates;
+      
+      if (isNaN(longitude) || isNaN(latitude)) {
+        socket.emit('nearby_drivers_radius_error', { 
+          message: 'Invalid coordinate values' 
+        });
+        return;
+      }
+      
+      // Find all active drivers within the specified radius with full information
+      const nearbyDrivers = await User.find({
+        role: 'driver',
+        isActive: true,
+        currentLocation: {
+          $near: {
+            $geometry: {
+              type: 'Point',
+              coordinates: [longitude, latitude]
+            },
+            $maxDistance: radius * 1000 // Convert km to meters
+          }
+        }
+      })
+      .select('-password -refreshToken');
+      
+      // Get driver IDs for vehicle lookup
+      const driverIds = nearbyDrivers.map(driver => driver._id);
+      
+      // Find vehicles for these drivers
+      const vehicles = await Vehicle.find({ 
+        userId: { $in: driverIds },
+        isActive: true 
+      }).select('userId vehicleType serviceType brand model year color licensePlate');
+      
+      // Create a map of driver ID to vehicles
+      const driverVehiclesMap = {};
+      vehicles.forEach(vehicle => {
+        if (!driverVehiclesMap[vehicle.userId.toString()]) {
+          driverVehiclesMap[vehicle.userId.toString()] = [];
+        }
+        driverVehiclesMap[vehicle.userId.toString()].push(vehicle);
+      });
+      
+      // Format driver data with comprehensive information
+      const formattedDrivers = nearbyDrivers.map(driver => {
+        const distance = calculateDistance(
+          { lat: latitude, lng: longitude },
+          { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+        );
+        
+        return {
+          // Driver basic info
+          driverId: driver._id,
+          username: driver.username,
+          email: driver.email,
+          phone: driver.phone,
+          profilePicture: driver.profilePicture,
+          
+          // Driver status and activity
+          isActive: driver.isActive,
+          isOnline: driver.isOnline,
+          driverStatus: driver.driverStatus,
+          lastActiveAt: driver.lastActiveAt,
+          
+          // Location and distance
+          coordinates: driver.currentLocation.coordinates,
+          currentLocation: driver.currentLocation,
+          distance: distance,
+          
+          // Driver performance
+          rating: driver.rating || 0,
+          completedRides: driver.completedRides || 0,
+          totalEarnings: driver.totalEarnings || 0,
+          
+          // Vehicle information
+          vehicles: driverVehiclesMap[driver._id.toString()] || [],
+          
+          // KYC and verification
+          kycLevel: driver.kycLevel,
+          kycStatus: driver.kycStatus,
+          isVerified: driver.isVerified,
+          
+          // Additional driver details
+          role: driver.role,
+          gender: driver.gender,
+          dateOfBirth: driver.dateOfBirth,
+          address: driver.address,
+          emergencyContact: driver.emergencyContact
+        };
+      });
+      
+      // Sort by distance
+      formattedDrivers.sort((a, b) => a.distance - b.distance);
+      
+      socket.emit('nearby_drivers_radius_response', {
+        success: true,
+        drivers: formattedDrivers,
+        driversCount: formattedDrivers.length,
+        searchLocation: { coordinates: [longitude, latitude] },
+        radius: radius,
+        timestamp: new Date()
+      });
+      
+      console.log(`Found ${formattedDrivers.length} drivers within ${radius}km for user ${socket.user._id}`);
+      
+    } catch (error) {
+      console.error('Error getting nearby drivers by radius:', error);
+      socket.emit('nearby_drivers_radius_error', { 
+        message: 'Failed to get nearby drivers',
+        error: error.message 
+      });
+    }
+  });
+
+  // Get live location for users and drivers
+  socket.on('get_live_location', async (data) => {
+    console.log('=== SOCKET: GET LIVE LOCATION ===');
+    console.log('User:', socket.user.email);
+    console.log('Request Data:', data);
+    
+    try {
+      const { userId, userType } = data;
+      
+      // If no userId provided, return current user's location
+      const targetUserId = userId || socket.user._id;
+      
+      // Get user from database with current location
+      const user = await SocketDatabaseService.getUserById(targetUserId);
+      
+      if (!user) {
+        socket.emit('live_location_error', { 
+          message: 'User not found',
+          userId: targetUserId 
+        });
+        return;
+      }
+      
+      // Check if user has location data
+      if (!user.currentLocation || !user.currentLocation.coordinates) {
+        socket.emit('live_location_response', {
+          success: true,
+          userId: user._id,
+          username: user.username,
+          role: user.role,
+          location: null,
+          message: 'No location data available',
+          timestamp: new Date()
+        });
+        return;
+      }
+      
+      // Return live location data
+      socket.emit('live_location_response', {
+        success: true,
+        userId: user._id,
+        username: user.username,
+        role: user.role,
+        location: {
+          type: user.currentLocation.type,
+          coordinates: user.currentLocation.coordinates,
+          lastUpdated: user.currentLocation.lastUpdated || new Date()
+        },
+        timestamp: new Date()
+      });
+      
+      console.log(`Sent live location for user ${user._id} (${user.role}) to ${socket.user.email}`);
+      
+    } catch (error) {
+      console.error('Error getting live location:', error);
+      socket.emit('live_location_error', { 
+        message: 'Failed to get live location',
+        error: error.message 
+      });
     }
   });
 
@@ -1616,10 +2197,8 @@ export const findNearbyDrivers = async (booking, io = null) => {
     for (const driver of drivers) {
       if (driver.currentLocation && driver.currentLocation.coordinates) {
         const distance = calculateDistance(
-          booking.pickupLocation.coordinates[1],
-          booking.pickupLocation.coordinates[0],
-          driver.currentLocation.coordinates[1],
-          driver.currentLocation.coordinates[0]
+          { lat: booking.pickupLocation.coordinates[1], lng: booking.pickupLocation.coordinates[0] },
+          { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
         );
 
         if (distance <= maxRadius) {

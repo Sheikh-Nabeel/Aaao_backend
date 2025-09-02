@@ -21,12 +21,15 @@ import appointmentRoutes from "./routes/appointmentRoutes.js"; // Added appointm
 import fareEstimationRoutes from "./routes/fareEstimationRoutes.js"; // Added fare estimation routes
 import walletRoutes from "./routes/walletRoutes.js"; // Added wallet routes
 import emailVerificationRoutes from "./routes/emailVerificationRoutes.js"; // Added email verification routes
+import driverStatusRoutes from "./routes/driverStatusRoutes.js"; // Added driver status routes
+import qualifiedDriversRoutes from "./routes/qualifiedDriversRoutes.js"; // Added qualified drivers routes
 
 import cloudinary from "cloudinary";
 import "colors";
 import path from "path";
 import { fileURLToPath } from "url";
 import { handleBookingEvents } from "./utils/socketHandlers.js";
+import { initializeDriverStatusSocket } from "./utils/driverStatusSocket.js";
 import jwt from "jsonwebtoken";
 import userModel from "./models/userModel.js";
 import queryOptimizer from "./utils/queryOptimizer.js";
@@ -104,6 +107,9 @@ app.use("/api/appointments", appointmentRoutes); // Added appointment routes
 app.use("/api/fare", fareEstimationRoutes); // Added fare estimation routes
 app.use("/api/wallet", walletRoutes); // Added wallet routes
 app.use("/api/email-verification", emailVerificationRoutes); // Added email verification routes
+app.use("/api/driver-status", driverStatusRoutes); // Added driver status routes
+app.use("/api/qualified-drivers", qualifiedDriversRoutes); // Added qualified drivers routes
+app.use("/api/nearby-drivers", qualifiedDriversRoutes); // Added nearby drivers routes
 
 // Initialize server function
 const initializeServer = async () => {
@@ -204,7 +210,10 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
       console.log(`Authenticated user disconnected: ${socket.id} - ${socket.user.email}`.red);
     });
-  });
+});
+
+// Initialize driver status socket handlers
+initializeDriverStatusSocket(io);
   
   // Make io accessible to other modules
   app.set('io', io);
@@ -225,3 +234,5 @@ initializeServer();
 
 // Export io for use in other modules
 export { io };
+
+
