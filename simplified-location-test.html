@@ -225,6 +225,10 @@
             <input type="number" id="estimatedFare" placeholder="Auto-calculated" readonly style="background-color: #f8f9fa;">
         </div>
         <div>
+            <label>Driver ID (Optional):</label>
+            <input type="text" id="driverId" placeholder="Enter specific driver ID (optional)">
+        </div>
+        <div>
             <button onclick="getFareEstimation()">💰 Get Fare Estimation</button>
             <button onclick="sendBookingRequest()">📞 Send Booking Request</button>
             <button onclick="setBookingDefaults()">🏍️ Set Booking Defaults</button>
@@ -669,6 +673,8 @@
                 }
             }
             
+            const driverId = document.getElementById('driverId').value.trim();
+            
             const bookingData = {
                 pickupLocation: {
                     type: 'Point',
@@ -686,8 +692,14 @@
                 estimatedFare: estimatedFare
             };
             
+            // Add driverId if provided
+            if (driverId) {
+                bookingData.driverId = driverId;
+            }
+            
             socket.emit('send_booking_request_to_qualified_drivers', bookingData);
-            log(`📞 Sent booking request for ${vehicleType} ${serviceType} service from [${pickupLongitude}, ${pickupLatitude}] to [${dropoffLongitude}, ${dropoffLatitude}] with fare ₹${estimatedFare}`, 'info');
+            const targetInfo = driverId ? ` to specific driver ${driverId}` : ' to all qualified drivers';
+            log(`📞 Sent booking request for ${vehicleType} ${serviceType} service from [${pickupLongitude}, ${pickupLatitude}] to [${dropoffLongitude}, ${dropoffLatitude}] with fare ₹${estimatedFare}${targetInfo}`, 'info');
         }
         
         function setBookingDefaults() {
