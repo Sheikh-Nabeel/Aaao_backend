@@ -90,10 +90,29 @@ const comprehensivePricingSchema = new mongoose.Schema({
           baseFare: { type: Number, default: 65 }, 
           perKmRate: { type: Number, default: 8.5 }
         }
-      }
+      },
+      // Minimum fare for car cab service
+      minimumFare: { type: Number, default: 40 } // AED 40 for car cabs
     },
     bike: {
       enabled: { type: Boolean, default: true },
+      vehicleTypes: {
+        economy: { 
+          baseFare: { type: Number, default: 20 }, 
+          perKmRate: { type: Number, default: 3 }
+        },
+        premium: { 
+          baseFare: { type: Number, default: 25 }, 
+          perKmRate: { type: Number, default: 4 }
+        },
+        vip: { 
+          baseFare: { type: Number, default: 30 }, 
+          perKmRate: { type: Number, default: 5 }
+        }
+      },
+      // Minimum fare for bike service
+      minimumFare: { type: Number, default: 15 }, // AED 15 for bikes
+      // Fallback for backward compatibility
       baseFare: { type: Number, default: 25 },
       perKmRate: { type: Number, default: 4 }
     },
@@ -137,7 +156,25 @@ const comprehensivePricingSchema = new mongoose.Schema({
       waitingCharges: {
         freeMinutes: { type: Number, default: 5 }, // Free wait: 5 minutes
         perMinuteRate: { type: Number, default: 2 }, // After 5 mins → AED 2/minute
-        maximumCharge: { type: Number, default: 20 } // Stop charging after AED 20 cap
+        maximumCharge: { type: Number, default: 20 }, // Stop charging after AED 20 cap
+        driverControlPopup: {
+          enabled: { type: Boolean, default: true },
+          popupTitle: { type: String, default: "Free Stay Time Ended – Select Action" },
+          driverOptions: {
+            continueNoCharges: {
+              label: { type: String, default: "Continue – No Overtime Charges" },
+              description: { type: String, default: "Driver is okay to still wait, overtime won't start" }
+            },
+            startOvertimeCharges: {
+              label: { type: String, default: "Start Overtime Charges" },
+              description: { type: String, default: "Driver wants the system to begin charging the customer" }
+            }
+          },
+          failsafeCondition: {
+            autoStart: { type: Boolean, default: false }, // If driver doesn't press any button, overtime does NOT start automatically
+            description: { type: String, default: "System keeps waiting until driver makes a choice" }
+          }
+        }
       },
       
       // Night charges (22:00–06:00)

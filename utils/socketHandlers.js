@@ -704,10 +704,12 @@ export const handleBookingEvents = (socket, io) => {
         dropoffLocation,
         serviceType,
         vehicleType,
+        routeType = 'one_way',
         driverPreference = 'any',
         estimatedFare,
         paymentMethod,
-        notes
+        notes,
+        driverId
       } = data;
       
       // Validate required fields
@@ -723,6 +725,85 @@ export const handleBookingEvents = (socket, io) => {
       
       if (!serviceType || !vehicleType) {
         socket.emit('booking_request_error', { message: 'Service type and vehicle type are required' });
+        return;
+      }
+      
+      // If driverId is specified, target only that specific driver
+      if (driverId) {
+        console.log(`Targeting specific driver: ${driverId}`);
+        
+        // Validate that the driver exists and is available
+        const specificDriver = await User.findOne({
+          _id: driverId,
+          role: 'driver',
+          kycLevel: 2,
+          kycStatus: 'approved',
+          isActive: true,
+          driverStatus: 'online',
+          currentLocation: { $exists: true }
+        });
+        
+        if (!specificDriver) {
+          socket.emit('booking_request_error', { message: 'Specified driver is not available' });
+          return;
+        }
+        
+        // Check if driver has a matching vehicle
+        const driverVehicle = await Vehicle.findOne({
+          userId: driverId,
+          serviceType: serviceType,
+          vehicleType: vehicleType,
+          isActive: true
+        });
+        
+        if (!driverVehicle) {
+          socket.emit('booking_request_error', { message: 'Specified driver does not have a matching vehicle for this service' });
+          return;
+        }
+        
+        // Check if driver is connected via socket
+        const driverSocketId = getDriverSocketId(driverId);
+        if (!driverSocketId) {
+          socket.emit('booking_request_error', { message: 'Specified driver is not currently connected' });
+          return;
+        }
+        
+        // Create booking request for specific driver
+        const bookingRequest = {
+          requestId: new Date().getTime().toString(),
+          userId: socket.user._id,
+          userInfo: {
+            name: socket.user.name,
+            email: socket.user.email,
+            phone: socket.user.phone
+          },
+          pickupLocation,
+          dropoffLocation,
+          serviceType,
+          vehicleType,
+          routeType,
+          driverPreference,
+          estimatedFare,
+          paymentMethod,
+          notes,
+          timestamp: new Date(),
+          status: 'pending',
+          targetDriverId: driverId
+        };
+        
+        // Send booking request to specific driver
+        console.log(`Sending booking request to specific driver ${driverId} via socket ${driverSocketId}`);
+        io.to(driverSocketId).emit('new_booking_request', bookingRequest);
+        
+        // Respond to the user
+        socket.emit('booking_request_sent', {
+          success: true,
+          requestId: bookingRequest.requestId,
+          driversNotified: 1,
+          targetDriverId: driverId,
+          message: `Booking request sent to specific driver`
+        });
+        
         return;
       }
       
@@ -861,6 +942,7 @@ export const handleBookingEvents = (socket, io) => {
         dropoffLocation,
         serviceType,
         vehicleType,
+        routeType,
         driverPreference,
         estimatedFare,
         paymentMethod,

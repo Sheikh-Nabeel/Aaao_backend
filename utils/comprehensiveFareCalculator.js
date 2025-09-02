@@ -161,8 +161,17 @@ const calculateComprehensiveFare = async (bookingData) => {
         perKmRate = vehicleConfig.perKmRate;
       }
     } else if (serviceType === 'bike' && pricingConfig.serviceTypes.bike.enabled) {
-      baseFare = pricingConfig.serviceTypes.bike.baseFare;
-      perKmRate = pricingConfig.serviceTypes.bike.perKmRate;
+      // Check if vehicle-specific pricing is available for bikes
+      const vehicleConfig = pricingConfig.serviceTypes.bike.vehicleTypes && pricingConfig.serviceTypes.bike.vehicleTypes[vehicleType];
+      
+      if (vehicleConfig) {
+        baseFare = vehicleConfig.baseFare;
+        perKmRate = vehicleConfig.perKmRate;
+      } else {
+        // Fallback to default bike pricing
+        baseFare = pricingConfig.serviceTypes.bike.baseFare;
+        perKmRate = pricingConfig.serviceTypes.bike.perKmRate;
+      }
     } else if (normalizedServiceType === 'car_recovery' || serviceType === 'car recovery') {
       const recoveryConfig = pricingConfig.serviceTypes.carRecovery;
       
@@ -253,49 +262,63 @@ const calculateComprehensiveFare = async (bookingData) => {
     // Calculate subtotal before additional charges
     fareBreakdown.subtotal = fareBreakdown.baseFare + fareBreakdown.distanceFare;
     
-    // Apply route type multiplier for round trips
-    if (routeType === 'round_trip' || routeType === 'two_way') {
-      fareBreakdown.subtotal *= 1.8; // 80% additional for return trip
-      
-      // Calculate free stay minutes
-      const freeStayMinutes = calculateFreeStayMinutes(distance, pricingConfig.roundTrip);
-      if (freeStayMinutes > 0) {
-        fareBreakdown.breakdown.freeStayMinutes = freeStayMinutes;
+    // Apply route type multiplier for round trips (exclude car recovery)
+    if ((routeType === 'round_trip' || routeType === 'two_way') && serviceType !== 'car recovery') {
+      fareBreakdown.roundTripMultiplier = 1.8;
+      fareBreakdown.subtotal *= fareBreakdown.roundTripMultiplier;
+    }
+    
+    // Calculate free stay minutes
+    const freeStayMinutes = calculateFreeStayMinutes(distance, pricingConfig.roundTrip);
+    if (freeStayMinutes > 0) {
+      fareBreakdown.breakdown.freeStayMinutes = freeStayMinutes;
+    }
+    
+    // Check for refreshment alert
+    if (shouldShowRefreshmentAlert(distance, estimatedDuration, pricingConfig.roundTrip, serviceType, pricingConfig.serviceTypes.carRecovery)) {
+      if (serviceType === 'car recovery') {
+        fareBreakdown.alerts.push({
+          type: 'refreshment_alert',
+          title: pricingConfig.serviceTypes.carRecovery.refreshmentAlert.popupTitle,
+          options: pricingConfig.serviceTypes.carRecovery.refreshmentAlert.driverOptions
+        });
+      } else {
+        fareBreakdown.alerts.push('Refreshment recommended for long trip');
       }
-      
-      // Check for refreshment alert
-      if (shouldShowRefreshmentAlert(distance, estimatedDuration, pricingConfig.roundTrip, serviceType, pricingConfig.serviceTypes.carRecovery)) {
-        if (serviceType === 'car recovery') {
+    }
+    
+    // Calculate car recovery specific free stay minutes for round trips
+    if (serviceType === 'car recovery' && pricingConfig.serviceTypes.carRecovery.freeStayMinutes.enabled) {
+      const carRecoveryFreeStay = calculateCarRecoveryFreeStay(distance, pricingConfig.serviceTypes.carRecovery.freeStayMinutes);
+      if (carRecoveryFreeStay > 0) {
+        fareBreakdown.breakdown.carRecoveryFreeStayMinutes = carRecoveryFreeStay;
+        
+        // Add notification alerts
+        if (pricingConfig.serviceTypes.carRecovery.freeStayMinutes.notifications.fiveMinRemaining) {
           fareBreakdown.alerts.push({
-            type: 'refreshment_alert',
-            title: pricingConfig.serviceTypes.carRecovery.refreshmentAlert.popupTitle,
-            options: pricingConfig.serviceTypes.carRecovery.refreshmentAlert.driverOptions
+            type: 'free_stay_warning',
+            message: '5 minutes remaining for free stay'
           });
-        } else {
-          fareBreakdown.alerts.push('Refreshment recommended for long trip');
-        }
-      }
-      
-      // Calculate car recovery specific free stay minutes for round trips
-      if (serviceType === 'car recovery' && pricingConfig.serviceTypes.carRecovery.freeStayMinutes.enabled) {
-        const carRecoveryFreeStay = calculateCarRecoveryFreeStay(distance, pricingConfig.serviceTypes.carRecovery.freeStayMinutes);
-        if (carRecoveryFreeStay > 0) {
-          fareBreakdown.breakdown.carRecoveryFreeStayMinutes = carRecoveryFreeStay;
-          
-          // Add notification alerts
-          if (pricingConfig.serviceTypes.carRecovery.freeStayMinutes.notifications.fiveMinRemaining) {
-            fareBreakdown.alerts.push({
-              type: 'free_stay_warning',
-              message: '5 minutes remaining for free stay'
-            });
-          }
         }
       }
     }
     
-    // 2. Apply minimum fare
-    if (fareBreakdown.subtotal < pricingConfig.minimumFare) {
-      fareBreakdown.subtotal = pricingConfig.minimumFare;
+    // Calculate subtotal and apply charges
+    
+    // 2. Apply minimum fare (service-specific)
+    let minimumFare = pricingConfig.minimumFare; // Default global minimum fare
+    
+    // Check for service-specific minimum fare
+    if (serviceType === 'car_cab' && pricingConfig.serviceTypes.carCab.minimumFare) {
+      minimumFare = pricingConfig.serviceTypes.carCab.minimumFare;
+    } else if (serviceType === 'bike' && pricingConfig.serviceTypes.bike.minimumFare) {
+      minimumFare = pricingConfig.serviceTypes.bike.minimumFare;
+    } else if ((normalizedServiceType === 'car_recovery' || serviceType === 'car recovery') && pricingConfig.serviceTypes.carRecovery.minimumFare) {
+      minimumFare = pricingConfig.serviceTypes.carRecovery.minimumFare;
+    }
+    
+    if (fareBreakdown.subtotal < minimumFare) {
+      fareBreakdown.subtotal = minimumFare;
       fareBreakdown.breakdown.minimumFareApplied = true;
     }
     
