@@ -109,6 +109,12 @@ const initializePricing = async () => {
         },
         bike: {
           enabled: true,
+          vehicleTypes: {
+            economy: { baseFare: 20, perKmRate: 3 },
+            premium: { baseFare: 25, perKmRate: 4 },
+            vip: { baseFare: 30, perKmRate: 5 }
+          },
+          // Fallback for backward compatibility
           baseFare: 25,
           perKmRate: 4
         },

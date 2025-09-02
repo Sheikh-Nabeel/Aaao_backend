@@ -221,6 +221,11 @@
             </select>
         </div>
         <div>
+            <label>Estimated Fare (₹):</label>
+            <input type="number" id="estimatedFare" placeholder="Auto-calculated" readonly style="background-color: #f8f9fa;">
+        </div>
+        <div>
+            <button onclick="getFareEstimation()">💰 Get Fare Estimation</button>
             <button onclick="sendBookingRequest()">📞 Send Booking Request</button>
             <button onclick="setBookingDefaults()">🏍️ Set Booking Defaults</button>
         </div>
@@ -566,6 +571,75 @@
             log('🏍️ Set bike defaults: serviceType=bike, vehicleType=economy', 'info');
         }
         
+        async function getFareEstimation() {
+            const pickupLongitude = parseFloat(document.getElementById('bookingPickupLongitude').value);
+            const pickupLatitude = parseFloat(document.getElementById('bookingPickupLatitude').value);
+            const dropoffLongitude = parseFloat(document.getElementById('bookingDropoffLongitude').value);
+            const dropoffLatitude = parseFloat(document.getElementById('bookingDropoffLatitude').value);
+            const serviceType = document.getElementById('bookingServiceType').value;
+            const vehicleType = document.getElementById('bookingVehicleType').value;
+            const routeType = document.getElementById('routeType').value;
+            
+            if (isNaN(pickupLongitude) || isNaN(pickupLatitude) || isNaN(dropoffLongitude) || isNaN(dropoffLatitude)) {
+                alert('Please enter valid pickup and dropoff coordinates');
+                return;
+            }
+            
+            // Calculate distance in meters (approximate)
+            const distanceInMeters = calculateDistance(pickupLatitude, pickupLongitude, dropoffLatitude, dropoffLongitude) * 1000;
+            
+            const fareRequestData = {
+                pickupLocation: {
+                    coordinates: [pickupLongitude, pickupLatitude],
+                    address: 'Pickup Location'
+                },
+                dropoffLocation: {
+                    coordinates: [dropoffLongitude, dropoffLatitude],
+                    address: 'Dropoff Location'
+                },
+                serviceType: serviceType,
+                vehicleType: vehicleType,
+                routeType: routeType,
+                distanceInMeters: distanceInMeters
+            };
+            
+            try {
+                const response = await fetch('/api/fare/estimate-fare', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${document.getElementById('userToken').value}`
+                    },
+                    body: JSON.stringify(fareRequestData)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
+                    const estimatedFare = result.data.estimatedFare;
+                    document.getElementById('estimatedFare').value = estimatedFare;
+                    log(`💰 Fare estimated: ₹${estimatedFare} for ${distanceInMeters.toFixed(0)}m distance`, 'success');
+                } else {
+                    log(`❌ Fare estimation failed: ${result.message || 'Unknown error'}`, 'error');
+                    alert('Failed to get fare estimation: ' + (result.message || 'Unknown error'));
+                }
+            } catch (error) {
+                log(`❌ Fare estimation error: ${error.message}`, 'error');
+                alert('Error getting fare estimation: ' + error.message);
+            }
+        }
+        
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Radius of the Earth in kilometers
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c; // Distance in kilometers
+        }
+        
         function sendBookingRequest() {
             if (!socket || !socket.connected) {
                 alert('Please connect first');
@@ -581,10 +655,18 @@
             const routeType = document.getElementById('routeType').value;
             const passengerCount = parseInt(document.getElementById('passengerCount').value) || 1;
             const paymentMethod = document.getElementById('paymentMethod').value;
+            const estimatedFare = parseFloat(document.getElementById('estimatedFare').value) || 0;
             
             if (isNaN(pickupLongitude) || isNaN(pickupLatitude) || isNaN(dropoffLongitude) || isNaN(dropoffLatitude)) {
                 alert('Please enter valid coordinates');
                 return;
+            }
+            
+            if (estimatedFare === 0) {
+                const confirmSend = confirm('No fare estimation found. Do you want to send the booking request anyway?');
+                if (!confirmSend) {
+                    return;
+                }
             }
             
             const bookingData = {
@@ -600,11 +682,12 @@
                 vehicleType: vehicleType,
                 routeType: routeType,
                 passengerCount: passengerCount,
-                paymentMethod: paymentMethod
+                paymentMethod: paymentMethod,
+                estimatedFare: estimatedFare
             };
             
             socket.emit('send_booking_request_to_qualified_drivers', bookingData);
-            log(`📞 Sent booking request for ${vehicleType} ${serviceType} service from [${pickupLongitude}, ${pickupLatitude}] to [${dropoffLongitude}, ${dropoffLatitude}]`, 'info');
+            log(`📞 Sent booking request for ${vehicleType} ${serviceType} service from [${pickupLongitude}, ${pickupLatitude}] to [${dropoffLongitude}, ${dropoffLatitude}] with fare ₹${estimatedFare}`, 'info');
         }
         
         function setBookingDefaults() {
