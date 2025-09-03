@@ -1,6 +1,7 @@
 import User from "../models/userModel.js";
 import Vehicle from "../models/vehicleModel.js";
 import asyncHandler from "express-async-handler";
+import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import mongoose from "mongoose";
@@ -2069,114 +2070,229 @@ const getAllDrivers = asyncHandler(async (req, res) => {
 });
 
 const addAdmin = asyncHandler(async (req, res) => {
-  const { username,firstName, email, phoneNumber, password, permissions } = req.body;
+  const { username, firstName, email, phoneNumber, password, permissions } = req.body;
 
-  // Validate required fields
-  if (
-    !username ||
-    !firstName ||
-    !email ||
-    !phoneNumber ||
-    !password ||
-    !permissions
-  ) {
+  if (!username || !firstName || !email || !phoneNumber || !password || !permissions) {
     res.status(400);
-    throw new Error(
-      "Username,firstName, email, phone number, password, and permissions are required"
-    );
+    throw new Error('All fields are required');
   }
 
-  // Check if the requesting user is a superadmin
   const requestingUser = await User.findById(req.user._id);
-  if (!requestingUser || requestingUser.role !== "superadmin") {
+  if (!requestingUser || requestingUser.role !== 'superadmin') {
     res.status(403);
-    throw new Error("Only superadmins can add admins");
+    throw new Error('Only superadmins can add admins');
   }
 
-  // Validate email and phone number uniqueness
-  const existingEmail = await User.findOne({ email });
-  const existingPhone = await User.findOne({ phoneNumber });
+  const errors = {};
+
+  const existingUsername = await User.findOne({ username });
+  if (existingUsername) {
+    errors.username = 'This username is already taken';
+  } else if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+    errors.username = 'Username can only contain letters, numbers, and underscores';
+  } else if (username.length < 3 || username.length > 30) {
+    errors.username = 'Username must be between 3 and 30 characters';
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const existingEmail = await User.findOne({ email: normalizedEmail });
   if (existingEmail) {
-    res.status(400);
-    throw new Error("This email is already registered");
+    errors.email = 'This email is already registered';
   }
+
+  const existingPhone = await User.findOne({ phoneNumber });
   if (existingPhone) {
-    res.status(400);
-    throw new Error("This phone number is already registered");
+    errors.phoneNumber = 'This phone number is already registered';
   }
 
-  // Validate username
-  if (
-    !/^[a-zA-Z0-9_]+$/.test(username) ||
-    username.length < 3 ||
-    username.length > 30
-  ) {
-    res.status(400);
-    throw new Error(
-      "Username must be between 3 and 30 characters and contain only letters, numbers, and underscores"
-    );
+  if (password.length < 8) {
+    errors.password = 'Password must be at least 8 characters long';
   }
 
-  // Validate phone number length (10-13 characters)
-  if (phoneNumber.length < 10 || phoneNumber.length > 13) {
-    res.status(400);
-    throw new Error(
-      "Phone number must be between 10 and 13 characters including country code"
-    );
-  }
-
-  // Validate permissions
   const validPermissions = [
-    "mlm",
-    "home",
-    "dispatch",
-    "drivermanagement",
-    "customermanagement",
-    "proposalmanagement",
-    "overview",
-    "paymentoverview",
-    "chatdetail",
-    "kycverification",
-    "reportanalytics",
-    "reviewandrating",
+    'mlm', 'home', 'dispatch', 'drivermanagement', 'customermanagement',
+    'proposalmanagement', 'overview', 'paymentoverview', 'chatdetail',
+    'kycverification', 'reportanalytics', 'reviewandrating', 'adminmanagement',
   ];
-  if (
-    !Array.isArray(permissions) ||
-    !permissions.every((p) => validPermissions.includes(p))
-  ) {
-    res.status(400);
-    throw new Error(
-      "Permissions must be a valid array containing mlm, kycApproval, userManagement, or dashboard"
-    );
+  if (!Array.isArray(permissions) || !permissions.every(p => validPermissions.includes(p))) {
+    errors.permissions = 'Invalid permissions provided';
   }
 
-  // Create the admin user
-  const admin = await User.create({
+  if (Object.keys(errors).length > 0) {
+    res.status(400).json({ errors });
+    return;
+  }
+
+  const newAdmin = await User.create({
     username,
     firstName,
-    email: email.trim().toLowerCase(),
+    email: normalizedEmail,
     phoneNumber,
-    password,
-    role: "admin",
+    password, // Pass raw password, let middleware hash it
+    role: 'admin',
     adminPermissions: permissions,
     isVerified: true,
-    sponsorId: `${uuidv4().split("-")[0]}-${Date.now().toString().slice(-6)}`,
+    referralId: uuidv4(),
   });
 
   res.status(201).json({
     success: true,
-    message: "Admin added successfully",
+    message: 'Admin created successfully',
     admin: {
-      userId: admin._id,
-      username: admin.username,
-      firstName: admin.firstName,
-      email: admin.email,
-      phoneNumber: admin.phoneNumber,
-      role: admin.role,
-      adminPermissions: admin.adminPermissions,
+      _id: newAdmin._id,
+      username: newAdmin.username,
+      firstName: newAdmin.firstName,
+      email: newAdmin.email,
+      phoneNumber: newAdmin.phoneNumber,
+      adminPermissions: newAdmin.adminPermissions,
     },
   });
 });
+const getAdmins = asyncHandler(async (req, res) => {
+  const requestingUser = await User.findById(req.user._id);
+  if (!requestingUser || requestingUser.role !== 'superadmin') {
+    res.status(403);
+    throw new Error('Only superadmins can view admins');
+  }
+
+  const admins = await User.find({ role: 'admin' })
+    .select('username firstName lastName email phoneNumber adminPermissions')
+    .sort({ createdAt: -1 });
+
+  res.status(200).json({
+    success: true,
+    message: 'Admins retrieved successfully',
+    admins,
+    totalAdmins: admins.length,
+  });
+});
+
+const editAdmin = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const { username, firstName, email, phoneNumber, permissions } = req.body;
+
+  if (!userId) {
+    res.status(400);
+    throw new Error('User ID is required');
+  }
+
+  const requestingUser = await User.findById(req.user._id);
+  if (!requestingUser || requestingUser.role !== 'superadmin') {
+    res.status(403);
+    throw new Error('Only superadmins can edit admins');
+  }
+
+  const admin = await User.findById(userId);
+  if (!admin || admin.role !== 'admin') {
+    res.status(404);
+    throw new Error('Admin not found');
+  }
+
+  const errors = {};
+
+  if (username) {
+    const existingUsername = await User.findOne({ username, _id: { $ne: userId } });
+    if (existingUsername) {
+      errors.username = 'This username is already taken';
+    } else if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      errors.username = 'Username can only contain letters, numbers, and underscores';
+    } else if (username.length < 3 || username.length > 30) {
+      errors.username = 'Username must be between 3 and 30 characters';
+    }
+  }
+
+  if (email) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const existingEmail = await User.findOne({ email: normalizedEmail, _id: { $ne: userId } });
+    if (existingEmail) {
+      errors.email = 'This email is already registered';
+    }
+  }
+
+  if (phoneNumber) {
+    const existingPhone = await User.findOne({ phoneNumber, _id: { $ne: userId } });
+    if (existingPhone) {
+      errors.phoneNumber = 'This phone number is already registered';
+    }
+  }
+
+  const validPermissions = [
+    'mlm', 'home', 'dispatch', 'drivermanagement', 'customermanagement',
+    'proposalmanagement', 'overview', 'paymentoverview', 'chatdetail',
+    'kycverification', 'reportanalytics', 'reviewandrating', 'adminmanagement',
+  ];
+  if (permissions && (!Array.isArray(permissions) || !permissions.every(p => validPermissions.includes(p)))) {
+    errors.permissions = 'Invalid permissions provided';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    res.status(400).json({ errors });
+    return;
+  }
+
+  const updateData = {};
+  if (username) updateData.username = username;
+  if (firstName) updateData.firstName = firstName;
+  if (email) updateData.email = email.trim().toLowerCase();
+  if (phoneNumber) updateData.phoneNumber = phoneNumber;
+  if (permissions) updateData.adminPermissions = permissions;
+
+  const updatedAdmin = await User.findByIdAndUpdate(userId, updateData, {
+    new: true,
+    runValidators: true,
+  }).select('username firstName email phoneNumber adminPermissions');
+
+  res.status(200).json({
+    success: true,
+    message: 'Admin updated successfully',
+    admin: updatedAdmin,
+  });
+});
+
+const deleteAdmin = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    res.status(400);
+    throw new Error('User ID is required');
+  }
+
+  const requestingUser = await User.findById(req.user._id);
+  if (!requestingUser || requestingUser.role !== 'superadmin') {
+    res.status(403);
+    throw new Error('Only superadmins can delete admins');
+  }
+
+  const admin = await User.findById(userId);
+  if (!admin || admin.role !== 'admin') {
+    res.status(404);
+    throw new Error('Admin not found');
+  }
+
+  await User.findByIdAndDelete(userId);
+
+  res.status(200).json({
+    success: true,
+    message: 'Admin deleted successfully',
+    userId,
+  });
+});
+
+const getCurrentUser = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).select('role adminPermissions');
+  if (!user) {
+    res.status(404);
+    throw new Error('User not found');
+  }
+  res.status(200).json({
+    success: true,
+    user: {
+      role: user.role,
+      adminPermissions: user.adminPermissions,
+    },
+  });
+});
+
 
 export {
   signupUser,
@@ -2211,4 +2327,9 @@ export {
   getAllCustomers, // Added new controller
   getAllDrivers,
   addAdmin,
+  getAdmins,
+  editAdmin,
+  deleteAdmin,
+  getCurrentUser,
+
 };

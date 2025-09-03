@@ -31,7 +31,11 @@ import {
   getAllCustomers,
   getAllDrivers,
   editDriver,
-  addAdmin, // New import
+  addAdmin,
+  getCurrentUser,
+  getAdmins,
+  editAdmin,
+  deleteAdmin, // New import
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -50,6 +54,7 @@ import fs from "fs";
 import authHandler from "../middlewares/authMIddleware.js";
 import adminMiddleware from "../middlewares/adminMiddleware.js";
 import superadminAuth from "../middlewares/superadminAuth.js";
+import adminHandler from "../middlewares/adminMiddleware.js";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -167,5 +172,10 @@ router.put(
   ]),
   editDriver
 );
-router.post("/admin/add-admin", authHandler, adminMiddleware, addAdmin);
+
+router.get('/me', authHandler, getCurrentUser);
+router.get('/admins', authHandler, adminHandler, getAdmins);
+router.post('/admin/add-admin', authHandler, adminHandler, addAdmin);
+router.put('/admin/edit-admin/:userId', authHandler, adminHandler, editAdmin);
+router.delete('/admin/delete-admin/:userId', authHandler, adminHandler, deleteAdmin);
 export default router;
