@@ -52,9 +52,9 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import authHandler from "../middlewares/authMIddleware.js";
-import adminMiddleware from "../middlewares/adminMiddleware.js";
-import superadminAuth from "../middlewares/superadminAuth.js";
 import adminHandler from "../middlewares/adminMiddleware.js";
+import superadminAuth from "../middlewares/superadminAuth.js";
+
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -111,15 +111,15 @@ router.get("/favorite-drivers", authHandler, getFavoriteDrivers);
 router.get("/nearby-drivers", authHandler, getNearbyDriversForUser);
 
 // Admin routes
-router.get("/pending-kycs", authHandler, adminMiddleware, getPendingKYCs);
-router.post("/approve-kyc", authHandler, adminMiddleware, approveKYC);
-router.post("/reject-kyc", authHandler, adminMiddleware, rejectKYC);
+router.get("/pending-kycs", authHandler, adminHandler, getPendingKYCs);
+router.post("/approve-kyc", authHandler, adminHandler, approveKYC);
+router.post("/reject-kyc", authHandler, adminHandler, rejectKYC);
 router.get("/referral-link", authHandler, getReferralLink);
-router.get("/all", authHandler, adminMiddleware, getAllUsers);
+router.get("/all", authHandler, adminHandler, getAllUsers);
 router.post(
   "/fix-referrals",
   authHandler,
-  adminMiddleware,
+  adminHandler,
   fixReferralRelationships
 );
 router.get("/referral-tree", authHandler, getReferralTree);
@@ -155,14 +155,14 @@ router.delete("/services/:serviceId", authHandler, deleteService);
 router.get("/available-services", authHandler, getAvailableServices);
 
 // New routes for delete and edit user
-router.delete("/delete/:userId", authHandler, adminMiddleware, deleteUser);
-router.patch("/edit/:userId", authHandler, adminMiddleware, editUser);
-router.get("/customers", authHandler, adminMiddleware, getAllCustomers);
-router.get("/drivers", authHandler, adminMiddleware, getAllDrivers);
+router.delete("/delete/:userId", authHandler, adminHandler, deleteUser);
+router.patch("/edit/:userId", authHandler, adminHandler, editUser);
+router.get("/customers", authHandler, adminHandler, getAllCustomers);
+router.get("/drivers", authHandler, adminHandler, getAllDrivers);
 router.put(
   "/edit-driver/:userId",
   authHandler,
-  adminMiddleware,
+  adminHandler,
   upload.fields([
     { name: "licenseImage", maxCount: 1 },
     { name: "vehicleRegistrationCard", maxCount: 1 },
@@ -173,9 +173,14 @@ router.put(
   editDriver
 );
 
-router.get('/me', authHandler, getCurrentUser);
-router.get('/admins', authHandler, adminHandler, getAdmins);
-router.post('/admin/add-admin', authHandler, adminHandler, addAdmin);
-router.put('/admin/edit-admin/:userId', authHandler, adminHandler, editAdmin);
-router.delete('/admin/delete-admin/:userId', authHandler, adminHandler, deleteAdmin);
+router.get("/me", authHandler, getCurrentUser);
+router.get("/admins", authHandler, adminHandler, getAdmins);
+router.post("/admin/add-admin", authHandler, adminHandler, addAdmin);
+router.put("/admin/edit-admin/:userId", authHandler, adminHandler, editAdmin);
+router.delete(
+  "/admin/delete-admin/:userId",
+  authHandler,
+  adminHandler,
+  deleteAdmin
+);
 export default router;
