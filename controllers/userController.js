@@ -2293,6 +2293,324 @@ const getCurrentUser = asyncHandler(async (req, res) => {
   });
 });
 
+const editProfile = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const {
+    username,
+    firstName,
+    lastName,
+    email,
+    phoneNumber,
+    gender,
+    country,
+    hasVehicle,
+    driverSettings,
+    vehicleOwnerName,
+    companyName,
+    vehiclePlateNumber,
+    vehicleMakeModel,
+    chassisNumber,
+    vehicleColor,
+    registrationExpiryDate,
+    vehicleType,
+    serviceType,
+    serviceCategory,
+    wheelchair,
+    packingHelper,
+    loadingUnloadingHelper,
+    fixingHelper,
+  } = req.body;
+
+  // Ensure the user is editing their own profile
+  if (userId !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error("You can only edit your own profile");
+  }
+
+  // Validate userId
+  if (!mongoose.isValidObjectId(userId)) {
+    res.status(400);
+    throw new Error("Invalid user ID format");
+  }
+
+  // Find the user
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  // Validation for common fields
+  const errors = {};
+
+  if (username) {
+    const existingUsername = await User.findOne({
+      username,
+      _id: { $ne: userId },
+    });
+    if (existingUsername) {
+      errors.username = "This username is already taken";
+    } else if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      errors.username = "Username can only contain letters, numbers, and underscores";
+    } else if (username.length < 3 || username.length > 30) {
+      errors.username = "Username must be between 3 and 30 characters";
+    }
+  }
+
+  if (email) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const existingEmail = await User.findOne({
+      email: normalizedEmail,
+      _id: { $ne: userId },
+    });
+    if (existingEmail) {
+      errors.email = "This email is already registered";
+    } else if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+      errors.email = "Please enter a valid email address";
+    }
+  }
+
+  if (phoneNumber) {
+    const existingPhone = await User.findOne({
+      phoneNumber,
+      _id: { $ne: userId },
+    });
+    if (existingPhone) {
+      errors.phoneNumber = "This phone number is already registered";
+    } else if (phoneNumber.length < 10 || phoneNumber.length > 13) {
+      errors.phoneNumber = "Phone number must be between 10 and 13 characters";
+    }
+  }
+
+  if (gender && !["Male", "Female", "Other"].includes(gender)) {
+    errors.gender = "Gender must be Male, Female, or Other";
+  }
+
+  if (hasVehicle && !["yes", "no", null].includes(hasVehicle)) {
+    errors.hasVehicle = "hasVehicle must be yes, no, or null";
+  }
+
+  // Driver-specific validation (only if user is a driver)
+  if (user.role === "driver") {
+    if (driverSettings) {
+      if (typeof driverSettings !== "object") {
+        errors.driverSettings = "driverSettings must be an object";
+      }
+    }
+
+    if (vehiclePlateNumber) {
+      const existingVehicle = await Vehicle.findOne({
+        vehiclePlateNumber,
+        _id: { $ne: user.pendingVehicleData },
+      });
+      if (existingVehicle) {
+        errors.vehiclePlateNumber = "This vehicle plate number is already registered";
+      }
+    }
+
+    if (chassisNumber) {
+      const existingVehicle = await Vehicle.findOne({
+        chassisNumber,
+        _id: { $ne: user.pendingVehicleData },
+      });
+      if (existingVehicle) {
+        errors.chassisNumber = "This chassis number is already registered";
+      }
+    }
+
+    if (wheelchair !== undefined && typeof wheelchair !== "boolean") {
+      errors.wheelchair = "wheelchair must be a boolean";
+    }
+
+    if (packingHelper !== undefined && typeof packingHelper !== "boolean") {
+      errors.packingHelper = "packingHelper must be a boolean";
+    }
+
+    if (loadingUnloadingHelper !== undefined && typeof loadingUnloadingHelper !== "boolean") {
+      errors.loadingUnloadingHelper = "loadingUnloadingHelper must be a boolean";
+    }
+
+    if (fixingHelper !== undefined && typeof fixingHelper !== "boolean") {
+      errors.fixingHelper = "fixingHelper must be a boolean";
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    res.status(400).json({ errors });
+    return;
+  }
+
+  // Handle file uploads
+  let licenseImagePath = user.licenseImage;
+  let vehicleRegistrationCardPath;
+  let roadAuthorityCertificatePath;
+  let insuranceCertificatePath;
+  let vehicleImagesPaths = [];
+  let selfieImagePath = user.selfieImage;
+
+  if (req.files) {
+    if (req.files.selfieImage) {
+      selfieImagePath = path.join("uploads", req.files.selfieImage[0].filename).replace(/\\/g, "/");
+    }
+    if (req.files.licenseImage) {
+      licenseImagePath = path.join("uploads", req.files.licenseImage[0].filename).replace(/\\/g, "/");
+    }
+    if (req.files.vehicleRegistrationCard) {
+      vehicleRegistrationCardPath = path.join("uploads", req.files.vehicleRegistrationCard[0].filename).replace(/\\/g, "/");
+    }
+    if (req.files.roadAuthorityCertificate) {
+      roadAuthorityCertificatePath = path.join("uploads", req.files.roadAuthorityCertificate[0].filename).replace(/\\/g, "/");
+    }
+    if (req.files.insuranceCertificate) {
+      insuranceCertificatePath = path.join("uploads", req.files.insuranceCertificate[0].filename).replace(/\\/g, "/");
+    }
+    if (req.files.vehicleImages) {
+      vehicleImagesPaths = req.files.vehicleImages.map((file) =>
+        path.join("uploads", file.filename).replace(/\\/g, "/")
+      );
+    }
+  }
+
+  // Update user fields
+  const updateData = {};
+  if (username) updateData.username = username;
+  if (firstName) updateData.firstName = firstName;
+  if (lastName !== undefined) updateData.lastName = lastName || "";
+  if (email) updateData.email = email.trim().toLowerCase();
+  if (phoneNumber) updateData.phoneNumber = phoneNumber;
+  if (gender) updateData.gender = gender;
+  if (country) updateData.country = country;
+  if (hasVehicle) updateData.hasVehicle = hasVehicle;
+  if (driverSettings) updateData.driverSettings = driverSettings;
+  if (licenseImagePath) updateData.licenseImage = licenseImagePath;
+  if (selfieImagePath) updateData.selfieImage = selfieImagePath;
+
+  // Update vehicle if user is a driver
+  let vehicle = null;
+  if (user.role === "driver" && (
+    vehicleOwnerName ||
+    companyName ||
+    vehiclePlateNumber ||
+    vehicleMakeModel ||
+    chassisNumber ||
+    vehicleColor ||
+    registrationExpiryDate ||
+    vehicleType ||
+    serviceType ||
+    serviceCategory ||
+    wheelchair !== undefined ||
+    packingHelper !== undefined ||
+    loadingUnloadingHelper !== undefined ||
+    fixingHelper !== undefined ||
+    vehicleRegistrationCardPath ||
+    roadAuthorityCertificatePath ||
+    insuranceCertificatePath ||
+    vehicleImagesPaths.length > 0
+  )) {
+    const vehicleData = {
+      vehicleOwnerName: vehicleOwnerName || "",
+      companyName: companyName || "",
+      vehiclePlateNumber: vehiclePlateNumber || "",
+      vehicleMakeModel: vehicleMakeModel || "",
+      chassisNumber: chassisNumber || "",
+      vehicleColor: vehicleColor || "",
+      registrationExpiryDate: registrationExpiryDate
+        ? new Date(registrationExpiryDate)
+        : undefined,
+      vehicleType: vehicleType || "",
+      serviceType: serviceType || "",
+      serviceCategory: serviceCategory || "",
+      wheelchair: wheelchair !== undefined ? wheelchair : false,
+      packingHelper: packingHelper !== undefined ? packingHelper : false,
+      loadingUnloadingHelper: loadingUnloadingHelper !== undefined ? loadingUnloadingHelper : false,
+      fixingHelper: fixingHelper !== undefined ? fixingHelper : false,
+      vehicleRegistrationCard: vehicleRegistrationCardPath || "",
+      roadAuthorityCertificate: roadAuthorityCertificatePath || "",
+      insuranceCertificate: insuranceCertificatePath || "",
+      vehicleImages: vehicleImagesPaths.length > 0 ? vehicleImagesPaths : [],
+    };
+
+    if (user.pendingVehicleData) {
+      vehicle = await Vehicle.findByIdAndUpdate(
+        user.pendingVehicleData,
+        vehicleData,
+        { new: true, runValidators: true }
+      );
+    } else {
+      vehicle = await Vehicle.create(vehicleData);
+      updateData.pendingVehicleData = vehicle._id;
+    }
+  }
+
+  const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+    new: true,
+    runValidators: true,
+  })
+    .select(
+      "username firstName lastName email phoneNumber gender country role kycLevel kycStatus hasVehicle licenseImage driverSettings pendingVehicleData selfieImage"
+    )
+    .populate({
+      path: "pendingVehicleData",
+      select:
+        "vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate vehicleType serviceType serviceCategory wheelchair packingHelper loadingUnloadingHelper fixingHelper vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages",
+    });
+
+  res.status(200).json({
+    success: true,
+    message: "Profile updated successfully",
+    user: {
+      userId: updatedUser._id,
+      username: updatedUser.username,
+      firstName: updatedUser.firstName,
+      lastName: updatedUser.lastName || "",
+      email: updatedUser.email,
+      phoneNumber: updatedUser.phoneNumber,
+      gender: updatedUser.gender,
+      country: updatedUser.country,
+      role: updatedUser.role,
+      kycLevel: updatedUser.kycLevel,
+      kycStatus: updatedUser.kycStatus,
+      hasVehicle: updatedUser.hasVehicle,
+      licenseImage: updatedUser.licenseImage,
+      driverSettings: updatedUser.driverSettings,
+      selfieImage: updatedUser.selfieImage,
+      vehicle: updatedUser.pendingVehicleData || null,
+    },
+  });
+});
+
+// User changes their own password from profile using token
+const changeOwnPassword = asyncHandler(async (req, res) => {
+  const { newPassword } = req.body;
+  const userId = req.user._id; // Get user ID from authenticated token
+
+  // Validate new password
+  if (!newPassword) {
+    res.status(400);
+    throw new Error("New password is required");
+  }
+
+  if (newPassword.length < 8) {
+    res.status(400);
+    throw new Error("Password must be at least 8 characters");
+  }
+
+  // Find the user
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  // Hash the new password
+  user.password = await bcrypt.hash(newPassword, 10);
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: "Password changed successfully",
+  });
+});
 
 export {
   signupUser,
@@ -2331,5 +2649,7 @@ export {
   editAdmin,
   deleteAdmin,
   getCurrentUser,
+  editProfile,
+  changeOwnPassword,
 
 };

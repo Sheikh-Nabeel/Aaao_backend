@@ -136,7 +136,6 @@ const deleteService = asyncHandler(async (req, res) => {
   });
 });
 
-// New function to get available services for dropdown
 const getAvailableServices = asyncHandler(async (req, res) => {
   const existingServices = await Service.find();
   const availableServices = [...new Set(existingServices.map(s => s.serviceType))];
@@ -146,10 +145,51 @@ const getAvailableServices = asyncHandler(async (req, res) => {
   });
 });
 
+const approveService = asyncHandler(async (req, res) => {
+  const { serviceId } = req.params;
+  const service = await Service.findById(serviceId);
+
+  if (!service) {
+    res.status(404);
+    throw new Error("Service not found");
+  }
+
+  service.status = 'approved';
+  await service.save();
+
+  res.status(200).json({
+    message: "Service approved successfully",
+    serviceId
+  });
+});
+
+const rejectService = asyncHandler(async (req, res) => {
+  const { serviceId } = req.params;
+  const { reason } = req.body;
+
+  const service = await Service.findById(serviceId);
+
+  if (!service) {
+    res.status(404);
+    throw new Error("Service not found");
+  }
+
+  service.status = 'rejected';
+  service.rejectionReason = reason || 'No reason provided';
+  await service.save();
+
+  res.status(200).json({
+    message: "Service rejected successfully",
+    serviceId
+  });
+});
+
 export {
   createService,
   getAllServices,
   getUserServices,
   deleteService,
-  getAvailableServices
+  getAvailableServices,
+  approveService,
+  rejectService
 };
