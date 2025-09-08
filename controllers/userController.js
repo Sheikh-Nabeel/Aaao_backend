@@ -2579,7 +2579,6 @@ const editProfile = asyncHandler(async (req, res) => {
   });
 });
 
-// User changes their own password from profile using token
 const changeOwnPassword = asyncHandler(async (req, res) => {
   const { newPassword } = req.body;
   const userId = req.user._id; // Get user ID from authenticated token
@@ -2602,8 +2601,8 @@ const changeOwnPassword = asyncHandler(async (req, res) => {
     throw new Error("User not found");
   }
 
-  // Hash the new password
-  user.password = await bcrypt.hash(newPassword, 10);
+  // Set the new password (middleware will hash it)
+  user.password = newPassword;
   await user.save();
 
   res.status(200).json({
