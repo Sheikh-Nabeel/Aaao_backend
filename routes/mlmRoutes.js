@@ -31,6 +31,7 @@ import {
   getDDRCRRStats,
   // BBR Controller Functions
   getCurrentBBRCampaign,
+  getBBRCampaignInfo,
   getBBRLeaderboard,
   getPastBBRWins,
   createBBRCampaign,
@@ -160,6 +161,9 @@ router.put("/admin/crr/config",  updateCRRRankConfig);
 router.get("/admin/ddr-crr-stats",  getDDRCRRStats);
 
 // BBR (Bonus Booster Rewards) Routes
+// Get current BBR campaign (general information)
+router.get("/bbr/campaign", getBBRCampaignInfo);
+
 // Get current BBR campaign with user progress
 router.get("/bbr/current-campaign/:userId", validateUserId, getCurrentBBRCampaign);
 

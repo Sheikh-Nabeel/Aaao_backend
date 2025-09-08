@@ -3133,7 +3133,63 @@ export const getMLMEarningsStats = asyncHandler(async (req, res) => {
 
 // ==================== BBR (Bonus Booster Rewards) Controllers ====================
 
-// Get current BBR campaign for user
+// Get current BBR campaign info (general, no user required)
+export const getBBRCampaignInfo = asyncHandler(async (req, res) => {
+  try {
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    const currentCampaign = mlm.bbrCampaigns.current;
+    if (!currentCampaign || !currentCampaign.isActive) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          currentCampaign: null,
+          message: "No active BBR campaign"
+        }
+      });
+    }
+
+    // Calculate time left
+    const now = new Date();
+    const timeLeft = currentCampaign.endDate - now;
+    const daysLeft = Math.max(0, Math.ceil(timeLeft / (1000 * 60 * 60 * 24)));
+    const hoursLeft = Math.max(0, Math.ceil((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        currentCampaign: {
+          name: currentCampaign.name,
+          requirement: currentCampaign.requirement,
+          duration: currentCampaign.duration,
+          type: currentCampaign.type,
+          newbieRidesOnly: currentCampaign.newbieRidesOnly,
+          reward: currentCampaign.reward,
+          period: `${new Date(currentCampaign.startDate).toLocaleDateString()} – ${new Date(currentCampaign.endDate).toLocaleDateString()}`,
+          timeLeft: {
+            days: daysLeft,
+            hours: hoursLeft
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error getting BBR campaign info:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting BBR campaign info",
+      error: error.message
+    });
+  }
+});
+
+// Get current BBR campaign for user (with progress)
 export const getCurrentBBRCampaign = asyncHandler(async (req, res) => {
   try {
     const { userId } = req.params;
