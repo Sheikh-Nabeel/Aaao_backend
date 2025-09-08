@@ -26,7 +26,7 @@ import {
   getNearbyDriversForUser,
   getQualificationStats,
   getQualificationTransactions,
-  deleteUser, // New import
+  deleteUser,
   editUser,
   getAllCustomers,
   getAllDrivers,
@@ -35,7 +35,9 @@ import {
   getCurrentUser,
   getAdmins,
   editAdmin,
-  deleteAdmin, // New import
+  deleteAdmin,
+  changeOwnPassword,
+  editProfile,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -47,14 +49,15 @@ import {
   getUserServices,
   deleteService,
   getAvailableServices,
+  approveService,
+  rejectService,
 } from "../controllers/serviceController.js";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 import authHandler from "../middlewares/authMIddleware.js";
-import adminMiddleware from "../middlewares/adminMiddleware.js";
-import superadminAuth from "../middlewares/superadminAuth.js";
 import adminHandler from "../middlewares/adminMiddleware.js";
+import superadminAuth from "../middlewares/superadminAuth.js";
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -111,18 +114,38 @@ router.get("/favorite-drivers", authHandler, getFavoriteDrivers);
 router.get("/nearby-drivers", authHandler, getNearbyDriversForUser);
 
 // Admin routes
-router.get("/pending-kycs", authHandler, adminMiddleware, getPendingKYCs);
-router.post("/approve-kyc", authHandler, adminMiddleware, approveKYC);
-router.post("/reject-kyc", authHandler, adminMiddleware, rejectKYC);
+router.get("/pending-kycs", authHandler, adminHandler, getPendingKYCs);
+router.post("/approve-kyc", authHandler, adminHandler, approveKYC);
+router.post("/reject-kyc", authHandler, adminHandler, rejectKYC);
 router.get("/referral-link", authHandler, getReferralLink);
-router.get("/all", authHandler, adminMiddleware, getAllUsers);
+router.get("/all", authHandler, adminHandler, getAllUsers);
 router.post(
   "/fix-referrals",
   authHandler,
-  adminMiddleware,
+  adminHandler,
   fixReferralRelationships
 );
 router.get("/referral-tree", authHandler, getReferralTree);
+
+// Service routes
+router.post(
+  "/services",
+  authHandler,
+  upload.fields([
+    { name: "tradeLicenseCopy", maxCount: 1 },
+    { name: "shopImages", maxCount: 10 },
+    { name: "passportCopy", maxCount: 2 },
+    { name: "uploadedPriceList", maxCount: 1 },
+    { name: "uploadedPortfolio", maxCount: 1 },
+  ]),
+  createService
+);
+router.get("/services", authHandler, adminHandler, getAllServices);
+router.get("/user-services", authHandler, getUserServices);
+router.delete("/services/:serviceId", authHandler, deleteService);
+router.get("/available-services", authHandler, getAvailableServices);
+router.post("/services/approve/:serviceId", authHandler, adminHandler, approveService);
+router.post("/services/reject/:serviceId", authHandler, adminHandler, rejectService);
 
 // Superadmin routes for allowed sections
 router.post("/allowed-sections", superadminAuth, manageAllowedSections);
@@ -137,32 +160,15 @@ router.get(
   getQualificationTransactions
 );
 
-router.post(
-  "/services",
-  authHandler,
-  upload.fields([
-    { name: "tradeLicenseCopy", maxCount: 1 },
-    { name: "shopImages", maxCount: 10 },
-    { name: "passportCopy", maxCount: 2 },
-    { name: "uploadedPriceList", maxCount: 1 },
-    { name: "uploadedPortfolio", maxCount: 1 },
-  ]),
-  createService
-);
-router.get("/services", getAllServices);
-router.get("/user-services", authHandler, getUserServices);
-router.delete("/services/:serviceId", authHandler, deleteService);
-router.get("/available-services", authHandler, getAvailableServices);
-
-// New routes for delete and edit user
-router.delete("/delete/:userId", authHandler, adminMiddleware, deleteUser);
-router.patch("/edit/:userId", authHandler, adminMiddleware, editUser);
-router.get("/customers", authHandler, adminMiddleware, getAllCustomers);
-router.get("/drivers", authHandler, adminMiddleware, getAllDrivers);
+// User management routes
+router.delete("/delete/:userId", authHandler, adminHandler, deleteUser);
+router.patch("/edit/:userId", authHandler, adminHandler, editUser);
+router.get("/customers", authHandler, adminHandler, getAllCustomers);
+router.get("/drivers", authHandler, adminHandler, getAllDrivers);
 router.put(
   "/edit-driver/:userId",
   authHandler,
-  adminMiddleware,
+  adminHandler,
   upload.fields([
     { name: "licenseImage", maxCount: 1 },
     { name: "vehicleRegistrationCard", maxCount: 1 },
@@ -173,9 +179,30 @@ router.put(
   editDriver
 );
 
-router.get('/me', authHandler, getCurrentUser);
-router.get('/admins', authHandler, adminHandler, getAdmins);
-router.post('/admin/add-admin', authHandler, adminHandler, addAdmin);
-router.put('/admin/edit-admin/:userId', authHandler, adminHandler, editAdmin);
-router.delete('/admin/delete-admin/:userId', authHandler, adminHandler, deleteAdmin);
+router.get("/me", authHandler, getCurrentUser);
+router.get("/admins", authHandler, adminHandler, getAdmins);
+router.post("/admin/add-admin", authHandler, adminHandler, addAdmin);
+router.put("/admin/edit-admin/:userId", authHandler, adminHandler, editAdmin);
+router.delete(
+  "/admin/delete-admin/:userId",
+  authHandler,
+  adminHandler,
+  deleteAdmin
+);
+router.patch("/change-own-password", authHandler, changeOwnPassword);
+router.patch(
+  "/edit-profile/:userId",
+  authHandler,
+  adminHandler,
+  upload.fields([
+    { name: "selfieImage", maxCount: 1 },
+    { name: "licenseImage", maxCount: 1 },
+    { name: "vehicleRegistrationCard", maxCount: 1 },
+    { name: "roadAuthorityCertificate", maxCount: 1 },
+    { name: "insuranceCertificate", maxCount: 1 },
+    { name: "vehicleImages", maxCount: 10 },
+  ]),
+  editProfile
+);
+
 export default router;

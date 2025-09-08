@@ -23,6 +23,7 @@ import walletRoutes from "./routes/walletRoutes.js"; // Added wallet routes
 import emailVerificationRoutes from "./routes/emailVerificationRoutes.js"; // Added email verification routes
 import driverStatusRoutes from "./routes/driverStatusRoutes.js"; // Added driver status routes
 import qualifiedDriversRoutes from "./routes/qualifiedDriversRoutes.js"; // Added qualified drivers routes
+import offerRoutes from "./routes/offerRoutes.js"; // Added qualified drivers routes
 
 import cloudinary from "cloudinary";
 import "colors";
@@ -110,7 +111,7 @@ app.use("/api/email-verification", emailVerificationRoutes); // Added email veri
 app.use("/api/driver-status", driverStatusRoutes); // Added driver status routes
 app.use("/api/qualified-drivers", qualifiedDriversRoutes); // Added qualified drivers routes
 app.use("/api/nearby-drivers", qualifiedDriversRoutes); // Added nearby drivers routes
-
+app.use("/api/offers", offerRoutes); // Correct
 // Initialize server function
 const initializeServer = async () => {
   try {

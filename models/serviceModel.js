@@ -17,7 +17,7 @@ const serviceSchema = new mongoose.Schema({
     trim: true
   },
   tradeLicenseCopy: {
-    type: String, // URL or path to uploaded file
+    type: String,
     required: true
   },
   companyType: {
@@ -50,14 +50,14 @@ const serviceSchema = new mongoose.Schema({
     trim: true
   },
   shopImages: [{
-    type: String // URLs or paths to uploaded files
+    type: String
   }],
   ownerIdentification: {
     fullName: { type: String, required: true },
     emiratesId: { type: String, required: true }
   },
   passportCopy: [{
-    type: String // URLs or paths to uploaded files
+    type: String
   }],
   serviceType: {
     type: String,
@@ -90,10 +90,10 @@ const serviceSchema = new mongoose.Schema({
     trim: true
   },
   uploadedPriceList: {
-    type: String // URL or path to uploaded file
+    type: String
   },
   uploadedPortfolio: {
-    type: String // URL or path to uploaded file
+    type: String
   },
   agreeToTermsConditions: {
     type: Boolean,
@@ -111,6 +111,9 @@ const serviceSchema = new mongoose.Schema({
     type: String,
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
+  },
+  rejectionReason: {
+    type: String
   },
   createdAt: {
     type: Date,
