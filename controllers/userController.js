@@ -21,6 +21,175 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Helper function to remove user from all levels of a sponsor's tree
+async function removeFromSponsorTree(userId, sponsorId) {
+  const sponsor = await User.findById(sponsorId);
+  if (!sponsor) return;
+
+  // Remove from direct referrals
+  sponsor.directReferrals = sponsor.directReferrals.filter(
+    (id) => id.toString() !== userId.toString()
+  );
+
+  // Remove from level 2 referrals
+  sponsor.level2Referrals = sponsor.level2Referrals.filter(
+    (id) => id.toString() !== userId.toString()
+  );
+
+  // Remove from level 3 referrals
+  sponsor.level3Referrals = sponsor.level3Referrals.filter(
+    (id) => id.toString() !== userId.toString()
+  );
+
+  // Remove from level 4 referrals
+  sponsor.level4Referrals = sponsor.level4Referrals.filter(
+    (id) => id.toString() !== userId.toString()
+  );
+
+  // Remove from sponsor tree
+  sponsor.sponsorTree = sponsor.sponsorTree.filter(
+    (id) => id.toString() !== userId.toString()
+  );
+
+  // Remove from nextLevels array
+  if (Array.isArray(sponsor.nextLevels)) {
+    sponsor.nextLevels = sponsor.nextLevels.map(level => 
+      level.filter(id => id.toString() !== userId.toString())
+    ).filter(level => level.length > 0);
+  }
+
+  await sponsor.save();
+  await updateAllLevels(sponsorId);
+}
+
+// Helper function to check for circular references
+async function checkCircularReference(userId, newSponsorId) {
+  if (userId.toString() === newSponsorId.toString()) {
+    return true; // User cannot sponsor themselves
+  }
+
+  // Check if the new sponsor is in the user's downline
+  const user = await User.findById(userId);
+  if (!user) return false;
+
+  const checkDownline = async (currentUserId, targetId) => {
+    const currentUser = await User.findById(currentUserId);
+    if (!currentUser) return false;
+
+    // Check direct referrals
+    if (currentUser.directReferrals.some(id => id.toString() === targetId.toString())) {
+      return true;
+    }
+
+    // Recursively check all levels
+    for (const referralId of currentUser.directReferrals) {
+      if (await checkDownline(referralId, targetId)) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  return await checkDownline(userId, newSponsorId);
+}
+
+const changeReferralCode = asyncHandler(async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { newReferralCode } = req.body;
+
+    if (!newReferralCode) {
+      return res.status(400).json({
+        success: false,
+        message: "New referral code is required",
+      });
+    }
+
+    // Find the user who wants to change their referral code
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Find the new sponsor by referral code (sponsorId or username)
+    const newSponsor = await User.findOne({
+      $or: [{ sponsorId: newReferralCode }, { username: newReferralCode }],
+    });
+
+    if (!newSponsor) {
+      return res.status(404).json({
+        success: false,
+        message: "Invalid referral code. Sponsor not found",
+      });
+    }
+
+    // Check if user is already under this sponsor
+    if (user.sponsorBy === newReferralCode) {
+      return res.status(400).json({
+        success: false,
+        message: "User is already under this sponsor",
+      });
+    }
+
+    // Check for circular references
+    const hasCircularRef = await checkCircularReference(userId, newSponsor._id);
+    if (hasCircularRef) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot set this referral code as it would create a circular reference",
+      });
+    }
+
+    // Store old sponsor info for removal
+    const oldSponsorCode = user.sponsorBy;
+    let oldSponsor = null;
+    if (oldSponsorCode) {
+      oldSponsor = await User.findOne({
+        $or: [{ sponsorId: oldSponsorCode }, { username: oldSponsorCode }],
+      });
+    }
+
+    // Remove user from old sponsor's tree if exists
+    if (oldSponsor) {
+      await removeFromSponsorTree(userId, oldSponsor._id);
+    }
+
+    // Update user's sponsor
+    user.sponsorBy = newReferralCode;
+    await user.save();
+
+    // Add user to new sponsor's tree
+    await updateReferralTree(userId, newReferralCode);
+
+    // Update all affected levels
+    await updateAllLevels(newSponsor._id);
+    if (oldSponsor) {
+      await updateAllLevels(oldSponsor._id);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Referral code changed successfully",
+      data: {
+        userId: user._id,
+        username: user.username,
+        oldSponsor: oldSponsorCode || "None",
+        newSponsor: newReferralCode,
+        newSponsorName: `${newSponsor.firstName} ${newSponsor.lastName}`,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
 // Existing controller functions (unchanged)
 const signupUser = asyncHandler(async (req, res) => {
   const {
@@ -2685,5 +2854,6 @@ export {
   getCurrentUser,
   editProfile,
   changeOwnPassword,
+  changeReferralCode,
 
 };

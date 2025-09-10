@@ -38,6 +38,7 @@ import {
   deleteAdmin,
   changeOwnPassword,
   editProfile,
+  changeReferralCode,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -203,4 +204,8 @@ router.patch(
   ]),
   editProfile
 );
+
+// Change referral code route
+router.patch("/change-referral-code/:userId", authHandler, changeReferralCode);
+
 export default router;
