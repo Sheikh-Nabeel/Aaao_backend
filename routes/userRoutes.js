@@ -192,8 +192,7 @@ router.delete(
 router.patch("/change-own-password", authHandler, changeOwnPassword);
 router.patch(
   "/edit-profile/:userId",
-  authHandler,
-  adminHandler,
+  authHandler, // Only authentication required, not admin privileges
   upload.fields([
     { name: "selfieImage", maxCount: 1 },
     { name: "licenseImage", maxCount: 1 },
@@ -204,5 +203,4 @@ router.patch(
   ]),
   editProfile
 );
-
 export default router;

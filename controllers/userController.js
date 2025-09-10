@@ -2334,7 +2334,7 @@ const editProfile = asyncHandler(async (req, res) => {
   }
 
   // Find the user
-  const user = await User.findById(userId);
+  const user = await User.findById(userId).populate('pendingVehicleData');
   if (!user) {
     res.status(404);
     throw new Error("User not found");
@@ -2390,18 +2390,20 @@ const editProfile = asyncHandler(async (req, res) => {
     errors.hasVehicle = "hasVehicle must be yes, no, or null";
   }
 
-  // Driver-specific validation (only if user is a driver)
-  if (user.role === "driver") {
-    if (driverSettings) {
-      if (typeof driverSettings !== "object") {
-        errors.driverSettings = "driverSettings must be an object";
-      }
-    }
+  // Driver-specific validation (only if user is a driver OR has vehicle data to update)
+  const hasVehicleData = vehicleOwnerName || companyName || vehiclePlateNumber || 
+    vehicleMakeModel || chassisNumber || vehicleColor || registrationExpiryDate || 
+    vehicleType || serviceType || serviceCategory || wheelchair !== undefined || 
+    packingHelper !== undefined || loadingUnloadingHelper !== undefined || 
+    fixingHelper !== undefined || (req.files && (req.files.vehicleRegistrationCard || 
+    req.files.roadAuthorityCertificate || req.files.insuranceCertificate || 
+    req.files.vehicleImages));
 
+  if (hasVehicleData) {
     if (vehiclePlateNumber) {
       const existingVehicle = await Vehicle.findOne({
         vehiclePlateNumber,
-        _id: { $ne: user.pendingVehicleData },
+        _id: { $ne: user.pendingVehicleData?._id },
       });
       if (existingVehicle) {
         errors.vehiclePlateNumber = "This vehicle plate number is already registered";
@@ -2411,7 +2413,7 @@ const editProfile = asyncHandler(async (req, res) => {
     if (chassisNumber) {
       const existingVehicle = await Vehicle.findOne({
         chassisNumber,
-        _id: { $ne: user.pendingVehicleData },
+        _id: { $ne: user.pendingVehicleData?._id },
       });
       if (existingVehicle) {
         errors.chassisNumber = "This chassis number is already registered";
@@ -2435,36 +2437,60 @@ const editProfile = asyncHandler(async (req, res) => {
     }
   }
 
+  if (driverSettings && typeof driverSettings !== "object") {
+    errors.driverSettings = "driverSettings must be an object";
+  }
+
   if (Object.keys(errors).length > 0) {
     res.status(400).json({ errors });
     return;
   }
 
+  // Helper function to delete old files
+  const deleteOldFile = (filePath) => {
+    if (filePath && fs.existsSync(path.join(process.cwd(), filePath))) {
+      try {
+        fs.unlinkSync(path.join(process.cwd(), filePath));
+      } catch (error) {
+        console.error(`Error deleting file ${filePath}:`, error);
+      }
+    }
+  };
+
   // Handle file uploads
   let licenseImagePath = user.licenseImage;
-  let vehicleRegistrationCardPath;
-  let roadAuthorityCertificatePath;
-  let insuranceCertificatePath;
-  let vehicleImagesPaths = [];
+  let vehicleRegistrationCardPath = user.pendingVehicleData?.vehicleRegistrationCard;
+  let roadAuthorityCertificatePath = user.pendingVehicleData?.roadAuthorityCertificate;
+  let insuranceCertificatePath = user.pendingVehicleData?.insuranceCertificate;
+  let vehicleImagesPaths = user.pendingVehicleData?.vehicleImages || [];
   let selfieImagePath = user.selfieImage;
 
   if (req.files) {
     if (req.files.selfieImage) {
+      deleteOldFile(user.selfieImage);
       selfieImagePath = path.join("uploads", req.files.selfieImage[0].filename).replace(/\\/g, "/");
     }
     if (req.files.licenseImage) {
+      deleteOldFile(user.licenseImage);
       licenseImagePath = path.join("uploads", req.files.licenseImage[0].filename).replace(/\\/g, "/");
     }
     if (req.files.vehicleRegistrationCard) {
+      deleteOldFile(user.pendingVehicleData?.vehicleRegistrationCard);
       vehicleRegistrationCardPath = path.join("uploads", req.files.vehicleRegistrationCard[0].filename).replace(/\\/g, "/");
     }
     if (req.files.roadAuthorityCertificate) {
+      deleteOldFile(user.pendingVehicleData?.roadAuthorityCertificate);
       roadAuthorityCertificatePath = path.join("uploads", req.files.roadAuthorityCertificate[0].filename).replace(/\\/g, "/");
     }
     if (req.files.insuranceCertificate) {
+      deleteOldFile(user.pendingVehicleData?.insuranceCertificate);
       insuranceCertificatePath = path.join("uploads", req.files.insuranceCertificate[0].filename).replace(/\\/g, "/");
     }
     if (req.files.vehicleImages) {
+      // Delete old vehicle images
+      if (user.pendingVehicleData?.vehicleImages) {
+        user.pendingVehicleData.vehicleImages.forEach(deleteOldFile);
+      }
       vehicleImagesPaths = req.files.vehicleImages.map((file) =>
         path.join("uploads", file.filename).replace(/\\/g, "/")
       );
@@ -2482,62 +2508,70 @@ const editProfile = asyncHandler(async (req, res) => {
   if (country) updateData.country = country;
   if (hasVehicle) updateData.hasVehicle = hasVehicle;
   if (driverSettings) updateData.driverSettings = driverSettings;
-  if (licenseImagePath) updateData.licenseImage = licenseImagePath;
-  if (selfieImagePath) updateData.selfieImage = selfieImagePath;
+  if (licenseImagePath !== user.licenseImage) updateData.licenseImage = licenseImagePath;
+  if (selfieImagePath !== user.selfieImage) updateData.selfieImage = selfieImagePath;
 
-  // Update vehicle if user is a driver
-  let vehicle = null;
-  if (user.role === "driver" && (
-    vehicleOwnerName ||
-    companyName ||
-    vehiclePlateNumber ||
-    vehicleMakeModel ||
-    chassisNumber ||
-    vehicleColor ||
-    registrationExpiryDate ||
-    vehicleType ||
-    serviceType ||
-    serviceCategory ||
-    wheelchair !== undefined ||
-    packingHelper !== undefined ||
-    loadingUnloadingHelper !== undefined ||
-    fixingHelper !== undefined ||
-    vehicleRegistrationCardPath ||
-    roadAuthorityCertificatePath ||
-    insuranceCertificatePath ||
-    vehicleImagesPaths.length > 0
-  )) {
-    const vehicleData = {
-      vehicleOwnerName: vehicleOwnerName || "",
-      companyName: companyName || "",
-      vehiclePlateNumber: vehiclePlateNumber || "",
-      vehicleMakeModel: vehicleMakeModel || "",
-      chassisNumber: chassisNumber || "",
-      vehicleColor: vehicleColor || "",
-      registrationExpiryDate: registrationExpiryDate
-        ? new Date(registrationExpiryDate)
-        : undefined,
-      vehicleType: vehicleType || "",
-      serviceType: serviceType || "",
-      serviceCategory: serviceCategory || "",
-      wheelchair: wheelchair !== undefined ? wheelchair : false,
-      packingHelper: packingHelper !== undefined ? packingHelper : false,
-      loadingUnloadingHelper: loadingUnloadingHelper !== undefined ? loadingUnloadingHelper : false,
-      fixingHelper: fixingHelper !== undefined ? fixingHelper : false,
-      vehicleRegistrationCard: vehicleRegistrationCardPath || "",
-      roadAuthorityCertificate: roadAuthorityCertificatePath || "",
-      insuranceCertificate: insuranceCertificatePath || "",
-      vehicleImages: vehicleImagesPaths.length > 0 ? vehicleImagesPaths : [],
-    };
+  // Update or create vehicle data if vehicle-related fields are provided
+  let vehicle = user.pendingVehicleData;
+  if (hasVehicleData) {
+    const vehicleData = {};
+    
+    // Only update fields that are provided, preserve existing values
+    if (vehicleOwnerName !== undefined) vehicleData.vehicleOwnerName = vehicleOwnerName;
+    if (companyName !== undefined) vehicleData.companyName = companyName;
+    if (vehiclePlateNumber !== undefined) vehicleData.vehiclePlateNumber = vehiclePlateNumber;
+    if (vehicleMakeModel !== undefined) vehicleData.vehicleMakeModel = vehicleMakeModel;
+    if (chassisNumber !== undefined) vehicleData.chassisNumber = chassisNumber;
+    if (vehicleColor !== undefined) vehicleData.vehicleColor = vehicleColor;
+    if (registrationExpiryDate !== undefined) vehicleData.registrationExpiryDate = new Date(registrationExpiryDate);
+    if (vehicleType !== undefined) vehicleData.vehicleType = vehicleType;
+    if (serviceType !== undefined) vehicleData.serviceType = serviceType;
+    if (serviceCategory !== undefined) vehicleData.serviceCategory = serviceCategory;
+    if (wheelchair !== undefined) vehicleData.wheelchair = wheelchair;
+    if (packingHelper !== undefined) vehicleData.packingHelper = packingHelper;
+    if (loadingUnloadingHelper !== undefined) vehicleData.loadingUnloadingHelper = loadingUnloadingHelper;
+    if (fixingHelper !== undefined) vehicleData.fixingHelper = fixingHelper;
+    
+    // Update file paths if new files were uploaded
+    if (vehicleRegistrationCardPath !== user.pendingVehicleData?.vehicleRegistrationCard) {
+      vehicleData.vehicleRegistrationCard = vehicleRegistrationCardPath;
+    }
+    if (roadAuthorityCertificatePath !== user.pendingVehicleData?.roadAuthorityCertificate) {
+      vehicleData.roadAuthorityCertificate = roadAuthorityCertificatePath;
+    }
+    if (insuranceCertificatePath !== user.pendingVehicleData?.insuranceCertificate) {
+      vehicleData.insuranceCertificate = insuranceCertificatePath;
+    }
+    if (req.files?.vehicleImages) {
+      vehicleData.vehicleImages = vehicleImagesPaths;
+    }
 
-    if (user.pendingVehicleData) {
+    if (vehicle) {
+      // Update existing vehicle
       vehicle = await Vehicle.findByIdAndUpdate(
-        user.pendingVehicleData,
+        vehicle._id,
         vehicleData,
         { new: true, runValidators: true }
       );
     } else {
-      vehicle = await Vehicle.create(vehicleData);
+      // Create new vehicle
+      vehicle = await Vehicle.create({
+        ...vehicleData,
+        // Provide defaults for required fields if not provided
+        vehicleOwnerName: vehicleData.vehicleOwnerName || "",
+        companyName: vehicleData.companyName || "",
+        vehiclePlateNumber: vehicleData.vehiclePlateNumber || "",
+        vehicleMakeModel: vehicleData.vehicleMakeModel || "",
+        chassisNumber: vehicleData.chassisNumber || "",
+        vehicleColor: vehicleData.vehicleColor || "",
+        vehicleType: vehicleData.vehicleType || "",
+        serviceType: vehicleData.serviceType || "",
+        serviceCategory: vehicleData.serviceCategory || "",
+        vehicleRegistrationCard: vehicleData.vehicleRegistrationCard || "",
+        roadAuthorityCertificate: vehicleData.roadAuthorityCertificate || "",
+        insuranceCertificate: vehicleData.insuranceCertificate || "",
+        vehicleImages: vehicleData.vehicleImages || [],
+      });
       updateData.pendingVehicleData = vehicle._id;
     }
   }
@@ -2547,12 +2581,12 @@ const editProfile = asyncHandler(async (req, res) => {
     runValidators: true,
   })
     .select(
-      "username firstName lastName email phoneNumber gender country role kycLevel kycStatus hasVehicle licenseImage driverSettings pendingVehicleData selfieImage"
+      "username firstName lastName email phoneNumber gender country role kycLevel kycStatus hasVehicle licenseImage driverSettings pendingVehicleData selfieImage sponsorId"
     )
     .populate({
       path: "pendingVehicleData",
       select:
-        "vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate vehicleType serviceType serviceCategory wheelchair packingHelper loadingUnloadingHelper fixingHelper vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages",
+        "vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate vehicleType serviceType serviceCategory wheelchair packingHelper loadingUnloadingHelper fixingHelper vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages status",
     });
 
   res.status(200).json({
@@ -2574,6 +2608,7 @@ const editProfile = asyncHandler(async (req, res) => {
       licenseImage: updatedUser.licenseImage,
       driverSettings: updatedUser.driverSettings,
       selfieImage: updatedUser.selfieImage,
+      sponsorId: updatedUser.sponsorId,
       vehicle: updatedUser.pendingVehicleData || null,
     },
   });
