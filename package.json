@@ -4,7 +4,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "start": "node ./index.js",
     "server": "nodemon ./index.js",
+    "dev": "nodemon ./index.js",
     "test:performance": "node ./tests/performance.test.js"
   },
   "author": "",
