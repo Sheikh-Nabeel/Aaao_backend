@@ -64,6 +64,299 @@ export const createMLM = asyncHandler(async (req, res) => {
   }
 });
 
+// Update global CRR leg percentages (Admin only)
+export const updateGlobalCRRLegPercentages = asyncHandler(async (req, res) => {
+  try {
+    const { legPercentages } = req.body;
+
+    // Validate input structure
+    if (!legPercentages || typeof legPercentages !== 'object') {
+      return res.status(400).json({
+        success: false,
+        message: 'legPercentages object is required'
+      });
+    }
+
+    // Validate that we have exactly 3 legs (A, B, C)
+    const requiredLegs = ['legA', 'legB', 'legC'];
+    const providedLegs = Object.keys(legPercentages);
+    
+    if (providedLegs.length !== 3 || !requiredLegs.every(leg => providedLegs.includes(leg))) {
+      return res.status(400).json({
+        success: false,
+        message: 'legPercentages must contain exactly legA, legB, and legC'
+      });
+    }
+
+    // Validate percentage values
+    const percentageValues = Object.values(legPercentages);
+    const invalidValues = percentageValues.filter(val => 
+      typeof val !== 'number' || val < 0 || val > 100
+    );
+    
+    if (invalidValues.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'All leg percentages must be numbers between 0 and 100'
+      });
+    }
+
+    // Validate total percentage
+    const totalPercentage = percentageValues.reduce((sum, val) => sum + val, 0);
+    if (Math.abs(totalPercentage - 100) > 0.01) {
+      return res.status(400).json({
+        success: false,
+        message: `Total percentage must equal 100. Current total: ${totalPercentage}`
+      });
+    }
+
+    // Get MLM document
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: 'MLM system not found'
+      });
+    }
+
+    // Update global leg percentages
+    if (!mlm.crrConfig) {
+      mlm.crrConfig = {};
+    }
+    
+    mlm.crrConfig.legPercentages = {
+      legA: legPercentages.legA,
+      legB: legPercentages.legB,
+      legC: legPercentages.legC
+    };
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Global CRR leg percentages updated successfully',
+      data: {
+        legPercentages: mlm.crrConfig.legPercentages,
+        lastUpdated: mlm.updatedAt
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Get leg percentages for all CRR ranks
+export const getCRRLegPercentages = asyncHandler(async (req, res) => {
+  try {
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Get global leg percentages from crrConfig (applies to all ranks)
+    const legPercentages = mlm.crrConfig?.legPercentages || {
+      legA: 33.33,
+      legB: 33.33,
+      legC: 33.34
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        legPercentages,
+        lastUpdated: mlm.updatedAt
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Update leg percentages for CRR ranks
+export const updateCRRLegPercentages = asyncHandler(async (req, res) => {
+  try {
+    const { rankName, legPercentages } = req.body;
+    
+    if (!rankName || !legPercentages) {
+      return res.status(400).json({
+        success: false,
+        message: "rankName and legPercentages are required"
+      });
+    }
+
+    // Validate leg percentages structure
+    const requiredLegs = ['legA', 'legB', 'legC'];
+    const missingLegs = requiredLegs.filter(leg => !legPercentages.hasOwnProperty(leg));
+    
+    if (missingLegs.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing leg percentages: ${missingLegs.join(', ')}`
+      });
+    }
+
+    // Validate percentage values
+    const totalPercentage = legPercentages.legA + legPercentages.legB + legPercentages.legC;
+    if (Math.abs(totalPercentage - 100) > 0.01) {
+      return res.status(400).json({
+        success: false,
+        message: `Total leg percentages must equal 100%. Current total: ${totalPercentage}%`
+      });
+    }
+
+    // Validate individual percentages
+    for (const leg of requiredLegs) {
+      const percentage = legPercentages[leg];
+      if (typeof percentage !== 'number' || percentage < 0 || percentage > 100) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid percentage for ${leg}: ${percentage}. Must be between 0 and 100.`
+        });
+      }
+    }
+
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Check if rank exists
+    if (!mlm.crrRanks || !mlm.crrRanks[rankName]) {
+      return res.status(404).json({
+        success: false,
+        message: `Rank '${rankName}' not found`
+      });
+    }
+
+    // Update leg percentages for the specific rank
+    mlm.crrRanks[rankName].legPercentages = {
+      legA: legPercentages.legA,
+      legB: legPercentages.legB,
+      legC: legPercentages.legC
+    };
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Leg percentages updated successfully for rank '${rankName}'`,
+      data: {
+        rankName,
+        legPercentages: mlm.crrRanks[rankName].legPercentages,
+        lastUpdated: mlm.updatedAt
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+// Update leg percentages for ALL CRR ranks at once
+export const updateAllCRRLegPercentages = asyncHandler(async (req, res) => {
+  try {
+    const { legPercentages } = req.body;
+    
+    if (!legPercentages) {
+      return res.status(400).json({
+        success: false,
+        message: "legPercentages are required"
+      });
+    }
+
+    // Validate leg percentages structure
+    const requiredLegs = ['legA', 'legB', 'legC'];
+    const missingLegs = requiredLegs.filter(leg => !legPercentages.hasOwnProperty(leg));
+    
+    if (missingLegs.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing leg percentages: ${missingLegs.join(', ')}`
+      });
+    }
+
+    // Validate percentage values
+    const totalPercentage = legPercentages.legA + legPercentages.legB + legPercentages.legC;
+    if (Math.abs(totalPercentage - 100) > 0.01) {
+      return res.status(400).json({
+        success: false,
+        message: `Total leg percentages must equal 100%. Current total: ${totalPercentage}%`
+      });
+    }
+
+    // Validate individual percentages
+    for (const leg of requiredLegs) {
+      const percentage = legPercentages[leg];
+      if (typeof percentage !== 'number' || percentage < 0 || percentage > 100) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid percentage for ${leg}: ${percentage}. Must be between 0 and 100.`
+        });
+      }
+    }
+
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    if (!mlm.crrRanks) {
+      return res.status(404).json({
+        success: false,
+        message: "CRR ranks not found in MLM system"
+      });
+    }
+
+    // Update leg percentages for ALL CRR ranks
+    const updatedRanks = [];
+    const legPercentageData = {
+      legA: legPercentages.legA,
+      legB: legPercentages.legB,
+      legC: legPercentages.legC
+    };
+
+    Object.keys(mlm.crrRanks).forEach(rankName => {
+      mlm.crrRanks[rankName].legPercentages = { ...legPercentageData };
+      updatedRanks.push(rankName);
+    });
+
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Leg percentages updated successfully for all CRR ranks`,
+      data: {
+        updatedRanks,
+        legPercentages: legPercentageData,
+        totalRanksUpdated: updatedRanks.length,
+        lastUpdated: mlm.updatedAt
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // Test CRR rank system with new structure (Admin only)
 export const testCRRRankSystem = asyncHandler(async (req, res) => {
   try {
@@ -559,11 +852,11 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     
     try {
       // Process user MLM distribution
-      userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId, rideType || 'personal');
+      userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId, 'personal');
       
       // Add the driver's MLM amount to the MLM system if driver exists
       if (driver) {
-        driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId, rideType || 'personal');
+        driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId, 'personal');
       }
       
       // Save the MLM model
@@ -579,7 +872,17 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       const campaignStartDate = new Date(activeBBRCampaign.startDate);
       
       // Update BBR participation automatically for all users
+      let shouldCountTeamRides = false;
+      let shouldCountDriverTeamRides = false;
+      
       if (activeBBRCampaign) {
+        // Calculate newbie check for team ride counting
+        const campaignStartDate = new Date(activeBBRCampaign.startDate);
+        shouldCountTeamRides = !activeBBRCampaign.newbieRidesOnly || (user.createdAt > campaignStartDate);
+        
+        if (driver && userId !== driverId) {
+          shouldCountDriverTeamRides = !activeBBRCampaign.newbieRidesOnly || (driver.createdAt > campaignStartDate);
+        }
         // Initialize user's BBR participation if not exists
         if (!user.bbrParticipation) {
           user.bbrParticipation = {
@@ -613,17 +916,62 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           };
         }
         
-        // Increment solo rides for user (these are the user's own rides)
+        // Count rides for the user (always increment)
         user.bbrParticipation.currentCampaign.soloRides = (user.bbrParticipation.currentCampaign.soloRides || 0) + 1;
+        
         user.bbrParticipation.currentCampaign.totalRides = 
           user.bbrParticipation.currentCampaign.soloRides + 
           (user.bbrParticipation.currentCampaign.teamRides || 0);
         user.bbrParticipation.currentCampaign.lastRideAt = new Date();
         
-        // Process newbie rides for sponsors (team members who joined after campaign start date)
-        // Only count as team rides if the user was created after campaign start date
-        if (user.createdAt > campaignStartDate) {
-          // Update team rides for user's upline sponsors
+        // Count rides for the driver (always increment if driver exists)
+        if (driver) {
+          // Initialize driver's BBR participation if not exists
+          if (!driver.bbrParticipation) {
+            driver.bbrParticipation = {
+              currentCampaign: {
+                campaignId: activeBBRCampaign._id,
+                totalRides: 0,
+                soloRides: 0,
+                teamRides: 0,
+                achieved: false,
+                joinedAt: new Date(),
+                lastRideAt: null
+              },
+              totalWins: 0,
+              totalRewardsEarned: 0,
+              history: []
+            };
+          }
+          
+          // Check if driver is participating in current campaign
+          if (!driver.bbrParticipation.currentCampaign || 
+              !driver.bbrParticipation.currentCampaign.campaignId ||
+              driver.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+            driver.bbrParticipation.currentCampaign = {
+              campaignId: activeBBRCampaign._id,
+              totalRides: 0,
+              soloRides: 0,
+              teamRides: 0,
+              achieved: false,
+              joinedAt: new Date(),
+              lastRideAt: null
+            };
+          }
+          
+          // Count as solo ride for driver (driver completed a ride)
+          driver.bbrParticipation.currentCampaign.soloRides = (driver.bbrParticipation.currentCampaign.soloRides || 0) + 1;
+          driver.bbrParticipation.currentCampaign.totalRides = 
+            driver.bbrParticipation.currentCampaign.soloRides + 
+            (driver.bbrParticipation.currentCampaign.teamRides || 0);
+          driver.bbrParticipation.currentCampaign.lastRideAt = new Date();
+          
+          await driver.save();
+        }
+        
+        // Process team rides for upliners with newbie check
+        // Count rides for user's upline sponsors
+        if (shouldCountTeamRides) {
           for (let level = 1; level <= 4; level++) {
             const sponsor = userUpline[`level${level}`];
             if (sponsor) {
@@ -660,7 +1008,7 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
                 };
               }
               
-              // Increment team rides for sponsor (newbie rides - team members who joined after campaign start)
+              // Increment team rides for sponsor
               sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
               sponsor.bbrParticipation.currentCampaign.totalRides = 
                 (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
@@ -672,15 +1020,37 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           }
         }
         
-        // Update team rides for driver's upline sponsors if driver exists and registered after campaign start
-        if (driver && userId !== driverId && driver.createdAt > campaignStartDate) {
-          for (let level = 1; level <= 4; level++) {
-            const sponsor = driverUpline[`level${level}`];
-            if (sponsor) {
-              // Initialize BBR participation if not exists
-              if (!sponsor.bbrParticipation) {
-                sponsor.bbrParticipation = {
-                  currentCampaign: {
+        // Count rides for driver's upline sponsors if driver is different from user
+        if (driver && userId !== driverId) {
+          const shouldCountDriverTeamRides = !activeBBRCampaign.newbieRidesOnly || (driver.createdAt > campaignStartDate);
+          
+          if (shouldCountDriverTeamRides) {
+            for (let level = 1; level <= 4; level++) {
+              const sponsor = driverUpline[`level${level}`];
+              if (sponsor) {
+                // Initialize BBR participation if not exists
+                if (!sponsor.bbrParticipation) {
+                  sponsor.bbrParticipation = {
+                    currentCampaign: {
+                      campaignId: activeBBRCampaign._id,
+                      totalRides: 0,
+                      soloRides: 0,
+                      teamRides: 0,
+                      achieved: false,
+                      joinedAt: new Date(),
+                      lastRideAt: null
+                    },
+                    totalWins: 0,
+                    totalRewardsEarned: 0,
+                    history: []
+                  };
+                }
+                
+                // Check if participating in current campaign
+                if (!sponsor.bbrParticipation.currentCampaign || 
+                    !sponsor.bbrParticipation.currentCampaign.campaignId ||
+                    sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+                  sponsor.bbrParticipation.currentCampaign = {
                     campaignId: activeBBRCampaign._id,
                     totalRides: 0,
                     soloRides: 0,
@@ -688,36 +1058,18 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
                     achieved: false,
                     joinedAt: new Date(),
                     lastRideAt: null
-                  },
-                  totalWins: 0,
-                  totalRewardsEarned: 0,
-                  history: []
-                };
+                  };
+                }
+                
+                // Increment team rides for sponsor
+                sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
+                sponsor.bbrParticipation.currentCampaign.totalRides = 
+                  (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
+                  sponsor.bbrParticipation.currentCampaign.teamRides;
+                sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
+                
+                await sponsor.save();
               }
-              
-              // Check if participating in current campaign
-              if (!sponsor.bbrParticipation.currentCampaign || 
-                  !sponsor.bbrParticipation.currentCampaign.campaignId ||
-                  sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
-                sponsor.bbrParticipation.currentCampaign = {
-                  campaignId: activeBBRCampaign._id,
-                  totalRides: 0,
-                  soloRides: 0,
-                  teamRides: 0,
-                  achieved: false,
-                  joinedAt: new Date(),
-                  lastRideAt: null
-                };
-              }
-              
-              // Increment team rides for sponsor (newbie rides - team members who joined after campaign start)
-              sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
-              sponsor.bbrParticipation.currentCampaign.totalRides = 
-                (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
-                sponsor.bbrParticipation.currentCampaign.teamRides;
-              sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
-              
-              await sponsor.save();
             }
           }
         }
@@ -734,6 +1086,12 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
         rideId,
         totalFare,
         driverPayment,
+
+        participants: {
+          userId,
+          driverId,
+          sameUserAndDriver: userId === driverId
+        },
         mlmAmount: {
           total: mlmAmount,
           user: userMlmAmount,
@@ -749,6 +1107,14 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
         mlmDistribution: {
           user: userMlmDistribution || null,
           driver: driverMlmDistribution || null
+        },
+        rideCounting: {
+          userRidesCounted: true,
+          driverRidesCounted: !!driver,
+          uplineTeamRidesCounted: activeBBRCampaign ? shouldCountTeamRides : false,
+          driverUplineTeamRidesCounted: activeBBRCampaign && driver && userId !== driverId ? shouldCountDriverTeamRides : false,
+          bbrParticipationUpdated: !!activeBBRCampaign,
+          newbieCheckApplied: activeBBRCampaign ? activeBBRCampaign.newbieRidesOnly : false
         }
       }
     });

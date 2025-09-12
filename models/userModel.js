@@ -618,6 +618,66 @@ userSchema.methods.checkMLMQualification = function () {
   return qualifications;
 };
 
+// Helper method to calculate TGP distribution from individual legs
+userSchema.methods.calculateIndividualLegTgpDistribution = async function() {
+  const User = mongoose.model('User');
+  
+  // Get user's direct referrals (level 1 members - legs A, B, C)
+  const directReferrals = await User.find({ _id: { $in: this.directReferrals } })
+    .select('qualificationPoints directReferrals level2Referrals level3Referrals level4Referrals nextLevels');
+  
+  if (directReferrals.length < 3) {
+    return {
+      hasMinimumLegs: false,
+      legDistribution: [],
+      userTotalTgp: this.qualificationPoints.tgp.accumulated
+    };
+  }
+  
+  // Calculate TGP from each leg (direct referral + their downlines)
+  const legDistribution = [];
+  
+  for (const directReferral of directReferrals) {
+    let legTgp = directReferral.qualificationPoints.tgp.accumulated;
+    
+    // Add TGP from all downlines of this direct referral
+    const allDownlineIds = [
+      ...directReferral.directReferrals,
+      ...directReferral.level2Referrals,
+      ...directReferral.level3Referrals,
+      ...directReferral.level4Referrals,
+      ...(directReferral.nextLevels ? directReferral.nextLevels.flat() : [])
+    ];
+    
+    if (allDownlineIds.length > 0) {
+      const downlineMembers = await User.find({ _id: { $in: allDownlineIds } })
+        .select('qualificationPoints');
+      
+      for (const downlineMember of downlineMembers) {
+        legTgp += downlineMember.qualificationPoints.tgp.accumulated;
+      }
+    }
+    
+    const userTotalTgp = this.qualificationPoints.tgp.accumulated;
+    const legPercentage = userTotalTgp > 0 ? (legTgp / userTotalTgp) * 100 : 0;
+    
+    legDistribution.push({
+      legId: directReferral._id,
+      tgpPoints: legTgp,
+      percentage: legPercentage
+    });
+  }
+  
+  // Sort legs by TGP (highest to lowest)
+  legDistribution.sort((a, b) => b.tgpPoints - a.tgpPoints);
+  
+  return {
+    hasMinimumLegs: directReferrals.length >= 3,
+    legDistribution,
+    userTotalTgp: this.qualificationPoints.tgp.accumulated
+  };
+};
+
 // CRR Rank Management Methods
 userSchema.methods.updateCRRRank = async function(crrRanks) {
   // If crrRanks is not provided, get them from MLM model
@@ -629,11 +689,11 @@ userSchema.methods.updateCRRRank = async function(crrRanks) {
     } else {
       // Default CRR ranks if MLM is not available
       crrRanks = {
-        Challenger: { requirements: { pgp: 2500, tgp: 50000 }, reward: 1000 },
-        Warrior: { requirements: { pgp: 5000, tgp: 100000 }, reward: 5000 },
-        Tycoon: { requirements: { pgp: 10000, tgp: 200000 }, reward: 20000 },
-        CHAMPION: { requirements: { pgp: 25000, tgp: 500000 }, reward: 50000 },
-        BOSS: { requirements: { pgp: 50000, tgp: 1000000 }, reward: 200000 }
+        Challenger: { requirements: { pgp: 2500, tgp: 50000, legPercentages: { legA: 25, legB: 20 } }, reward: 1000 },
+        Warrior: { requirements: { pgp: 5000, tgp: 100000, legPercentages: { legA: 30, legB: 25 } }, reward: 5000 },
+        Tycoon: { requirements: { pgp: 10000, tgp: 200000, legPercentages: { legA: 30, legB: 40 } }, reward: 20000 },
+        CHAMPION: { requirements: { pgp: 25000, tgp: 500000, legPercentages: { legA: 35, legB: 30 } }, reward: 50000 },
+        BOSS: { requirements: { pgp: 50000, tgp: 1000000, legPercentages: { legA: 40, legB: 35 } }, reward: 200000 }
       };
     }
   }
@@ -642,24 +702,50 @@ userSchema.methods.updateCRRRank = async function(crrRanks) {
   const tgpPoints = stats.tgp.accumulated;
   const pgpPoints = stats.pgp.accumulated;
   
-  // Determine new rank based on PGP and TGP requirements (progressive system)
+  // Calculate individual leg TGP distribution
+  const legData = await this.calculateIndividualLegTgpDistribution();
+  
+  // Determine new rank based on PGP, TGP, and individual leg percentage requirements (progressive system)
   let newRank = 'None';
   let rewardAmount = 0;
   
+  // Helper function to check if user meets all requirements for a rank
+  const meetsRankRequirements = (rank) => {
+    const requirements = crrRanks[rank].requirements;
+    const pgpMet = pgpPoints >= requirements.pgp;
+    const tgpMet = tgpPoints >= requirements.tgp;
+    
+    // Check individual leg percentage requirements
+    let legRequirementsMet = false;
+    if (legData.hasMinimumLegs && legData.legDistribution.length >= 3) {
+      const legA = legData.legDistribution[0]; // Highest TGP leg
+      const legB = legData.legDistribution[1]; // Second highest TGP leg
+      const legC = legData.legDistribution[2]; // Third highest TGP leg
+      
+      const legAMet = legA.percentage >= requirements.legPercentages.legA;
+      const legBMet = legB.percentage >= requirements.legPercentages.legB;
+      const legCMet = legC.percentage >= requirements.legPercentages.legC;
+      
+      legRequirementsMet = legAMet && legBMet && legCMet;
+    }
+    
+    return pgpMet && tgpMet && legRequirementsMet;
+  };
+  
   // Check ranks in order - user must achieve each rank sequentially
-  if (pgpPoints >= crrRanks.BOSS.requirements.pgp && tgpPoints >= crrRanks.BOSS.requirements.tgp) {
+  if (meetsRankRequirements('BOSS')) {
     newRank = 'BOSS';
     rewardAmount = crrRanks.BOSS.reward;
-  } else if (pgpPoints >= crrRanks.CHAMPION.requirements.pgp && tgpPoints >= crrRanks.CHAMPION.requirements.tgp) {
+  } else if (meetsRankRequirements('CHAMPION')) {
     newRank = 'CHAMPION';
     rewardAmount = crrRanks.CHAMPION.reward;
-  } else if (pgpPoints >= crrRanks.Tycoon.requirements.pgp && tgpPoints >= crrRanks.Tycoon.requirements.tgp) {
+  } else if (meetsRankRequirements('Tycoon')) {
     newRank = 'Tycoon';
     rewardAmount = crrRanks.Tycoon.reward;
-  } else if (pgpPoints >= crrRanks.Warrior.requirements.pgp && tgpPoints >= crrRanks.Warrior.requirements.tgp) {
+  } else if (meetsRankRequirements('Warrior')) {
     newRank = 'Warrior';
     rewardAmount = crrRanks.Warrior.reward;
-  } else if (pgpPoints >= crrRanks.Challenger.requirements.pgp && tgpPoints >= crrRanks.Challenger.requirements.tgp) {
+  } else if (meetsRankRequirements('Challenger')) {
     newRank = 'Challenger';
     rewardAmount = crrRanks.Challenger.reward;
   }

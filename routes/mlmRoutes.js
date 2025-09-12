@@ -28,6 +28,10 @@ import {
   updateMotivationalQuotes,
   getCRRRankConfig,
   updateCRRRankConfig,
+  getCRRLegPercentages,
+  updateCRRLegPercentages,
+  updateAllCRRLegPercentages,
+  updateGlobalCRRLegPercentages,
   getDDRCRRStats,
   // BBR Controller Functions
   getCurrentBBRCampaign,
@@ -156,6 +160,21 @@ router.get("/admin/crr/config",  getCRRRankConfig);
 
 // Update CRR rank configuration
 router.put("/admin/crr/config",  updateCRRRankConfig);
+
+// Get CRR leg percentages (public)
+router.get("/crr/leg-percentages", getCRRLegPercentages);
+
+// Get CRR leg percentages (admin)
+router.get("/admin/crr/leg-percentages", getCRRLegPercentages);
+
+// Update CRR leg percentages (Admin only)
+router.put("/admin/crr/leg-percentages", adminHandler, updateCRRLegPercentages);
+
+// Update ALL CRR leg percentages at once (Admin only)
+router.put("/admin/crr/leg-percentages/bulk", adminHandler, updateAllCRRLegPercentages);
+
+// Update global CRR leg percentages (Admin only)
+router.put("/admin/crr/global-leg-percentages", updateGlobalCRRLegPercentages);
 
 // Get DDR/CRR system statistics for admin
 router.get("/admin/ddr-crr-stats",  getDDRCRRStats);

@@ -223,7 +223,12 @@ const mlmSchema = new mongoose.Schema({
       status: { type: String, default: "Achieved" },
       requirements: {
         pgp: { type: Number, default: 2500 },
-        tgp: { type: Number, default: 50000 }
+        tgp: { type: Number, default: 50000 },
+        legPercentages: {
+          legA: { type: Number, default: 25 }, // User must earn at least 25% from leg A
+          legB: { type: Number, default: 20 }, // User must earn at least 20% from leg B
+          legC: { type: Number, default: 15 }  // User must earn at least 15% from leg C
+        }
       }
     },
     Warrior: {
@@ -233,7 +238,12 @@ const mlmSchema = new mongoose.Schema({
       status: { type: String, default: "Achieved" },
       requirements: {
         pgp: { type: Number, default: 5000 },
-        tgp: { type: Number, default: 100000 }
+        tgp: { type: Number, default: 100000 },
+        legPercentages: {
+          legA: { type: Number, default: 30 }, // User must earn at least 30% from leg A
+          legB: { type: Number, default: 25 }, // User must earn at least 25% from leg B
+          legC: { type: Number, default: 20 }  // User must earn at least 20% from leg C
+        }
       }
     },
     Tycoon: {
@@ -243,7 +253,12 @@ const mlmSchema = new mongoose.Schema({
       status: { type: String, default: "Locked" },
       requirements: {
         pgp: { type: Number, default: 10000 },
-        tgp: { type: Number, default: 200000 }
+        tgp: { type: Number, default: 200000 },
+        legPercentages: {
+          legA: { type: Number, default: 30 }, // User must earn at least 30% from leg A
+          legB: { type: Number, default: 40 }, // User must earn at least 40% from leg B
+          legC: { type: Number, default: 30 }  // User must earn at least 30% from leg C
+        }
       }
     },
     CHAMPION: {
@@ -253,7 +268,12 @@ const mlmSchema = new mongoose.Schema({
       status: { type: String, default: "Locked" },
       requirements: {
         pgp: { type: Number, default: 25000 },
-        tgp: { type: Number, default: 500000 }
+        tgp: { type: Number, default: 500000 },
+        legPercentages: {
+          legA: { type: Number, default: 35 }, // User must earn at least 35% from leg A
+          legB: { type: Number, default: 30 }, // User must earn at least 30% from leg B
+          legC: { type: Number, default: 25 }  // User must earn at least 25% from leg C
+        }
       }
     },
     BOSS: {
@@ -263,7 +283,12 @@ const mlmSchema = new mongoose.Schema({
       status: { type: String, default: "Locked" },
       requirements: {
         pgp: { type: Number, default: 50000 },
-        tgp: { type: Number, default: 1000000 }
+        tgp: { type: Number, default: 1000000 },
+        legPercentages: {
+          legA: { type: Number, default: 40 }, // User must earn at least 40% from leg A
+          legB: { type: Number, default: 35 }, // User must earn at least 35% from leg B
+          legC: { type: Number, default: 25 }  // User must earn at least 25% from leg C
+        }
       }
     }
   },
@@ -273,7 +298,13 @@ const mlmSchema = new mongoose.Schema({
     monthlyReset: { type: Boolean, default: true },
     resetDay: { type: Number, default: 1 }, // 1st of each month
     pointValue: { type: Number, default: 1 }, // 1 PGP/TGP = 1 AED
-    leaderboardUpdateInterval: { type: Number, default: 300000 } // 5 minutes
+    leaderboardUpdateInterval: { type: Number, default: 300000 }, // 5 minutes
+    // Global leg percentages for all CRR ranks (set by admin)
+    legPercentages: {
+      legA: { type: Number, default: 33.33 },
+      legB: { type: Number, default: 33.33 },
+      legC: { type: Number, default: 33.34 }
+    }
   },
 
   // BBR (Bonus Booster Rewards) Campaign Management
