@@ -1873,8 +1873,9 @@ export const getUserCRRRankTracking = asyncHandler(async (req, res) => {
       // Check if this is the current rank
       const isCurrentRank = currentRank === rankName;
       
-      return {
+      const result = {
         rank: rankConfig.name || rankName,
+        rankName: rankName,
         name: rankConfig.name || rankName,
         icon: rankConfig.icon,
         reward: rankConfig.reward,
@@ -1900,6 +1901,9 @@ export const getUserCRRRankTracking = asyncHandler(async (req, res) => {
           tgp: Math.max(0, requirements.tgp - tgpPoints)
         }
       };
+      
+      console.log('Rank result for', rankName, ':', JSON.stringify(result, null, 2));
+      return result;
     });
 
     res.status(200).json({
@@ -5323,10 +5327,14 @@ export const getRegionalLeaderboard = asyncHandler(async (req, res) => {
       matchCriteria.country = country;
     }
 
-    // Get users with CRR ranks (Regional Race)
+    // Get users with CRR ranks (Regional Race) - only KYC Level 1+ approved users
     const leaderboard = await User.aggregate([
       {
-        $match: matchCriteria
+        $match: {
+          ...matchCriteria,
+          kycLevel: { $gte: 1 },
+          kycStatus: 'approved'
+        }
       },
       {
         $addFields: {
@@ -5379,8 +5387,12 @@ export const getRegionalLeaderboard = asyncHandler(async (req, res) => {
       }
     ]);
 
-    // Get total count
-    const totalUsers = await User.countDocuments(matchCriteria);
+    // Get total count - only KYC Level 1+ approved users
+    const totalUsers = await User.countDocuments({
+      ...matchCriteria,
+      kycLevel: { $gte: 1 },
+      kycStatus: 'approved'
+    });
 
     // Get user's position if userId provided
     let userPosition = null;
@@ -5524,8 +5536,14 @@ async function getCurrentCountryAmbassador(country) {
 
 async function getGlobalAmbassadorsList() {
   try {
-    // Get the highest CRR rank user from each country
+    // Get the highest CRR rank user from each country - only KYC Level 1+ approved users
     const ambassadors = await User.aggregate([
+      {
+        $match: {
+          kycLevel: { $gte: 1 },
+          kycStatus: 'approved'
+        }
+      },
       {
         $addFields: {
           rankLevel: {
@@ -5619,7 +5637,11 @@ function calculateRegionalProgress(currentRank, regionalConfig) {
 
 async function getUserCountryPosition(userId, country) {
   try {
-    const matchCriteria = country ? { country } : {};
+    const matchCriteria = {
+      ...(country ? { country } : {}),
+      kycLevel: { $gte: 1 },
+      kycStatus: 'approved'
+    };
     
     const userPosition = await User.aggregate([
       {
