@@ -1834,14 +1834,14 @@ export const getUserCRRRankTracking = asyncHandler(async (req, res) => {
     const tgpPoints = stats.tgp.accumulated;
     const currentRank = user.crrRank.current;
 
-    // Get CRR ranks configuration
-    const crrRanks = mlm.crrRanks || {
-      Challenger: { requirements: { pgp: 2500, tgp: 50000 }, reward: 1000, icon: "🥇" },
-      Warrior: { requirements: { pgp: 5000, tgp: 100000 }, reward: 5000, icon: "🥈" },
-      Tycoon: { requirements: { pgp: 10000, tgp: 200000 }, reward: 20000, icon: "🥉" },
-      CHAMPION: { requirements: { pgp: 25000, tgp: 500000 }, reward: 50000, icon: "🏅" },
-      BOSS: { requirements: { pgp: 50000, tgp: 1000000 }, reward: 200000, icon: "🎖" }
-    };
+    // Get CRR ranks configuration from database
+    const crrRanks = mlm.crrRanks;
+    if (!crrRanks || Object.keys(crrRanks).length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "CRR ranks configuration not found. Please configure CRR ranks first."
+      });
+    }
 
     // Define rank order
     const rankOrder = ['Challenger', 'Warrior', 'Tycoon', 'CHAMPION', 'BOSS'];
@@ -1849,6 +1849,7 @@ export const getUserCRRRankTracking = asyncHandler(async (req, res) => {
     // Track all ranks
     const rankTracking = rankOrder.map((rankName, index) => {
       const rankConfig = crrRanks[rankName];
+
       const requirements = rankConfig.requirements;
       
       // Check if user meets requirements
@@ -1873,7 +1874,8 @@ export const getUserCRRRankTracking = asyncHandler(async (req, res) => {
       const isCurrentRank = currentRank === rankName;
       
       return {
-        rank: rankName,
+        rank: rankConfig.name || rankName,
+        name: rankConfig.name || rankName,
         icon: rankConfig.icon,
         reward: rankConfig.reward,
         requirements: {
