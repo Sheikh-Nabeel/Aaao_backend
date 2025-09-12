@@ -14,6 +14,7 @@ import emailVerificationRoutes from ".//emailVerificationRoutes.js"; // Added em
 import driverStatusRoutes from ".//driverStatusRoutes.js"; // Added driver status routes
 import qualifiedDriversRoutes from ".//qualifiedDriversRoutes.js"; // Added qualified drivers routes
 import offerRoutes from ".//offerRoutes.js"; // Added qualified drivers routes
+import supportTicketRoutes from ".//supportTicketRoutes.js"; // Added support ticket routes
 import errorHandler from "../middlewares/errorMiddleware.js";
 
 export function initRoutes(app) {
@@ -33,6 +34,7 @@ export function initRoutes(app) {
   app.use("/api/qualified-drivers", qualifiedDriversRoutes); // Added qualified drivers routes
   app.use("/api/nearby-drivers", qualifiedDriversRoutes); // Added nearby drivers routes
   app.use("/api/offers", offerRoutes); // Correct
+  app.use("/api/support", supportTicketRoutes); // Added support ticket routes
 
   app.use(errorHandler);
 }
