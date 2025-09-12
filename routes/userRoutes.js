@@ -39,6 +39,7 @@ import {
   changeOwnPassword,
   editProfile,
   changeReferralCode,
+  updateProfilePicture,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -207,5 +208,13 @@ router.patch(
 
 // Change referral code route
 router.patch("/change-referral-code/:userId", authHandler, changeReferralCode);
+
+// Update profile picture route
+router.patch(
+  "/update-profile-picture",
+  authHandler,
+  upload.single("profilePicture"),
+  updateProfilePicture
+);
 
 export default router;

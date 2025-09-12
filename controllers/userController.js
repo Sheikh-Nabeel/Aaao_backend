@@ -2815,6 +2815,60 @@ const changeOwnPassword = asyncHandler(async (req, res) => {
   });
 });
 
+const updateProfilePicture = asyncHandler(async (req, res) => {
+  const userId = req.user._id; // Get user ID from authenticated token
+
+  // Validate that a file was uploaded
+  if (!req.file) {
+    res.status(400);
+    throw new Error("Profile picture file is required");
+  }
+
+  // Find the user
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error("User not found");
+  }
+
+  // Helper function to delete old files
+  const deleteOldFile = (filePath) => {
+    if (filePath && fs.existsSync(path.join(process.cwd(), filePath))) {
+      try {
+        fs.unlinkSync(path.join(process.cwd(), filePath));
+      } catch (error) {
+        console.error(`Error deleting file ${filePath}:`, error);
+      }
+    }
+  };
+
+  // Delete old profile picture if it exists
+  deleteOldFile(user.selfieImage);
+
+  // Set new profile picture path
+  const profilePicturePath = path.join("uploads", req.file.filename).replace(/\\/g, "/");
+
+  // Update user with new profile picture
+  const updatedUser = await User.findByIdAndUpdate(
+    userId,
+    { selfieImage: profilePicturePath },
+    { new: true, runValidators: true }
+  ).select("username firstName lastName email selfieImage");
+
+  res.status(200).json({
+    success: true,
+    message: "Profile picture updated successfully",
+    user: {
+      userId: updatedUser._id,
+      username: updatedUser.username,
+      firstName: updatedUser.firstName,
+      lastName: updatedUser.lastName,
+      email: updatedUser.email,
+      profilePicture: updatedUser.selfieImage,
+    },
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -2855,5 +2909,6 @@ export {
   editProfile,
   changeOwnPassword,
   changeReferralCode,
+  updateProfilePicture,
 
 };
