@@ -352,6 +352,7 @@ const getVehicleAndDriverHiring = asyncHandler(async (req, res) => {
       "assignedVehicles",
       "vehiclePlateNumber vehicleMakeModel vehicleType"
     )
+    .populate("pendingVehicleData")
     .lean();
   if (!user) {
     return res
@@ -359,9 +360,14 @@ const getVehicleAndDriverHiring = asyncHandler(async (req, res) => {
       .json({ message: "User not found", token: req.cookies.token });
   }
 
-  const vehicles = await VehicleRegistration.find({ userId })
+  let vehicles = await VehicleRegistration.find({ userId })
     .select("-__v")
     .lean();
+
+  // If no vehicles found in VehicleRegistration, check pendingVehicleData (KYC level 2)
+  if (vehicles.length === 0 && user.pendingVehicleData) {
+    vehicles = [user.pendingVehicleData];
+  }
 
   const driverHirings = await DriverHiring.find({
     userId,

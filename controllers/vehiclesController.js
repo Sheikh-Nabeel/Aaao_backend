@@ -168,7 +168,18 @@ const updateVehicle = asyncHandler(async (req, res) => {
 // GET: current user's vehicle
 const getUserVehicle = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const vehicle = await Vehicle.findOne({ userId });
+  
+  // First, try to find vehicle in the Vehicle collection (regular registration)
+  let vehicle = await Vehicle.findOne({ userId });
+  
+  // If no vehicle found, check if user has a vehicle in pendingVehicleData (KYC level 2 registration)
+  if (!vehicle) {
+    const user = await User.findById(userId).populate('pendingVehicleData');
+    if (user && user.pendingVehicleData) {
+      vehicle = user.pendingVehicleData;
+    }
+  }
+  
   res.status(200).json({ vehicle });
 });
 
