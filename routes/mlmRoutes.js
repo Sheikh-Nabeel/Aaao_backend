@@ -71,7 +71,8 @@ import {
    claimCRRReward,
    distributeBBRRewards,
    // User Dashboard Functions
-   getUserMLMDashboard
+   getUserMLMDashboard,
+  cleanupDuplicateTransactions
 } from "../controllers/mlmController.js";
 import adminHandler from '../middlewares/adminMiddleware.js';
 
@@ -280,5 +281,8 @@ router.get("/admin/crr/config", getCRRRankConfig);
 
 // Test CRR rank system
 router.post("/admin/crr/test", testCRRRankSystem);
+
+// Cleanup duplicate transactions route
+router.post("/admin/cleanup-duplicates", cleanupDuplicateTransactions);
 
 export default router;

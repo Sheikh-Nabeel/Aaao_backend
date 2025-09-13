@@ -142,12 +142,12 @@ router.post(
   ]),
   createService
 );
-router.get("/services", authHandler, adminHandler, getAllServices);
+router.get("/services", authHandler, getAllServices);
 router.get("/user-services", authHandler, getUserServices);
 router.delete("/services/:serviceId", authHandler, deleteService);
 router.get("/available-services", authHandler, getAvailableServices);
-router.post("/services/approve/:serviceId", authHandler, adminHandler, approveService);
-router.post("/services/reject/:serviceId", authHandler, adminHandler, rejectService);
+router.post("/services/approve/:serviceId", authHandler, approveService);
+router.post("/services/reject/:serviceId", authHandler,  rejectService);
 
 // Superadmin routes for allowed sections
 router.post("/allowed-sections", superadminAuth, manageAllowedSections);

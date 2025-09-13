@@ -64,6 +64,87 @@ export const createMLM = asyncHandler(async (req, res) => {
   }
 });
 
+// Cleanup duplicate transactions (Admin only)
+export const cleanupDuplicateTransactions = asyncHandler(async (req, res) => {
+  try {
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Group transactions by rideId and userId
+    const transactionGroups = {};
+    mlm.transactions.forEach((transaction, index) => {
+      const key = `${transaction.rideId}_${transaction.userId}`;
+      if (!transactionGroups[key]) {
+        transactionGroups[key] = [];
+      }
+      transactionGroups[key].push({ transaction, index });
+    });
+
+    // Find duplicates and keep only the latest one
+    let duplicatesRemoved = 0;
+    const indicesToRemove = [];
+    
+    Object.keys(transactionGroups).forEach(key => {
+      const group = transactionGroups[key];
+      if (group.length > 1) {
+        // Sort by timestamp, keep the latest
+        group.sort((a, b) => new Date(b.transaction.timestamp) - new Date(a.transaction.timestamp));
+        // Mark older transactions for removal
+        for (let i = 1; i < group.length; i++) {
+          indicesToRemove.push(group[i].index);
+          duplicatesRemoved++;
+        }
+      }
+    });
+
+    // Remove duplicates (in reverse order to maintain indices)
+    indicesToRemove.sort((a, b) => b - a);
+    indicesToRemove.forEach(index => {
+      mlm.transactions.splice(index, 1);
+    });
+
+    // Recalculate balances
+    mlm.currentBalances = {};
+    mlm.totalAmount = 0;
+    
+    mlm.transactions.forEach(transaction => {
+      mlm.totalAmount += transaction.amount;
+      
+      // Update balances
+      Object.keys(transaction.distribution).forEach(key => {
+        if (!mlm.currentBalances[key]) {
+          mlm.currentBalances[key] = 0;
+        }
+        mlm.currentBalances[key] += transaction.distribution[key];
+      });
+    });
+
+    mlm.markModified('transactions');
+    mlm.markModified('currentBalances');
+    await mlm.save();
+
+    res.status(200).json({
+      success: true,
+      message: `Cleanup completed. Removed ${duplicatesRemoved} duplicate transactions.`,
+      data: {
+        duplicatesRemoved,
+        remainingTransactions: mlm.transactions.length,
+        recalculatedTotalAmount: mlm.totalAmount
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // Update global CRR leg percentages (Admin only)
 export const updateGlobalCRRLegPercentages = asyncHandler(async (req, res) => {
   try {
@@ -715,10 +796,19 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           case 4: levelPercentage = mlm.ddrLevel4; break;
         }
         
-        // Calculate the amount for this level - split between user and driver contributions
-        const userDdrAmount = (userMlmAmount * levelPercentage) / 100;
-        const driverDdrAmount = (driverMlmAmount * levelPercentage) / 100;
-        const ddrLevelAmount = userDdrAmount + driverDdrAmount;
+        // Calculate the amount for this level
+        // For personal rides (user = driver), use full MLM amount to avoid duplicates
+        // For team rides, split between user and driver contributions
+        let ddrLevelAmount;
+        if (userId === driverId) {
+          // Personal ride: use full MLM amount (15% of fare)
+          ddrLevelAmount = (mlmAmount * levelPercentage) / 100;
+        } else {
+          // Team ride: split between user and driver contributions
+          const userDdrAmount = (userMlmAmount * levelPercentage) / 100;
+          const driverDdrAmount = (driverMlmAmount * levelPercentage) / 100;
+          ddrLevelAmount = userDdrAmount + driverDdrAmount;
+        }
         
         // Add to sponsor's wallet with transaction record
         sponsor.wallet.balance += ddrLevelAmount;
@@ -736,8 +826,8 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           level,
           amount: {
             total: ddrLevelAmount,
-            user: userDdrAmount,
-            driver: driverDdrAmount
+            user: userId === driverId ? ddrLevelAmount : (userMlmAmount * levelPercentage) / 100,
+            driver: userId === driverId ? 0 : (driverMlmAmount * levelPercentage) / 100
           },
           percentage: levelPercentage,
           source: 'ride_activity'
@@ -854,9 +944,13 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       // Process user MLM distribution
       userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId, 'personal');
       
-      // Add the driver's MLM amount to the MLM system if driver exists
-      if (driver) {
+      // Add the driver's MLM amount to the MLM system if driver exists and is different from user
+      if (driver && userId !== driverId) {
         driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId, 'personal');
+      } else if (driver && userId === driverId) {
+        // For personal rides (user = driver), add the driver's MLM amount to the same user's transaction
+        // This prevents duplicate transactions for the same person
+        mlm.addMoney(userId, driverMlmAmount, rideId, 'driver_contribution');
       }
       
       // Save the MLM model
@@ -868,12 +962,15 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
 
     // Update BBR participation for the campaign
     const activeBBRCampaign = mlm.bbrCampaigns?.current;
+    
+    // Declare variables at function scope to avoid "not defined" errors
+    let shouldCountTeamRides = false;
+    let shouldCountDriverTeamRides = false;
+    
     if (activeBBRCampaign && activeBBRCampaign.isActive) {
       const campaignStartDate = new Date(activeBBRCampaign.startDate);
       
       // Update BBR participation automatically for all users
-      let shouldCountTeamRides = false;
-      let shouldCountDriverTeamRides = false;
       
       if (activeBBRCampaign) {
         // Calculate newbie check for team ride counting
