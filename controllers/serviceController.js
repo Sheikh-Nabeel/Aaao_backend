@@ -110,7 +110,7 @@ const getAllServices = asyncHandler(async (req, res) => {
 
 const getUserServices = asyncHandler(async (req, res) => {
   const userId = req.user._id;
-  const services = await Service.find({ userId }).populate('userId', 'username firstName lastName role');
+  const services = await Service.find({ userId, status: 'approved' }).populate('userId', 'username firstName lastName role');
   res.status(200).json({
     message: "User services retrieved successfully",
     services,
@@ -137,7 +137,7 @@ const deleteService = asyncHandler(async (req, res) => {
 });
 
 const getAvailableServices = asyncHandler(async (req, res) => {
-  const existingServices = await Service.find();
+  const existingServices = await Service.find({ status: 'approved' });
   const availableServices = [...new Set(existingServices.map(s => s.serviceType))];
   res.status(200).json({
     message: "Available services retrieved successfully",
