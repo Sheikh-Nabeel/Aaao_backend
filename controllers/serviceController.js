@@ -100,11 +100,29 @@ const createService = asyncHandler(async (req, res) => {
 });
 
 const getAllServices = asyncHandler(async (req, res) => {
-  const services = await Service.find({ status: 'approved' }).populate('userId', 'username firstName lastName role');
+  const userRole = req.user.role;
+  
+  let query = {};
+  
+  // If user is admin or superadmin, show all services
+  // If user is regular user, show only approved services
+  if (userRole === 'admin' || userRole === 'superadmin') {
+    // No filter - show all services regardless of status
+    query = {};
+  } else {
+    // Regular users only see approved services
+    query = { status: 'approved' };
+  }
+  
+  const services = await Service.find(query)
+    .populate('userId', 'username firstName lastName role')
+    .sort({ createdAt: -1 }); // Sort by newest first
+  
   res.status(200).json({
     message: "All services retrieved successfully",
     services,
-    total: services.length
+    total: services.length,
+    userRole: userRole // Include user role in response for debugging
   });
 });
 
@@ -184,6 +202,28 @@ const rejectService = asyncHandler(async (req, res) => {
   });
 });
 
+// Get pending services (admin/superadmin only)
+const getPendingServices = asyncHandler(async (req, res) => {
+  const userRole = req.user.role;
+  
+  // Only admin and superadmin can access pending services
+  if (userRole !== 'admin' && userRole !== 'superadmin') {
+    res.status(403);
+    throw new Error('Access denied. Admin privileges required.');
+  }
+
+  const pendingServices = await Service.find({ status: 'pending' })
+    .populate('userId', 'firstName lastName email phone')
+    .sort({ createdAt: -1 });
+
+  res.status(200).json({
+    success: true,
+    count: pendingServices.length,
+    services: pendingServices,
+    userRole: userRole
+  });
+});
+
 export {
   createService,
   getAllServices,
@@ -191,5 +231,6 @@ export {
   deleteService,
   getAvailableServices,
   approveService,
-  rejectService
+  rejectService,
+  getPendingServices
 };

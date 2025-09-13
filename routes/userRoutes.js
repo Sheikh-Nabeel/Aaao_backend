@@ -53,6 +53,7 @@ import {
   getAvailableServices,
   approveService,
   rejectService,
+  getPendingServices
 } from "../controllers/serviceController.js";
 import multer from "multer";
 import path from "path";
@@ -143,6 +144,7 @@ router.post(
   createService
 );
 router.get("/services", authHandler, getAllServices);
+router.get("/pending-services", authHandler, adminHandler, getPendingServices);
 router.get("/user-services", authHandler, getUserServices);
 router.delete("/services/:serviceId", authHandler, deleteService);
 router.get("/available-services", authHandler, getAvailableServices);
