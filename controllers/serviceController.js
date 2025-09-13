@@ -100,7 +100,7 @@ const createService = asyncHandler(async (req, res) => {
 });
 
 const getAllServices = asyncHandler(async (req, res) => {
-  const services = await Service.find().populate('userId', 'username firstName lastName role');
+  const services = await Service.find({ status: 'approved' }).populate('userId', 'username firstName lastName role');
   res.status(200).json({
     message: "All services retrieved successfully",
     services,
