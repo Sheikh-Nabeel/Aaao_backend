@@ -5762,6 +5762,99 @@ export const handleCountryUpdateRequest = asyncHandler(async (req, res) => {
   }
 });
 
+// Get pending approvals and total MLM earnings
+export const getPendingApprovalsAndEarnings = asyncHandler(async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Get MLM system data
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    // Get user data
+    const user = await User.findById(userId).select('mlmBalance firstName lastName email country');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Get pending country update requests for this user
+    const pendingCountryRequests = mlm.regionalAmbassadorConfig.countryUpdateRequests.filter(
+      req => req.userId.toString() === userId && req.status === 'pending'
+    );
+
+    // Calculate total MLM earnings
+    const totalEarnings = {
+      total: user.mlmBalance?.total || 0,
+      userTree: user.mlmBalance?.userTree || 0,
+      driverTree: user.mlmBalance?.driverTree || 0,
+      transactions: user.mlmBalance?.transactions || []
+    };
+
+    // Get recent transactions (last 10)
+    const recentTransactions = totalEarnings.transactions
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 10)
+      .map(transaction => ({
+        rideId: transaction.rideId,
+        amount: transaction.amount,
+        type: transaction.type,
+        timestamp: transaction.timestamp
+      }));
+
+    // Get pending KYC approvals count (if admin)
+    let pendingKYCCount = 0;
+    if (req.user && (req.user.role === 'admin' || req.user.role === 'superadmin')) {
+      pendingKYCCount = await User.countDocuments({ kycStatus: 'pending' });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          id: user._id,
+          name: `${user.firstName} ${user.lastName}`,
+          email: user.email,
+          country: user.country
+        },
+        pendingApprovals: {
+          countryUpdateRequests: pendingCountryRequests.map(req => ({
+            id: req._id,
+            currentCountry: req.currentCountry,
+            requestedCountry: req.requestedCountry,
+            reason: req.reason,
+            requestedAt: req.requestedAt,
+            status: req.status
+          })),
+          totalPendingRequests: pendingCountryRequests.length,
+          pendingKYCCount: pendingKYCCount
+        },
+        mlmEarnings: {
+          totalEarnings: totalEarnings.total,
+          userTreeEarnings: totalEarnings.userTree,
+          driverTreeEarnings: totalEarnings.driverTree,
+          totalTransactions: totalEarnings.transactions.length,
+          recentTransactions: recentTransactions
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Error getting pending approvals and earnings:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting pending approvals and earnings",
+      error: error.message
+    });
+  }
+});
+
 // Admin: Approve/Reject country update request
 export const processCountryUpdateRequest = asyncHandler(async (req, res) => {
   try {

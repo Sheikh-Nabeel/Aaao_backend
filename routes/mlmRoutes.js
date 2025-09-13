@@ -1,5 +1,6 @@
 import express from "express";
 import { validateUserId } from "../middlewares/userIdValidation.js";
+import authHandler from "../middlewares/authMIddleware.js";
 import {
   createMLM,
   getMLM,
@@ -55,6 +56,7 @@ import {
   handleCountryUpdateRequest,
   processCountryUpdateRequest,
   updateRegionalAmbassadorConfig,
+  getPendingApprovalsAndEarnings,
   // Comprehensive Earnings Controller
   getUserComprehensiveEarnings,
   // Admin MLM Initialization Functions
@@ -241,6 +243,9 @@ router.get("/regional/global-ambassadors", getGlobalAmbassadors);
 // Comprehensive Earnings Route
 // Get user's comprehensive earnings and progress from all MLM programs
 router.get("/comprehensive-earnings/:userId", validateUserId, getUserComprehensiveEarnings);
+
+// Get pending approvals and total MLM earnings for user
+router.get("/pending-approvals-earnings/:userId", authHandler, validateUserId, getPendingApprovalsAndEarnings);
 
 // Handle country update request from user
 router.post("/regional/country-update-request", handleCountryUpdateRequest);
