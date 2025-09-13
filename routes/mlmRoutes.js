@@ -245,7 +245,7 @@ router.get("/regional/global-ambassadors", getGlobalAmbassadors);
 router.get("/comprehensive-earnings/:userId", validateUserId, getUserComprehensiveEarnings);
 
 // Get pending approvals and total MLM earnings for user
-router.get("/pending-approvals-earnings/:userId", authHandler, validateUserId, getPendingApprovalsAndEarnings);
+router.get("/pending-approvals-earnings", authHandler, getPendingApprovalsAndEarnings);
 
 // Handle country update request from user
 router.post("/regional/country-update-request", handleCountryUpdateRequest);

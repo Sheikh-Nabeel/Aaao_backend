@@ -5765,7 +5765,8 @@ export const handleCountryUpdateRequest = asyncHandler(async (req, res) => {
 // Get pending approvals and total MLM earnings
 export const getPendingApprovalsAndEarnings = asyncHandler(async (req, res) => {
   try {
-    const { userId } = req.params;
+    // Use user ID from token instead of URL parameter
+    const userId = req.user._id;
     
     // Get MLM system data
     const mlm = await MLM.findOne();
