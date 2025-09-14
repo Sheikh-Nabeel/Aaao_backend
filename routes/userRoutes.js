@@ -34,6 +34,7 @@ import {
   addAdmin,
   getCurrentUser,
   getAdmins,
+  getAllAdminsAndSuperadmins,
   editAdmin,
   deleteAdmin,
   changeOwnPassword,
@@ -183,6 +184,7 @@ router.put(
 
 router.get("/me", authHandler, getCurrentUser);
 router.get("/admins", authHandler, adminHandler, getAdmins);
+router.get("/admins-and-superadmins", authHandler, getAllAdminsAndSuperadmins);
 router.post("/admin/add-admin", authHandler, adminHandler, addAdmin);
 router.put("/admin/edit-admin/:userId", authHandler, adminHandler, editAdmin);
 router.delete(

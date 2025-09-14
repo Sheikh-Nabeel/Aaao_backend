@@ -2869,6 +2869,41 @@ const updateProfilePicture = asyncHandler(async (req, res) => {
   });
 });
 
+const getAllAdminsAndSuperadmins = asyncHandler(async (req, res) => {
+  const requestingUser = await User.findById(req.user._id);
+  if (!requestingUser || !['admin', 'superadmin'].includes(requestingUser.role)) {
+    res.status(403);
+    throw new Error('Access denied. Admin or superadmin role required');
+  }
+
+  const adminUsers = await User.find({ 
+    role: { $in: ['admin', 'superadmin'] } 
+  })
+    .select('username firstName lastName email phoneNumber role adminPermissions createdAt')
+    .sort({ role: 1, createdAt: -1 }); // Sort by role first (admin before superadmin), then by creation date
+
+  res.status(200).json({
+    success: true,
+    message: 'Admins and superadmins retrieved successfully',
+    users: adminUsers.map(user => ({
+      _id: user._id,
+      username: user.username,
+      firstName: user.firstName,
+      lastName: user.lastName || '',
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      role: user.role,
+      adminPermissions: user.adminPermissions || [],
+      createdAt: user.createdAt
+    })),
+    totalUsers: adminUsers.length,
+    breakdown: {
+      admins: adminUsers.filter(user => user.role === 'admin').length,
+      superadmins: adminUsers.filter(user => user.role === 'superadmin').length
+    }
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -2903,6 +2938,7 @@ export {
   getAllDrivers,
   addAdmin,
   getAdmins,
+  getAllAdminsAndSuperadmins,
   editAdmin,
   deleteAdmin,
   getCurrentUser,
