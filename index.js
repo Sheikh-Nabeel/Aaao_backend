@@ -6,14 +6,14 @@ import { Server } from "socket.io";
 import connectDB from "./config/connectDB.js";
 import cloudinary from "cloudinary";
 import { handleBookingEvents } from "./utils/socketHandlers.js";
-import { initializeDriverStatusSocket } from "./utils/driverStatusSocket.js";
 import jwt from "jsonwebtoken";
 import userModel from "./models/userModel.js";
 import queryOptimizer from "./utils/queryOptimizer.js";
 import { initRoutes } from "./routes/index.js";
 import { initMiddlewares } from "./middlewares/index.js";
-import { allowedOrigins } from "./config/config.js";
 import "colors";
+import { redisService } from "./services/redis.js";
+import { initSocket } from "./socket/index.js";
 
 cloudinary.config({
   cloud_name: process.env.Cloud_Name,
@@ -28,16 +28,10 @@ cloudinary.v2.config({
 
 const app = express();
 const server = createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  },
-});
 
 initMiddlewares(app);
 initRoutes(app);
+const io = initSocket(server);
 
 // Initialize server function
 const initializeServer = async () => {
@@ -50,38 +44,6 @@ const initializeServer = async () => {
       const report = queryOptimizer.generatePerformanceReport();
       console.log("📊 Performance Report:".cyan, report);
     }, 30 * 60 * 1000);
-
-    // Socket.IO authentication middleware
-    io.use(async (socket, next) => {
-      try {
-        const token = socket.handshake.auth.token;
-
-        if (!token) {
-          console.log("Socket connection rejected: No token provided".red);
-          return next(new Error("Authentication error: No token provided"));
-        }
-
-        // Verify JWT token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-        // Find user in database
-        const user = await userModel.findById(decoded.id).select("-password");
-
-        if (!user) {
-          console.log("Socket connection rejected: User not found".red);
-          return next(new Error("Authentication error: User not found"));
-        }
-
-        // Attach user to socket
-        socket.user = user;
-        console.log(`Socket authenticated for user: ${user.email}`.green);
-
-        next();
-      } catch (error) {
-        console.log(`Socket authentication failed: ${error.message}`.red);
-        next(new Error("Authentication error: Invalid token"));
-      }
-    });
 
     // Socket.IO connection handling
     io.on("connection", (socket) => {
@@ -162,9 +124,6 @@ const initializeServer = async () => {
         );
       });
     });
-
-    // Initialize driver status socket handlers
-    initializeDriverStatusSocket(io);
 
     // Make io accessible to other modules
     app.set("io", io);
