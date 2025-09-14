@@ -4,7 +4,7 @@ const bookingSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-    required: [true, "User ID is required"],
+    required: [false, "User ID is required"],
   },
   driver: {
     type: mongoose.Schema.Types.ObjectId,
@@ -16,7 +16,7 @@ const bookingSchema = new mongoose.Schema({
       driver: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
-        required: true,
+        required: false,
       },
       reason: {
         type: String,
@@ -66,15 +66,15 @@ const bookingSchema = new mongoose.Schema({
     },
     coordinates: {
       type: [Number], // [longitude, latitude]
-      required: [true, "Pickup coordinates are required"],
+      required: [false, "Pickup coordinates are required"],
     },
     address: {
       type: String,
-      required: [true, "Pickup address is required"],
+      required: [false, "Pickup address is required"],
     },
     zone: {
       type: String,
-      required: [true, "Pickup zone is required"],
+      required: [false, "Pickup zone is required"],
     },
   },
   dropoffLocation: {
@@ -85,24 +85,24 @@ const bookingSchema = new mongoose.Schema({
     },
     coordinates: {
       type: [Number], // [longitude, latitude]
-      required: [true, "Dropoff coordinates are required"],
+      required: [false, "Dropoff coordinates are required"],
     },
     address: {
       type: String,
-      required: [true, "Dropoff address is required"],
+      required: [false, "Dropoff address is required"],
     },
     zone: {
       type: String,
-      required: [true, "Dropoff zone is required"],
+      required: [false, "Dropoff zone is required"],
     },
   },
   distance: {
     type: Number, // in kilometers
-    required: [true, "Distance is required"],
+    required: [false, "Distance is required"],
   },
   fare: {
     type: Number, // in AED
-    required: [true, "Fare is required"],
+    required: [false, "Fare is required"],
   },
   baseFare: {
     type: Number,
@@ -170,7 +170,7 @@ const bookingSchema = new mongoose.Schema({
   serviceType: {
     type: String,
     enum: ["car cab", "bike", "car recovery", "shifting & movers"],
-    required: [true, "Service type is required"],
+    required: [false, "Service type is required"],
   },
   serviceCategory: {
     type: String,
@@ -343,7 +343,7 @@ const bookingSchema = new mongoose.Schema({
   },
   offeredFare: {
     type: Number,
-    required: [true, "Offered fare is required"],
+    required: [false, "Offered fare is required"],
   },
   raisedFare: {
     type: Number,
@@ -353,11 +353,11 @@ const bookingSchema = new mongoose.Schema({
     {
       originalFare: {
         type: Number,
-        required: true,
+        required: false,
       },
       increasedFare: {
         type: Number,
-        required: true,
+        required: false,
       },
       reason: {
         type: String,
@@ -369,7 +369,7 @@ const bookingSchema = new mongoose.Schema({
       },
       resendAttempt: {
         type: Number,
-        required: true,
+        required: false,
       },
     },
   ],
@@ -389,12 +389,12 @@ const bookingSchema = new mongoose.Schema({
     {
       amount: {
         type: Number,
-        required: true,
+        required: false,
       },
       offeredBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
-        required: true,
+        required: false,
       },
       driverName: {
         type: String,
@@ -442,11 +442,11 @@ const bookingSchema = new mongoose.Schema({
       offeredBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
-        required: true,
+        required: false,
       },
       amount: {
         type: Number,
-        required: true,
+        required: false,
       },
       offeredAt: {
         type: Date,
@@ -455,7 +455,7 @@ const bookingSchema = new mongoose.Schema({
       status: {
         type: String,
         enum: ["pending", "accepted", "rejected", "expired"],
-        required: true,
+        required: false,
       },
       userResponse: {
         type: String,
@@ -470,13 +470,13 @@ const bookingSchema = new mongoose.Schema({
   ],
   distanceInMeters: {
     type: Number,
-    required: [true, "Distance in meters is required"],
+    required: [false, "Distance in meters is required"],
   },
   paymentMethod: {
     type: String,
     enum: ["cash", "card", "wallet", "bank_transfer"],
     default: "cash",
-    required: [true, "Payment method is required"],
+    required: [false, "Payment method is required"],
   },
   // Real-time messaging during ride
   messages: [
@@ -484,16 +484,16 @@ const bookingSchema = new mongoose.Schema({
       sender: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
-        required: true,
+        required: false,
       },
       senderType: {
         type: String,
         enum: ["user", "driver"],
-        required: true,
+        required: false,
       },
       message: {
         type: String,
-        required: true,
+        required: false,
         maxlength: 500,
       },
       timestamp: {
@@ -792,7 +792,7 @@ const bookingSchema = new mongoose.Schema({
       },
       pickupFloorDetails: {
         floor: { type: Number, default: 0 },
-        hasLift: { type: Boolean, default: true },
+        hasLift: { type: Boolean, default: false },
         accessType: {
           type: String,
           enum: ["ground", "stairs", "lift"],
@@ -801,7 +801,7 @@ const bookingSchema = new mongoose.Schema({
       },
       dropoffFloorDetails: {
         floor: { type: Number, default: 0 },
-        hasLift: { type: Boolean, default: true },
+        hasLift: { type: Boolean, default: false },
         accessType: {
           type: String,
           enum: ["ground", "stairs", "lift"],
@@ -810,8 +810,8 @@ const bookingSchema = new mongoose.Schema({
       },
       extras: [
         {
-          name: { type: String, required: true },
-          count: { type: Number, required: true, min: 1 },
+          name: { type: String, required: false },
+          count: { type: Number, required: false, min: 1 },
         },
       ],
     },
@@ -837,7 +837,7 @@ const bookingSchema = new mongoose.Schema({
   },
   distanceInMeters: {
     type: Number,
-    required: [true, "Distance in meters is required"],
+    required: [false, "Distance in meters is required"],
   },
   createdAt: {
     type: Date,

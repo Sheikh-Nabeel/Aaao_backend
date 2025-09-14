@@ -4,6 +4,7 @@ import { redisService } from "../services/redis.js";
 import { googleMapsService } from "../services/googleMaps.js";
 import { pricingService } from "../services/pricing.js";
 import bookingModel from "../models/bookingModel.js";
+import _ from "lodash";
 
 const createCarRecoveryBooking = asyncHandler(async (req, res) => {
   const { serviceType } = req.params;
@@ -11,7 +12,7 @@ const createCarRecoveryBooking = asyncHandler(async (req, res) => {
     return res.status(403).json({ message: "Only customers can book rides" });
   }
 
-  const { pickupLocation, destination } = req.body;
+  const { pickupLocation, destination, two_way } = req.body;
 
   // Calculate distance and duration
   const { distance, duration } = await googleMapsService.getDistance(
@@ -21,18 +22,27 @@ const createCarRecoveryBooking = asyncHandler(async (req, res) => {
 
   // Calculate price
   const price = parseFloat(
-    pricingService.calculatePrice(serviceType, distance, duration).toFixed(2)
+    pricingService
+      .calculatePrice(serviceType, distance, duration, two_way)
+      .toFixed(2)
   );
 
   const booking = new bookingModel({
     user: req.user._id,
-    serviceType,
-    pickupLocation,
+    serviceType: "car recovery",
+    pickupLocation: {
+      type: "Point",
+      coordinates: [pickupLocation.lng, pickupLocation.lat],
+    },
     distance,
     fare: price,
     baseFare: price,
-    destination,
+    dropoffLocation: {
+      type: "Point",
+      coordinates: [destination.lng, destination.lat],
+    },
     status: "pending",
+    routeType: two_way ? "two_way" : "one_way",
   });
 
   await booking.save();
@@ -50,17 +60,28 @@ const broadcastBooking = asyncHandler(async (req, res) => {
     return res.status(404).json({ message: "Booking not found" });
   }
 
+  if (booking.status !== "pending") {
+    return res
+      .status(400)
+      .json({ message: "Only pending bookings can be broadcasted" });
+  }
+
   const nearbyDrivers = await redisService.getNearbyDrivers(
-    pickupLocation.lat,
-    pickupLocation.lng,
+    booking.pickupLocation.coordinates[1],
+    booking.pickupLocation.coordinates[0],
     5 // Find nearby drivers (within 5km)
   );
 
   io.to(nearbyDrivers.map((d) => `driver_${d}`)).emit("booking:new", {
-    bookingId: booking._id,
-    pickupLocation,
-    destination,
-    price,
+    booking: _.pick(booking, [
+      "_id",
+      "serviceType",
+      "pickupLocation",
+      "dropoffLocation",
+      "fare",
+      "routeType",
+      "createdAt",
+    ]),
   });
 
   res.status(200).json({ message: "Booking broadcasted to nearby drivers" });
