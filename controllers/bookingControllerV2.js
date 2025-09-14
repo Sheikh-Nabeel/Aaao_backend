@@ -87,7 +87,72 @@ const broadcastBooking = asyncHandler(async (req, res) => {
   res.status(200).json({ message: "Booking broadcasted to nearby drivers" });
 });
 
-const updateBookingPrice = asyncHandler(async (req, res) => {});
+const updateBookingPrice = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const { newFare } = req.body;
+  if (req.user.role !== "customer") {
+    return res.status(403).json({ message: "Only customers can update price" });
+  }
+
+  const booking = await bookingModel.findById(bookingId);
+  if (!booking) {
+    return res.status(404).json({ message: "Booking not found" });
+  }
+
+  if (booking.user.toString() !== req.user._id.toString()) {
+    return res
+      .status(403)
+      .json({ message: "Not authorized to update this booking" });
+  }
+
+  if (booking.status !== "pending") {
+    return res
+      .status(400)
+      .json({ message: "Only pending bookings can have their price updated" });
+  }
+
+  booking.fare = newFare;
+  if (booking.fare < booking.baseFare * 0.1) {
+    return res
+      .status(400)
+      .json({ message: "New fare cannot be less than 10% of base fare" });
+  }
+  await booking.save();
+
+  res.status(200).json({ message: "Booking price updated", booking });
+});
+
+const acceptBooking = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  if (req.user.role !== "driver") {
+    return res
+      .status(403)
+      .json({ message: "Only drivers can accept bookings" });
+  }
+
+  const booking = await bookingModel.findById(bookingId);
+  if (!booking) {
+    return res.status(404).json({ message: "Booking not found" });
+  }
+
+  if (booking.status !== "pending") {
+    return res
+      .status(400)
+      .json({ message: "Only pending bookings can be accepted" });
+  }
+
+  booking.driver = req.user._id;
+  booking.status = "accepted";
+  await booking.save();
+
+  io.emit(`booking:accepted`, {
+    status: "accepted",
+    bookingId: booking._id,
+    driver: _.pick(req.user, ["_id", "name", "email", "phone"]),
+  });
+
+  res.status(200).json({ message: "Booking accepted", booking });
+});
 
 const completeBooking = asyncHandler(async (req, res) => {});
 
@@ -102,4 +167,5 @@ export const bookingControllerV2 = {
   cancelBooking,
   getCurrentBooking,
   broadcastBooking,
+  acceptBooking,
 };

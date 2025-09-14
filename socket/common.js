@@ -1,5 +1,4 @@
 import { redisService } from "../services/redis.js";
-import { io } from "../index.js";
 
 export const onConnect = (socket) => {
   console.log(
@@ -44,7 +43,7 @@ export const updateDriverLocation = async (socket, data) => {
 
   if (bookingID) {
     socket
-      .to(`booking_${bookingID}`)
+      .to(`booking:${bookingID}`)
       .emit("driver_location_update", { lat, lng });
   }
 

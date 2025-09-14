@@ -9,5 +9,8 @@ router.post(
 );
 
 router.post("/:bookingId/broadcast", bookingControllerV2.broadcastBooking);
+router.patch("/:bookingId/fare", bookingControllerV2.updateBookingPrice);
+
+router.patch("/:bookingId/accept", bookingControllerV2.acceptBooking);
 
 export { router as bookingRoutesV2 };
