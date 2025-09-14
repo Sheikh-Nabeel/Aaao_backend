@@ -2,12 +2,9 @@ import "dotenv/config";
 
 import express from "express";
 import { createServer } from "http";
-import { Server } from "socket.io";
 import connectDB from "./config/connectDB.js";
 import cloudinary from "cloudinary";
 import { handleBookingEvents } from "./utils/socketHandlers.js";
-import jwt from "jsonwebtoken";
-import userModel from "./models/userModel.js";
 import queryOptimizer from "./utils/queryOptimizer.js";
 import { initRoutes } from "./routes/index.js";
 import { initMiddlewares } from "./middlewares/index.js";

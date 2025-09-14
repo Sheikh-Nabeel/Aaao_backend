@@ -16,12 +16,15 @@ import qualifiedDriversRoutes from ".//qualifiedDriversRoutes.js"; // Added qual
 import offerRoutes from ".//offerRoutes.js"; // Added qualified drivers routes
 import supportTicketRoutes from ".//supportTicketRoutes.js"; // Added support ticket routes
 import errorHandler from "../middlewares/errorMiddleware.js";
+import { bookingRoutesV2 } from "./bookingRoutesV2.js";
+import authHandler from "../middlewares/authMIddleware.js";
 
 export function initRoutes(app) {
   app.use("/api/user", userRoutes);
   app.use("/api/drivers", driversRoutes);
   app.use("/api/vehicles", vehiclesRoutes);
   app.use("/api/bookings", bookingRoutes); // Added booking routes
+  app.use("/api/v2/bookings", authHandler, bookingRoutesV2);
   app.use("/api/mlm", mlmRoutes); // Added MLM routes
   app.use("/api/vehicle-hiring", vehicleHiringRoutes);
   app.use("/api/admin/pricing", adminPricingRoutes); // Added admin pricing routes

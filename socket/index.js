@@ -1,6 +1,7 @@
 import { Server } from "socket.io";
 import { allowedOrigins } from "../config/config.js";
 import { authenticateSocket } from "./middlewares.js";
+import { onConnect, onDisconnect } from "./common.js";
 
 let io = null;
 
@@ -15,6 +16,9 @@ export const initSocket = (server) => {
   });
 
   io.use(authenticateSocket);
+
+  io.on("connection", onConnect);
+  io.on("disconnect", onDisconnect);
 
   return io;
 };
