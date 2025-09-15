@@ -2904,6 +2904,45 @@ const getAllAdminsAndSuperadmins = asyncHandler(async (req, res) => {
   });
 });
 
+const getUsersWithoutKYC = asyncHandler(async (req, res) => {
+  // Find users who have just signed up and don't have KYC level 1 or 2
+  const usersWithoutKYC = await User.find({
+    $and: [
+      { kycLevel: { $lt: 1 } }, // KYC level less than 1 (i.e., 0)
+      { 
+        $or: [
+          { kycStatus: null },
+          { kycStatus: "rejected" }
+        ]
+      }
+    ]
+  })
+    .select(
+      "username firstName lastName email phoneNumber gender country kycLevel kycStatus createdAt isVerified"
+    )
+    .sort({ createdAt: -1 }); // Sort by newest first
+
+  res.status(200).json({
+    success: true,
+    message: "Users without KYC retrieved successfully",
+    users: usersWithoutKYC.map((user) => ({
+      userId: user._id,
+      username: user.username,
+      firstName: user.firstName,
+      lastName: user.lastName || "",
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+      gender: user.gender,
+      country: user.country,
+      kycLevel: user.kycLevel,
+      kycStatus: user.kycStatus,
+      isVerified: user.isVerified,
+      createdAt: user.createdAt,
+    })),
+    totalUsers: usersWithoutKYC.length,
+  });
+});
+
 export {
   signupUser,
   verifyOTPUser,
@@ -2946,5 +2985,6 @@ export {
   changeOwnPassword,
   changeReferralCode,
   updateProfilePicture,
+  getUsersWithoutKYC,
 
 };

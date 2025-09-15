@@ -41,6 +41,7 @@ import {
   editProfile,
   changeReferralCode,
   updateProfilePicture,
+  getUsersWithoutKYC,
 } from "../controllers/userController.js";
 import {
   manageAllowedSections,
@@ -220,5 +221,8 @@ router.patch(
   upload.single("profilePicture"),
   updateProfilePicture
 );
+
+// Get users without KYC level 1 or 2 (Admin only)
+router.get("/without-kyc", authHandler, adminHandler, getUsersWithoutKYC);
 
 export default router;
