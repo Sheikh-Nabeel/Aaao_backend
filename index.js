@@ -37,6 +37,10 @@ const io = new Server(server, {
 });
 
 initMiddlewares(app);
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static('uploads'));
+
 initRoutes(app);
 
 // Initialize server function
