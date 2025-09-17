@@ -24,6 +24,7 @@ import emailVerificationRoutes from "./routes/emailVerificationRoutes.js"; // Ad
 import driverStatusRoutes from "./routes/driverStatusRoutes.js"; // Added driver status routes
 import qualifiedDriversRoutes from "./routes/qualifiedDriversRoutes.js"; // Added qualified drivers routes
 import offerRoutes from "./routes/offerRoutes.js"; // Added qualified drivers routes
+import postRouter from "./routes/postRoutes.js";
 
 import cloudinary from "cloudinary";
 import "colors";
@@ -112,6 +113,7 @@ app.use("/api/driver-status", driverStatusRoutes); // Added driver status routes
 app.use("/api/qualified-drivers", qualifiedDriversRoutes); // Added qualified drivers routes
 app.use("/api/nearby-drivers", qualifiedDriversRoutes); // Added nearby drivers routes
 app.use("/api/offers", offerRoutes); // Correct
+app.use("/api/posts", postRouter);
 // Initialize server function
 const initializeServer = async () => {
   try {
