@@ -16,7 +16,7 @@ import {
 } from "../middleware/email.js";
 
 // Ensure uploads folder exists
-const uploadsDir = path.join(process.cwd(), "Uploads");
+const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -2905,8 +2905,28 @@ const getAllAdminsAndSuperadmins = asyncHandler(async (req, res) => {
 });
 
 const getUsersWithoutKYC = asyncHandler(async (req, res) => {
-  // Find users who have just signed up and don't have KYC level 1 or 2
-  const usersWithoutKYC = await User.find({
+  // Extract pagination parameters from query
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
+  // Validate pagination parameters
+  if (page < 1) {
+    return res.status(400).json({
+      success: false,
+      message: "Page number must be greater than 0"
+    });
+  }
+
+  if (limit < 1 || limit > 100) {
+    return res.status(400).json({
+      success: false,
+      message: "Limit must be between 1 and 100"
+    });
+  }
+
+  // Query condition for users without KYC level 1 or 2
+  const queryCondition = {
     $and: [
       { kycLevel: { $lt: 1 } }, // KYC level less than 1 (i.e., 0)
       { 
@@ -2916,11 +2936,24 @@ const getUsersWithoutKYC = asyncHandler(async (req, res) => {
         ]
       }
     ]
-  })
+  };
+
+  // Get total count for pagination metadata
+  const totalUsers = await User.countDocuments(queryCondition);
+
+  // Find users with pagination
+  const usersWithoutKYC = await User.find(queryCondition)
     .select(
       "username firstName lastName email phoneNumber gender country kycLevel kycStatus createdAt isVerified"
     )
-    .sort({ createdAt: -1 }); // Sort by newest first
+    .sort({ createdAt: -1 }) // Sort by newest first
+    .skip(skip)
+    .limit(limit);
+
+  // Calculate pagination metadata
+  const totalPages = Math.ceil(totalUsers / limit);
+  const hasNextPage = page < totalPages;
+  const hasPrevPage = page > 1;
 
   res.status(200).json({
     success: true,
@@ -2939,7 +2972,16 @@ const getUsersWithoutKYC = asyncHandler(async (req, res) => {
       isVerified: user.isVerified,
       createdAt: user.createdAt,
     })),
-    totalUsers: usersWithoutKYC.length,
+    pagination: {
+      currentPage: page,
+      totalPages: totalPages,
+      totalUsers: totalUsers,
+      usersPerPage: limit,
+      hasNextPage: hasNextPage,
+      hasPrevPage: hasPrevPage,
+      nextPage: hasNextPage ? page + 1 : null,
+      prevPage: hasPrevPage ? page - 1 : null
+    }
   });
 });
 

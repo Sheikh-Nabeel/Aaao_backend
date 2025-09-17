@@ -78,7 +78,7 @@ const router = express.Router();
 
 // Serve images from uploads folder
 router.get("/uploads/:filename", (req, res) => {
-  const filePath = path.join(process.cwd(), "Uploads", req.params.filename);
+  const filePath = path.join(process.cwd(), "uploads", req.params.filename);
   if (fs.existsSync(filePath)) {
     res.sendFile(filePath);
   } else {

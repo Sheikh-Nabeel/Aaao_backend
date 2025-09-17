@@ -7,7 +7,7 @@ import fs from "fs";
 import asyncHandler from "express-async-handler";
 import { io } from "../index.js";
 
-const uploadsDir = path.join(process.cwd(), "Uploads");
+const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }

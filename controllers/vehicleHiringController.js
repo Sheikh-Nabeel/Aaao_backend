@@ -11,7 +11,7 @@ import { sendemailverification, sendDriverApprovalEmail, sendDriverRejectionEmai
 // Email service is now handled by centralized email middleware
 
 const uploadToLocal = (file) =>
-  file ? path.join("Uploads", file.filename).replace(/\\/g, "/") : null;
+  file ? path.join("uploads", file.filename).replace(/\\/g, "/") : null;
 
 // API 1: Register Vehicle
 const registerVehicle = asyncHandler(async (req, res) => {
