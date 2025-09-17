@@ -4,6 +4,7 @@ import vehiclesRoutes from ".//vehiclesRoutes.js";
 import bookingRoutes from ".//bookingRoutes.js"; // Added booking routes
 import mlmRoutes from ".//mlmRoutes.js"; // Added MLM routes
 import vehicleHiringRoutes from ".//vehicleHiringRoutes.js"; // Added vehicle hiring routes
+import postRoutes from ".//postRoutes.js"; // Added post routes
 
 import adminPricingRoutes from ".//adminPricingRoutes.js"; // Added admin pricing routes
 import adminComprehensivePricingRoutes from ".//adminComprehensivePricingRoutes.js"; // Added comprehensive pricing routes
@@ -24,6 +25,7 @@ export function initRoutes(app) {
   app.use("/api/bookings", bookingRoutes); // Added booking routes
   app.use("/api/mlm", mlmRoutes); // Added MLM routes
   app.use("/api/vehicle-hiring", vehicleHiringRoutes);
+  app.use("/api/posts", postRoutes); // Added post routes
   app.use("/api/admin/pricing", adminPricingRoutes); // Added admin pricing routes
   app.use("/api/admin/comprehensive-pricing", adminComprehensivePricingRoutes); // Added comprehensive pricing routes
   app.use("/api/appointments", appointmentRoutes); // Added appointment routes

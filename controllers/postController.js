@@ -7,7 +7,7 @@ import mongoose from "mongoose";
 
 
 // Ensure uploads folder exists
-const uploadsDir = path.join(process.cwd(), "Uploads");
+const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
