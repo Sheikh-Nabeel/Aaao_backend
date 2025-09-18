@@ -35,7 +35,7 @@ router.put(
   upload.array("media", 5),
   updatePost
 );
-router.delete("/delete/:postId", authHandler, deletePost);
+router.delete("/:postId", authHandler, deletePost);
 router.post("/like/:postId", authHandler, likePost);
 router.post("/comment/:postId", authHandler, commentOnPost);
 

@@ -246,7 +246,12 @@ const deletePost = asyncHandler(async (req, res) => {
     throw new Error("Post not found");
   }
 
-  if (post.author.toString() !== userId.toString()) {
+  // Check if user is the author, admin, or superadmin
+  const user = await User.findById(userId).select("role");
+  const isAuthor = post.author.toString() === userId.toString();
+  const isAdminOrSuperadmin = user && ["admin", "superadmin"].includes(user.role);
+  
+  if (!isAuthor && !isAdminOrSuperadmin) {
     res.status(403);
     throw new Error("You can only delete your own posts");
   }
