@@ -4,7 +4,7 @@ import Vehicle from "../models/vehicleModel.js";
 import PricingConfig from "../models/pricingModel.js";
 import jwt from "jsonwebtoken";
 import asyncHandler from "express-async-handler";
-import { calculateShiftingMoversFare, calculateCarRecoveryFare, calculateAppointmentServiceFare } from "../utils/fareCalculator.js";
+import { calculateFare } from "../utils/fareCalculator.js";
 import { addMoneyToMLM } from "../utils/mlmHelper.js";
 import { calculateDistance } from "../utils/distanceCalculator.js";
 
@@ -312,13 +312,16 @@ const createBooking = asyncHandler(async (req, res) => {
       
       if (pricingConfig) {
         const bookingData = {
+          serviceType: 'shifting_movers',
           distance: distanceInKm,
+          duration: 0, // You may need to calculate this based on distance
+          vehicleType,
+          pricingConfig: pricingConfig.shiftingMoversPricing,
           furnitureDetails,
-          serviceDetails,
-          vehicleType
+          ...serviceDetails
         };
-        fareCalculation = await calculateShiftingMoversFare(bookingData);
-        totalCalculatedFare = fareCalculation.totalFare;
+        fareCalculation = await calculateFare(bookingData);
+        totalCalculatedFare = fareCalculation.total;
       } else {
         // Fallback to old calculation
         totalCalculatedFare = calculateFareByServiceType(serviceType, vehicleType, distanceInKm, routeType);
@@ -330,12 +333,16 @@ const createBooking = asyncHandler(async (req, res) => {
       });
       
       if (pricingConfig) {
-        fareCalculation = await calculateCarRecoveryFare(
-          pricingConfig.carRecoveryPricing,
+        const bookingData = {
+          serviceType: 'car_recovery',
           vehicleType,
-          serviceDetails
-        );
-        totalCalculatedFare = fareCalculation.totalFare;
+          distance: distanceInKm,
+          duration: 0, // You may need to calculate this based on distance
+          pricingConfig: pricingConfig.carRecoveryPricing,
+          ...serviceDetails
+        };
+        fareCalculation = await calculateFare(bookingData);
+        totalCalculatedFare = fareCalculation.total;
       } else {
         // Fallback to old calculation
         totalCalculatedFare = calculateFareByServiceType(serviceType, vehicleType, distanceInKm, routeType);
@@ -347,11 +354,14 @@ const createBooking = asyncHandler(async (req, res) => {
       });
       
       if (pricingConfig) {
-        fareCalculation = await calculateAppointmentServiceFare(
-          pricingConfig.appointmentServicePricing,
-          serviceType
-        );
-        totalCalculatedFare = fareCalculation.totalFare;
+        const bookingData = {
+          serviceType: 'appointment_service',
+          serviceSubType: serviceType,
+          pricingConfig: pricingConfig.appointmentServicePricing,
+          ...serviceDetails
+        };
+        fareCalculation = await calculateFare(bookingData);
+        totalCalculatedFare = fareCalculation.total;
       } else {
         // Default appointment fee
         totalCalculatedFare = 5;
@@ -768,6 +778,12 @@ const acceptBooking = asyncHandler(async (req, res) => {
   // Get Socket.IO instance for real-time notifications
   const io = req.app.get('io');
   if (io) {
+    // Import the findNearbyDrivers function
+    const { findNearbyDrivers } = await import('../utils/socketHandlers.js');
+    
+    // Find compatible drivers for this booking
+    const compatibleDrivers = await findNearbyDrivers(booking, io);
+    
     // Emit booking request acceptance event
     io.emit('accept_booking_request', {
       requestId: bookingId,
@@ -1052,31 +1068,31 @@ const raiseFare = asyncHandler(async (req, res) => {
           phoneNumber: booking.user.phoneNumber,
           gender: booking.user.gender,
           kycLevel: booking.user.kycLevel,
-        kycStatus: booking.user.kycStatus,
-         role: booking.user.role,
-         isVerified: booking.user.isVerified,
-         profileImage: booking.user.selfieImage
-       },
-       from: {
-         address: booking.pickupLocation.address,
-         coordinates: booking.pickupLocation.coordinates,
-         zone: booking.pickupLocation.zone
-       },
-       to: {
-         address: booking.dropoffLocation.address,
-         coordinates: booking.dropoffLocation.coordinates,
-         zone: booking.dropoffLocation.zone
-       },
-       distance: booking.distance,
-       distanceInMeters: booking.distanceInMeters,
-       routeType: booking.routeType,
-       driverPreference: booking.driverPreference,
-       pinkCaptainOptions: booking.pinkCaptainOptions,
-       furnitureDetails: booking.furnitureDetails,
-       timestamp: new Date().toISOString(),
-       driverDistance: driver.distance
-     });
-   });
+          kycStatus: booking.user.kycStatus,
+          role: booking.user.role,
+          isVerified: booking.user.isVerified,
+          profileImage: booking.user.selfieImage
+        },
+        from: {
+          address: booking.pickupLocation.address,
+          coordinates: booking.pickupLocation.coordinates,
+          zone: booking.pickupLocation.zone
+        },
+        to: {
+          address: booking.dropoffLocation.address,
+          coordinates: booking.dropoffLocation.coordinates,
+          zone: booking.dropoffLocation.zone
+        },
+        distance: booking.distance,
+        distanceInMeters: booking.distanceInMeters,
+        routeType: booking.routeType,
+        driverPreference: booking.driverPreference,
+        pinkCaptainOptions: booking.pinkCaptainOptions,
+        furnitureDetails: booking.furnitureDetails,
+        timestamp: new Date().toISOString(),
+        driverDistance: driver.distance
+      });
+    });
   }
 
   const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
@@ -1174,7 +1190,7 @@ const lowerFare = asyncHandler(async (req, res) => {
   const adjustmentPercentage = fareSettings.allowedAdjustmentPercentage;
   const minAllowedFare = originalFare * (1 - adjustmentPercentage / 100); // Dynamic percentage decrease limit
   const currentFare = booking.raisedFare || booking.offeredFare;
-
+  
   if (newFare < minAllowedFare) {
     return res.status(400).json({
       message: `New fare cannot be lower than ${minAllowedFare.toFixed(2)} AED (${adjustmentPercentage}% decrease limit from original fare)`,
@@ -2063,8 +2079,8 @@ const submitRating = asyncHandler(async (req, res) => {
     }
     
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName')
-      .populate('driver', 'firstName lastName');
+      .populate('user', 'firstName lastName email')
+      .populate('driver', 'firstName lastName email');
     
     if (!booking) {
       return res.status(404).json({

@@ -1,4 +1,63 @@
-import PricingConfig from '../models/pricingModel.js';
+// Constants
+const BASE_DISTANCE_KM = 6;
+const BASE_FARE = 50;
+const PER_KM_RATE = 7.5;
+const FREE_WAITING_MINUTES = 5;
+const WAITING_CHARGE_PER_MIN = 2;
+const MAX_WAITING_CHARGE = 20;
+const FREE_STAY_MIN_PER_KM = 0.5;
+const MAX_FREE_STAY_MINUTES = 30;
+const NIGHT_HOURS = { start: 22, end: 6 }; // 22:00 to 06:00
+
+// Vehicle type constants
+const VEHICLE_TYPES = {
+  CAR: 'car',
+  SUV: 'suv',
+  TRUCK: 'truck',
+  MOTORCYCLE: 'motorcycle',
+  BUS: 'bus'
+};
+
+// Service type constants
+const SERVICE_TYPES = {
+  TOWING: 'towing',
+  WINCHING: 'winching',
+  ROADSIDE_ASSISTANCE: 'roadside_assistance',
+  SPECIALIZED_RECOVERY: 'specialized_recovery'
+};
+
+// Calculate distance fare
+const calculateDistanceFare = (distance) => {
+  if (distance <= BASE_DISTANCE_KM) {
+    return BASE_FARE;
+  }
+  return BASE_FARE + ((distance - BASE_DISTANCE_KM) * PER_KM_RATE);
+};
+
+// Calculate waiting charges
+const calculateWaitingCharges = (waitingTime) => {
+  if (waitingTime <= FREE_WAITING_MINUTES) return 0;
+  const chargeableMinutes = waitingTime - FREE_WAITING_MINUTES;
+  return Math.min(chargeableMinutes * WAITING_CHARGE_PER_MIN, MAX_WAITING_CHARGE);
+};
+
+// Check if it's night time
+const checkNightTime = (dateTime) => {
+  const hour = new Date(dateTime).getHours();
+  return hour >= NIGHT_HOURS.start || hour < NIGHT_HOURS.end;
+};
+
+// Calculate minimum fare
+const calculateMinimumFare = (serviceType, vehicleType) => {
+  return BASE_FARE; // Can be extended with service/vehicle specific minimums
+};
+
+// Calculate cancellation fee
+const calculateCancellationFee = (driverProgress) => {
+  if (driverProgress < 25) return 2;
+  if (driverProgress >= 50) return 5;
+  return 0; // No fee between 25% and 50%
+};
 
 // Calculate fare for shifting/movers service
 const calculateShiftingMoversFare = async (bookingData) => {
@@ -239,334 +298,89 @@ const calculateShiftingMoversFare = async (bookingData) => {
   }
 };
 
-// Calculate fare for car recovery service - ALL services now use dynamic pricing
+// Main car recovery fare calculation
 const calculateCarRecoveryFare = async (bookingData) => {
+  const {
+    distance,
+    duration,
+    serviceType,
+    vehicleType,
+    isRoundTrip = false,
+    waitingTime = 0,
+    startTime = new Date(),
+    cancellationReason = null,
+    driverDistance = 0,
+    totalDriverDistance = 0
+  } = bookingData;
+
   try {
-    const { 
-      vehicleType, 
-      serviceCategory, 
-      distance, 
-      serviceDetails, 
-      routeType = 'one_way',
-      startTime = new Date(),
-      waitingMinutes = 0,
-      demandRatio = 1,
-      cityCode = 'default'
-    } = bookingData;
+    // Input validation
+    if (distance === undefined || duration === undefined) {
+      throw new Error('Distance and duration are required');
+    }
+
+    // Calculate fare components
+    const distanceFare = calculateDistanceFare(distance);
+    const waitingCharges = calculateWaitingCharges(waitingTime);
+    const isNightTime = checkNightTime(startTime);
+    const nightCharges = isNightTime ? 10 : 0;
     
-    // ALL car recovery services now use dynamic pricing
-    return await calculateDynamicCarRecoveryFare(bookingData);
+    // Calculate subtotal
+    let subtotal = distanceFare + waitingCharges + nightCharges;
+    
+    // Apply minimum fare
+    const minimumFare = calculateMinimumFare(serviceType, vehicleType);
+    subtotal = Math.max(subtotal, minimumFare);
+    
+    // Calculate platform fees (15% total, split 50/50 driver/customer)
+    const platformFeePercentage = 15;
+    const platformFee = (subtotal * platformFeePercentage) / 100;
+    const driverPlatformFee = platformFee / 2;
+    const customerPlatformFee = platformFee / 2;
+    
+    // Calculate total fare
+    const totalFare = subtotal + platformFee;
+    
+    // Calculate cancellation fee if applicable
+    let cancellationFee = 0;
+    if (cancellationReason && totalDriverDistance > 0) {
+      const driverProgress = (driverDistance / totalDriverDistance) * 100;
+      cancellationFee = calculateCancellationFee(driverProgress);
+    }
+    
+    // Calculate free stay minutes for round trips
+    let freeStayMinutes = 0;
+    if (isRoundTrip) {
+      freeStayMinutes = Math.min(
+        Math.floor(distance * FREE_STAY_MIN_PER_KM),
+        MAX_FREE_STAY_MINUTES
+      );
+    }
+
+    return {
+      baseFare: BASE_FARE,
+      distance,
+      distanceFare,
+      waitingTime,
+      waitingCharges,
+      isNightTime,
+      nightCharges,
+      platformFee: {
+        total: platformFee,
+        driver: driverPlatformFee,
+        customer: customerPlatformFee,
+        percentage: platformFeePercentage
+      },
+      cancellationFee,
+      isRoundTrip,
+      freeStayMinutes,
+      subtotal,
+      total: totalFare,
+      currency: 'AED'
+    };
   } catch (error) {
     throw new Error(`Car recovery fare calculation error: ${error.message}`);
   }
-};
-
-// Calculate fare for ALL car recovery services with dynamic pricing
-const calculateDynamicCarRecoveryFare = async (bookingData) => {
-  try {
-    const { 
-      vehicleType, 
-      serviceCategory, 
-      distance, 
-      serviceDetails, 
-      routeType = 'one_way',
-      startTime = new Date(),
-      waitingMinutes = 0,
-      demandRatio = 1,
-      cityCode = 'default'
-    } = bookingData;
-    
-    // 1. Base Fare: Always apply AED 50 for first 6 km
-    const baseFare = 50;
-    
-    // 2. Per KM Rate: After 6 km, charge AED 7.5 per km
-    const perKmRate = 7.5;
-    const distanceFare = distance > 6 ? (distance - 6) * perKmRate : 0;
-    
-    // 3. Minimum Fare: If total trip < 6 km → still charge AED 50 minimum
-    const subtotal = baseFare + distanceFare;
-    const minimumFare = 50;
-    const adjustedSubtotal = Math.max(subtotal, minimumFare);
-    
-    // 4. Platform Fee: Deduct 15% of total fare (7.5% driver, 7.5% customer)
-    const platformFeePercentage = 15;
-    const platformFeeAmount = (adjustedSubtotal * platformFeePercentage) / 100;
-    const customerPlatformFee = platformFeeAmount * 0.5; // 7.5%
-    const driverPlatformFee = platformFeeAmount * 0.5; // 7.5%
-    
-    // 5. Night Charges: If ride start time between 22:00–06:00 → add AED 10
-    const hour = startTime.getHours();
-    const isNightTime = hour >= 22 || hour < 6;
-    const nightCharges = isNightTime ? 10 : 0;
-    
-    // 6. Surge Pricing: Based on demand/supply ratio
-    let surgeMultiplier = 1;
-    let surgeCharges = 0;
-    if (demandRatio >= 3) {
-      surgeMultiplier = 2.0; // 2.0x if demand = 3x cars
-    } else if (demandRatio >= 2) {
-      surgeMultiplier = 1.5; // 1.5x if demand = 2x cars
-    }
-    surgeCharges = (adjustedSubtotal + nightCharges) * (surgeMultiplier - 1);
-    
-    // 7. City-wise Pricing: If trip >10 km in specific city → apply AED 5/km instead of default
-    let cityCharges = 0;
-    if (distance > 10 && cityCode !== 'default') {
-      const citySpecificRate = 5; // AED 5/km for city trips
-      cityCharges = distance * citySpecificRate;
-    }
-    
-    // 8. Waiting Charges: Free wait: 5 minutes, After 5 mins → AED 2/minute, Stop charging after AED 20 cap
-    const freeWaitMinutes = 5;
-    const waitingRatePerMinute = 2;
-    const maxWaitingCharges = 20;
-    let waitingCharges = 0;
-    if (waitingMinutes > freeWaitMinutes) {
-      waitingCharges = Math.min((waitingMinutes - freeWaitMinutes) * waitingRatePerMinute, maxWaitingCharges);
-    }
-    
-    // 9. Convenience Fee: Based on service type
-    let convenienceFee = 0;
-    if (serviceCategory === 'winching services') {
-      convenienceFee = 50; // AED 50 for winching services
-    } else if (serviceCategory === 'roadside assistance') {
-      convenienceFee = 100; // AED 100 for roadside assistance
-    } else if (serviceCategory === 'towing services') {
-      convenienceFee = 25; // AED 25 for towing services
-    } else if (serviceCategory === 'specialized/heavy recovery') {
-      convenienceFee = 75; // AED 75 for specialized/heavy recovery
-    }
-    
-    // 10. VAT: Apply country-based VAT on total fare
-    const vatRate = 5; // 5% VAT for UAE
-    const subtotalBeforeVat = adjustedSubtotal + nightCharges + surgeCharges + cityCharges + waitingCharges + convenienceFee;
-    const vatAmount = (subtotalBeforeVat * vatRate) / 100;
-    
-    // Calculate total fare
-    const totalFare = subtotalBeforeVat + vatAmount;
-    
-    // 11. Refreshment Alert: Trigger if ride >20 km OR >30 minutes
-    const refreshmentAlert = distance > 20 || (waitingMinutes + (distance * 2)) > 30; // Rough estimate for trip duration
-    
-    // 12. Free Stay Minutes (Round Trips only)
-    let freeStayMinutes = 0;
-    if (routeType === 'round_trip') {
-      freeStayMinutes = Math.min(distance * 0.5, 30); // 0.5 min per km, max 30 minutes
-    }
-    
-    let fareBreakdown = {
-      baseFare,
-      distanceFare,
-      minimumFare,
-      subtotal: adjustedSubtotal,
-      nightCharges,
-      surgeCharges,
-      surgeMultiplier,
-      cityCharges,
-      waitingCharges,
-      convenienceFee,
-      platformCharges: {
-        percentage: platformFeePercentage,
-        amount: platformFeeAmount,
-        customerShare: customerPlatformFee,
-        driverShare: driverPlatformFee,
-        splitRatio: {
-          customer: 50,
-          serviceProvider: 50
-        }
-      },
-      vatAmount,
-      vatRate,
-      totalCalculatedFare: totalFare,
-      refreshmentAlert,
-      freeStayMinutes,
-      vehicleType,
-      serviceCategory,
-      pricingDetails: {
-        perKmRate,
-        freeWaitMinutes,
-        waitingRatePerMinute,
-        maxWaitingCharges,
-        nightTimeHours: '22:00-06:00',
-        surgePricing: {
-          enabled: true,
-          thresholds: {
-            '1.5x': 2,
-            '2.0x': 3
-          }
-        }
-      }
-    };
-    
-    return fareBreakdown;
-  } catch (error) {
-    throw new Error(`Winching/Roadside fare calculation error: ${error.message}`);
-  }
-};
-
-// Calculate fare for key unlocker service
-const calculateKeyUnlockerFare = async (bookingData) => {
-  try {
-    const config = await PricingConfig.findOne({ 
-      serviceType: 'key_unlocker', 
-      isActive: true 
-    });
-    
-    if (!config || !config.keyUnlockerConfig) {
-      throw new Error('Key unlocker pricing configuration not found');
-    }
-    
-    const pricing = config.keyUnlockerConfig;
-    const serviceCharges = pricing.serviceCharges;
-    const platformChargesAmount = (serviceCharges * pricing.platformCharges.percentage) / 100;
-    
-    let fareBreakdown = {
-      baseFare: serviceCharges,
-      distanceFare: 0,
-      serviceFees: {
-        keyUnlockerService: serviceCharges
-      },
-      locationCharges: {},
-      itemCharges: 0,
-      platformCharges: {
-        percentage: pricing.platformCharges.percentage,
-        amount: platformChargesAmount,
-        splitRatio: pricing.platformCharges.splitRatio,
-        customerShare: platformChargesAmount * (pricing.platformCharges.splitRatio / 100),
-        providerShare: platformChargesAmount * ((100 - pricing.platformCharges.splitRatio) / 100)
-      },
-      totalCalculatedFare: serviceCharges + platformChargesAmount
-    };
-    
-    return fareBreakdown;
-  } catch (error) {
-    throw new Error(`Key unlocker fare calculation error: ${error.message}`);
-  }
-};
-
-// Calculate fare for appointment-based services
-const calculateAppointmentServiceFare = async (bookingData) => {
-  try {
-    const config = await PricingConfig.findOne({ 
-      serviceType: 'appointment_based', 
-      isActive: true 
-    });
-    
-    if (!config || !config.appointmentServiceConfig) {
-      throw new Error('Appointment service pricing configuration not found');
-    }
-    
-    const pricing = config.appointmentServiceConfig;
-    
-    let fareBreakdown = {
-      baseFare: 0, // No upfront fare for appointment-based services
-      distanceFare: 0,
-      serviceFees: {},
-      locationCharges: {},
-      itemCharges: 0,
-      platformCharges: {
-        percentage: 0,
-        amount: pricing.fixedAppointmentFee // Only charged on successful appointment
-      },
-      totalCalculatedFare: 0 // No upfront payment
-    };
-    
-    return fareBreakdown;
-  } catch (error) {
-    throw new Error(`Appointment service fare calculation error: ${error.message}`);
-  }
-};
-
-// Helper functions
-const getTotalItemCount = (furnitureDetails) => {
-  if (!furnitureDetails) return 0;
-  
-  let total = 0;
-  
-  // Count predefined furniture items
-  if (furnitureDetails) {
-    total += Object.values(furnitureDetails).reduce((sum, count) => {
-      return sum + (typeof count === 'number' ? count : 0);
-    }, 0);
-  }
-  
-  return total;
-};
-
-const getAverageItemFare = (itemPricing, fareType) => {
-  if (!itemPricing || itemPricing.length === 0) return 0;
-  
-  const totalFare = itemPricing.reduce((sum, item) => sum + (item[fareType] || 0), 0);
-  return totalFare / itemPricing.length;
-};
-
-const calculateItemBasedFare = (furnitureDetails, itemPricing, fareType) => {
-  if (!itemPricing) return 0;
-  
-  let totalFare = 0;
-  
-  // Calculate fare for predefined furniture items
-  if (furnitureDetails) {
-    Object.entries(furnitureDetails).forEach(([itemName, quantity]) => {
-      if (typeof quantity === 'number' && quantity > 0) {
-        const itemConfig = itemPricing.find(item => 
-          item.itemName.toLowerCase() === itemName.toLowerCase()
-        );
-        
-        if (itemConfig && itemConfig[fareType]) {
-          totalFare += itemConfig[fareType] * quantity;
-        }
-      }
-    });
-  }
-  
-  return totalFare;
-};
-
-const calculateStairsCharges = (furnitureDetails, itemPricing, floors) => {
-  if (!itemPricing || floors <= 0) return 0;
-  
-  let totalCharge = 0;
-  
-  // Calculate stairs charges for predefined furniture items
-  if (furnitureDetails) {
-    Object.entries(furnitureDetails).forEach(([itemName, quantity]) => {
-      if (typeof quantity === 'number' && quantity > 0) {
-        const itemConfig = itemPricing.find(item => 
-          item.itemName.toLowerCase() === itemName.toLowerCase()
-        );
-        
-        if (itemConfig && itemConfig.stairsFarePerFloor) {
-          totalCharge += itemConfig.stairsFarePerFloor * quantity * floors;
-        }
-      }
-    });
-  }
-  
-  return totalCharge;
-};
-
-const calculateLiftCharges = (furnitureDetails, itemPricing) => {
-  if (!itemPricing) return 0;
-  
-  let totalCharge = 0;
-  
-  // Calculate lift charges for predefined furniture items
-  if (furnitureDetails) {
-    Object.entries(furnitureDetails).forEach(([itemName, quantity]) => {
-      if (typeof quantity === 'number' && quantity > 0) {
-        const itemConfig = itemPricing.find(item => 
-          item.itemName.toLowerCase() === itemName.toLowerCase()
-        );
-        
-        if (itemConfig && itemConfig.liftFarePerItem) {
-          totalCharge += itemConfig.liftFarePerItem * quantity;
-        }
-      }
-    });
-  }
-  
-  return totalCharge;
 };
 
 // Main fare calculation function
@@ -574,39 +388,262 @@ const calculateFare = async (bookingData) => {
   try {
     const { serviceType } = bookingData;
     
+    // Route to the appropriate fare calculator based on service type
     switch (serviceType) {
+      case 'car_recovery':
+        return await calculateCarRecoveryFare(bookingData);
       case 'shifting & movers':
         return await calculateShiftingMoversFare(bookingData);
-      case 'car recovery':
-        return await calculateCarRecoveryFare(bookingData);
-      case 'key_unlocker':
-        return await calculateKeyUnlockerFare(bookingData);
-      case 'appointment_based':
-        return await calculateAppointmentServiceFare(bookingData);
-      case 'car cab':
-      case 'bike':
-        // For cab and bike, use existing fare calculation logic
-        return {
-          baseFare: bookingData.fare || 0,
-          distanceFare: 0,
-          serviceFees: {},
-          locationCharges: {},
-          itemCharges: 0,
-          platformCharges: { percentage: 0, amount: 0 },
-          totalCalculatedFare: bookingData.fare || 0
-        };
+      // Add other service types here
       default:
         throw new Error(`Unsupported service type: ${serviceType}`);
     }
   } catch (error) {
+    console.error('Error in calculateFare:', error);
     throw new Error(`Fare calculation failed: ${error.message}`);
   }
 };
 
+import PricingConfig from '../models/pricingModel.js';
+
+class FareCalculator {
+  /**
+   * Calculate fare for car recovery service
+   * @param {Object} params - Fare calculation parameters
+   * @param {string} params.vehicleType - Type of vehicle (car, suv, truck, etc.)
+   * @param {string} params.serviceType - Type of service (flatbed towing, winching, etc.)
+   * @param {number} params.distance - Distance in kilometers
+   * @param {number} params.duration - Duration in minutes
+   * @param {Date} [params.startTime] - Start time of the service (for night charges)
+   * @param {boolean} [params.hasHelper=false] - Whether a helper is required
+   * @param {number} [params.helperCount=0] - Number of helpers
+   * @param {number} [params.waitingTime=0] - Waiting time in minutes
+   * @returns {Promise<Object>} - Object containing fare details
+   */
+  static async calculateRecoveryFare({
+    vehicleType,
+    serviceType,
+    distance,
+    duration,
+    startTime = new Date(),
+    hasHelper = false,
+    helperCount = 0,
+    waitingTime = 0
+  }) {
+    try {
+      // Fallback configuration
+      const FALLBACK_CONFIG = {
+        vehicleTypes: {
+          CAR: { baseFare: 50, perKmRate: 5, minFare: 50, displayName: 'Car' },
+          SUV: { baseFare: 75, perKmRate: 7, minFare: 75, displayName: 'SUV' },
+          TRUCK: { baseFare: 100, perKmRate: 10, minFare: 100, displayName: 'Truck' },
+          MOTORCYCLE: { baseFare: 30, perKmRate: 3, minFare: 30, displayName: 'Motorcycle' }
+        },
+        serviceTypes: {
+          TOWING: { additionalCharge: 50, description: 'Standard towing service' },
+          WINCHING: { additionalCharge: 100, description: 'Winching service' },
+          ROADSIDE_ASSISTANCE: { flatFee: 75, description: 'Roadside assistance' }
+        },
+        platformFees: {
+          percentage: 15,
+          splitRatio: { customer: 50, serviceProvider: 50 }
+        },
+        waitingCharges: {
+          freeMinutes: 5,
+          perMinuteAfter: 2,
+          maxWaitingCharge: 20
+        }
+      };
+
+      let config;
+      try {
+        // Try to get config from database first
+        const pricingConfig = await PricingConfig.findOne({ 
+          serviceType: 'car_recovery',
+          isActive: true 
+        });
+
+        if (pricingConfig?.config) {
+          console.log('Using pricing config from database');
+          config = pricingConfig.config;
+        } else {
+          console.log('Using fallback pricing config');
+          config = FALLBACK_CONFIG;
+        }
+      } catch (dbError) {
+        console.error('Error fetching pricing config from database, using fallback:', dbError);
+        config = FALLBACK_CONFIG;
+      }
+      
+      // Normalize vehicle and service types to uppercase for case-insensitive matching
+      const normalizedVehicleType = vehicleType?.toUpperCase();
+      const normalizedServiceType = serviceType?.toUpperCase().replace(/ /g, '_');
+      
+      // Get vehicle type configuration with case-insensitive matching
+      const vehicleConfig = config.vehicleTypes?.[normalizedVehicleType];
+      if (!vehicleConfig) {
+        const availableTypes = Object.keys(config.vehicleTypes || {}).join(', ');
+        throw new Error(`Pricing not configured for vehicle type: ${vehicleType}. Available types: ${availableTypes}`);
+      }
+
+      // Get service type configuration with case-insensitive matching
+      const serviceConfig = config.serviceTypes?.[normalizedServiceType];
+      if (!serviceConfig) {
+        const availableServices = Object.keys(config.serviceTypes || {}).join(', ');
+        console.error('Available services:', availableServices);
+        throw new Error(`Pricing not configured for service type: ${serviceType}. Available services: ${availableServices}`);
+      }
+
+      // Calculate base fare (first 6 km)
+      const baseDistance = 6;
+      const distanceBeyondBase = Math.max(0, distance - baseDistance);
+      
+      // Calculate distance-based fare
+      let distanceFare = vehicleConfig.baseFare;
+      if (distance > baseDistance) {
+        distanceFare += Math.ceil(distanceBeyondBase * vehicleConfig.perKmRate);
+      }
+
+      // Apply service type charges
+      let serviceFare = 0;
+      if (serviceConfig.flatFee) {
+        serviceFare = serviceConfig.flatFee;
+      } else if (serviceConfig.additionalCharge) {
+        serviceFare = distanceFare + serviceConfig.additionalCharge;
+      } else if (serviceConfig.multiplier) {
+        serviceFare = distanceFare * serviceConfig.multiplier;
+      } else {
+        serviceFare = distanceFare;
+      }
+
+      // Calculate waiting charges
+      let waitingCharges = 0;
+      const { waitingCharges: waitConfig = {} } = config;
+      const freeMinutes = waitConfig.freeMinutes || 5;
+      const perMinuteAfter = waitConfig.perMinuteAfter || 2;
+      const maxWaitingCharge = waitConfig.maxWaitingCharge || 20;
+      
+      if (waitingTime > freeMinutes) {
+        const chargeableMinutes = waitingTime - freeMinutes;
+        waitingCharges = Math.min(
+          chargeableMinutes * perMinuteAfter,
+          maxWaitingCharge
+        );
+      }
+
+      // Calculate night charges (10 PM to 6 AM)
+      let nightSurcharge = 0;
+      const { nightCharges = {} } = config;
+      if (nightCharges.active) {
+        const hour = startTime.getHours();
+        const isNightTime = hour >= 22 || hour < 6;
+        
+        if (isNightTime) {
+          nightSurcharge = nightCharges.surcharge || 10;
+        }
+      }
+
+      // Calculate subtotal
+      const subtotal = serviceFare + waitingCharges + nightSurcharge;
+      
+      // Apply minimum fare
+      const totalFare = Math.max(subtotal, vehicleConfig.minFare);
+
+      // Calculate platform fee (15% of total fare, split 50/50 between customer and provider)
+      const platformFeePercentage = config.platformFees?.percentage || 15;
+      const platformFee = (totalFare * platformFeePercentage) / 100;
+      const platformFeeSplit = platformFee / 2;
+
+      // Calculate amount for service provider (after platform fee)
+      const providerAmount = totalFare - platformFeeSplit;
+
+      return {
+        baseFare: vehicleConfig.baseFare,
+        distance,
+        distanceFare,
+        serviceType,
+        serviceCharge: serviceFare - distanceFare,
+        waitingCharges,
+        nightSurcharge,
+        subtotal,
+        platformFee: {
+          percentage: platformFeePercentage,
+          amount: platformFee,
+          customerShare: platformFeeSplit,
+          providerShare: platformFeeSplit
+        },
+        totalFare,
+        providerAmount,
+        currency: 'AED',
+        fareBreakdown: [
+          { description: 'Base Fare', amount: vehicleConfig.baseFare },
+          { 
+            description: `Distance (${distance.toFixed(2)} km)`, 
+            amount: distanceFare - vehicleConfig.baseFare 
+          },
+          { 
+            description: serviceConfig.description || serviceType, 
+            amount: serviceFare - distanceFare 
+          },
+          ...(waitingCharges > 0 ? [
+            { description: 'Waiting Charges', amount: waitingCharges }
+          ] : []),
+          ...(nightSurcharge > 0 ? [
+            { description: 'Night Surcharge', amount: nightSurcharge }
+          ] : [])
+        ].filter(item => item.amount > 0)
+      };
+    } catch (error) {
+      console.error('Error calculating recovery fare:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Calculate cancellation fee based on driver's progress
+   * @param {number} driverProgress - Driver's progress percentage (0-100)
+   * @param {Object} config - Pricing configuration
+   * @returns {number} - Cancellation fee in AED
+   */
+  static calculateCancellationFee(driverProgress, config) {
+    const { cancellationFees = {} } = config;
+    
+    if (driverProgress >= 50) {
+      return cancellationFees.after50Percent || 5;
+    } else if (driverProgress > 0) {
+      return cancellationFees.before25Percent || 2;
+    }
+    
+    return 0;
+  }
+}
+
+export default FareCalculator;
+
+// Export all necessary functions and constants in one place
 export {
+  // Main fare calculation functions
   calculateFare,
-  calculateShiftingMoversFare,
   calculateCarRecoveryFare,
-  calculateKeyUnlockerFare,
-  calculateAppointmentServiceFare
+  calculateShiftingMoversFare,
+  
+  // Helper functions
+  calculateDistanceFare,
+  calculateWaitingCharges,
+  checkNightTime,
+  calculateMinimumFare,
+  calculateCancellationFee,
+  
+  // Constants
+  VEHICLE_TYPES,
+  SERVICE_TYPES,
+  BASE_DISTANCE_KM,
+  BASE_FARE,
+  PER_KM_RATE,
+  FREE_WAITING_MINUTES,
+  WAITING_CHARGE_PER_MIN,
+  MAX_WAITING_CHARGE,
+  FREE_STAY_MIN_PER_KM,
+  MAX_FREE_STAY_MINUTES,
+  NIGHT_HOURS
 };

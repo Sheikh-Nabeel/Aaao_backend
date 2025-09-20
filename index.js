@@ -1,190 +1,182 @@
-import "dotenv/config";
+import express from 'express';
+import http from 'http';
+import dotenv from 'dotenv';
+import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import userModel from './models/userModel.js';
+import queryOptimizer from './utils/queryOptimizer.js';
+import cloudinary from 'cloudinary';
+import { webSocketService } from './services/websocketService.js';
+import CarRecoverySocketService from './services/carRecoverySocketService.js';
+import connectDB from './config/connectDB.js';
+import 'colors';
+import { generateToken, verifyToken } from './utils/jwt.js';
 
-import express from "express";
-import { createServer } from "http";
-import { Server } from "socket.io";
-import connectDB from "./config/connectDB.js";
-import cloudinary from "cloudinary";
-import { handleBookingEvents } from "./utils/socketHandlers.js";
-import { initializeDriverStatusSocket } from "./utils/driverStatusSocket.js";
-import jwt from "jsonwebtoken";
-import userModel from "./models/userModel.js";
-import queryOptimizer from "./utils/queryOptimizer.js";
-import { initRoutes } from "./routes/index.js";
-import { initMiddlewares } from "./middlewares/index.js";
-import { allowedOrigins } from "./config/config.js";
-import "colors";
+dotenv.config();
 
+const app = express();
+const server = http.createServer(app);
+
+// Initialize Cloudinary
 cloudinary.config({
   cloud_name: process.env.Cloud_Name,
   api_key: process.env.API_Key,
-  api_secret: process.env.API_Secret,
-});
-cloudinary.v2.config({
-  cloud_name: process.env.Cloud_Name,
-  api_key: process.env.API_Key,
-  api_secret: process.env.API_Secret,
+  api_secret: process.env.API_Secret
 });
 
-const app = express();
-const server = createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  },
-});
+// Configure CORS for Express
+const corsOptions = {
+  origin: [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://aaaogo.com",
+    "https://aaaogodashboard.netlify.app"
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  credentials: true,
+};
 
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Initialize middlewares and routes
+import { initMiddlewares } from './middlewares/index.js';
+import { initRoutes } from './routes/index.js';
 initMiddlewares(app);
-
-// Serve static files from uploads directory
-app.use('/uploads', express.static('uploads'));
-
 initRoutes(app);
 
-// Initialize server function
-const initializeServer = async () => {
-  try {
-    await connectDB();
+// Connect to MongoDB
+connectDB()
+  .then(() => {
+    console.log('MongoDB connected successfully'.green.bold);
 
-    // Generate performance report every 30 minutes
-    // !! move this to cron job
-    setInterval(() => {
-      const report = queryOptimizer.generatePerformanceReport();
-      console.log("📊 Performance Report:".cyan, report);
-    }, 30 * 60 * 1000);
+    // Health check endpoint
+    app.get('/health', (req, res) => {
+      res.status(200).json({
+        status: 'ok',
+        serverTime: new Date().toISOString(),
+        uptime: process.uptime(),
+        websocket: {
+          connected: webSocketService.getConnectedUserIds().length,
+          path: '/ws'
+        },
+        environment: process.env.NODE_ENV || 'development',
+        nodeVersion: process.version
+      });
+    });
 
-    // Socket.IO authentication middleware
-    io.use(async (socket, next) => {
+    app.get('/test-token', (req, res) => {
+      const token = req.query.token;
+      if (!token) {
+        return res.status(400).json({ error: 'No token provided' });
+      }
+
       try {
-        const token = socket.handshake.auth.token;
-
-        if (!token) {
-          console.log("Socket connection rejected: No token provided".red);
-          return next(new Error("Authentication error: No token provided"));
-        }
-
-        // Verify JWT token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-        // Find user in database
-        const user = await userModel.findById(decoded.id).select("-password");
-
-        if (!user) {
-          console.log("Socket connection rejected: User not found".red);
-          return next(new Error("Authentication error: User not found"));
-        }
-
-        // Attach user to socket
-        socket.user = user;
-        console.log(`Socket authenticated for user: ${user.email}`.green);
-
-        next();
+        res.json({
+          valid: true,
+          decoded,
+          expiresIn: new Date(decoded.exp * 1000).toISOString(),
+          serverSecret: process.env.JWT_SECRET ? 'Set' : 'Not set'
+        });
       } catch (error) {
-        console.log(`Socket authentication failed: ${error.message}`.red);
-        next(new Error("Authentication error: Invalid token"));
+        res.status(401).json({
+          valid: false,
+          error: error.message,
+          serverSecret: process.env.JWT_SECRET ? 'Set' : 'Not set'
+        });
       }
     });
 
-    // Socket.IO connection handling
-    io.on("connection", (socket) => {
-      console.log(
-        `Authenticated user connected: ${socket.id} - ${socket.user.email}`
-          .green
-      );
-
-      // Join user to their personal room (using authenticated user ID)
-      socket.on("join_user_room", (userId) => {
-        // Check if userId is provided
-        if (!userId) {
-          socket.emit("error", { message: "User ID is required to join room" });
-          return;
-        }
-
-        // Verify the userId matches the authenticated user
-        if (socket.user._id.toString() !== userId.toString()) {
-          socket.emit("error", {
-            message: "Unauthorized: Cannot join room for different user",
-          });
-          return;
-        }
-
-        socket.join(`user_${userId}`);
-        console.log(
-          `User ${socket.user.email} joined room user_${userId}`.yellow
-        );
-        socket.emit("room_joined", {
-          room: `user_${userId}`,
-          message: "Successfully joined user room",
-        });
-      });
-
-      // Join driver to their personal room (using authenticated user ID)
-      socket.on("join_driver_room", (driverId) => {
-        // Check if driverId is provided
-        if (!driverId) {
-          socket.emit("error", {
-            message: "Driver ID is required to join room",
-          });
-          return;
-        }
-
-        // Verify the driverId matches the authenticated user and user is a driver
-        if (socket.user._id.toString() !== driverId.toString()) {
-          socket.emit("error", {
-            message: "Unauthorized: Cannot join room for different driver",
-          });
-          return;
-        }
-
-        if (socket.user.role !== "driver") {
-          socket.emit("error", {
-            message: "Unauthorized: Only drivers can join driver rooms",
-          });
-          return;
-        }
-
-        socket.join(`driver_${driverId}`);
-        console.log(
-          `Driver ${socket.user.email} joined room driver_${driverId}`.yellow
-        );
-        socket.emit("room_joined", {
-          room: `driver_${driverId}`,
-          message: "Successfully joined driver room",
-        });
-      });
-
-      // Handle booking events with authenticated user context
-      handleBookingEvents(socket, io);
-
-      // Handle disconnection
-      socket.on("disconnect", () => {
-        console.log(
-          `Authenticated user disconnected: ${socket.id} - ${socket.user.email}`
-            .red
-        );
+    app.get('/generate-test-token', (req, res) => {
+      const testUser = {
+        id: 'test_user_id',
+        role: 'user',
+        name: 'Test User'
+      };
+      
+      const token = generateToken(testUser);
+      
+      res.json({
+        token,
+        test_ws_url: `ws://localhost:${process.env.PORT || 3001}/ws?token=${token}`
       });
     });
 
-    // Initialize driver status socket handlers
-    initializeDriverStatusSocket(io);
+    app.get('/verify-token', (req, res) => {
+      const token = req.query.token;
+      if (!token) {
+        return res.status(400).json({ error: 'No token provided' });
+      }
 
-    // Make io accessible to other modules
-    app.set("io", io);
+      const { valid, decoded, error } = verifyToken(token);
+      
+      if (!valid) {
+        return res.status(401).json({
+          valid: false,
+          error,
+          message: 'Invalid or expired token'
+        });
+      }
+      
+      res.json({
+        valid: true,
+        decoded,
+        expiresAt: decoded.exp ? new Date(decoded.exp * 1000).toISOString() : null
+      });
+    });
 
-    const PORT = process.env.PORT || 3003;
-    server.listen(PORT, () =>
-      console.log(`🚀 Server started successfully on port: ${PORT}`.cyan.bold)
-    );
-  } catch (error) {
-    console.error("Failed to initialize server:", error.message.red);
+    try {
+      if (!process.env.JWT_SECRET) {
+        throw new Error('JWT_SECRET is not set in environment variables');
+      }
+      
+      console.log('🔑 Using JWT_SECRET:', process.env.JWT_SECRET ? 'Set' : 'Not set');
+      
+      // Initialize WebSocket server with JWT secret
+      webSocketService.initialize(server, { 
+        path: '/ws',
+        jwtSecret: process.env.JWT_SECRET
+      });
+
+      // Initialize Car Recovery WebSocket service
+      CarRecoverySocketService.initialize(webSocketService.wss);
+
+      // Start the server
+      const PORT = process.env.PORT || 3001;
+      server.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 Server running on port ${PORT}`.cyan);
+        console.log(`🔌 WebSocket server running on ws://localhost:${PORT}/ws`.cyan);
+        console.log(`🔑 Test endpoints:`.cyan);
+        console.log(`   - Generate test token: http://localhost:${PORT}/generate-test-token`.cyan);
+        console.log(`   - Verify token: http://localhost:${PORT}/verify-token?token=YOUR_TOKEN`.cyan);
+        console.log(`   - Test WebSocket: http://localhost:${PORT}/test-websocket`.cyan);
+      });
+    } catch (error) {
+      console.error('❌ Failed to initialize WebSocket server:'.red, error.message);
+      process.exit(1);
+    }
+  })
+  .catch((err) => {
+    console.error('MongoDB connection error:'.red, err);
     process.exit(1);
-  }
-};
+  });
 
-// Initialize the server
-initializeServer();
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+  console.log(`Error: ${err.message}`.red);
+  server.close(() => process.exit(1));
+});
 
-// Export io for use in other modules
-export { io };
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Shutting down gracefully...'.yellow);
+  server.close(() => {
+    console.log('Process terminated'.red);
+    process.exit(0);
+  });
+});
+
+export { webSocketService };
+export default app;
