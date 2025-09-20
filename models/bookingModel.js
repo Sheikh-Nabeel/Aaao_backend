@@ -496,6 +496,14 @@ const bookingSchema = new mongoose.Schema({
         required: false,
       },
     },
+    language: { type: String, required: false },
+    voiceToText: { type: String, required: false },
+    attachments: [{
+      url: { type: String, required: true },
+      type: { type: String, enum: ["image", "video", "audio", "file"], default: "file" },
+      mime: { type: String, required: false },
+      sizeBytes: { type: Number, required: false }
+    }]
   }],
   // Payment and MLM tracking
   paymentDetails: {
