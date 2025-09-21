@@ -1052,96 +1052,68 @@ class RecoveryHandler {
         dropoffLocation.coordinates
       );
 
-      // Get pricing information
-      const pricing = this._getRecoveryPricing({
-        serviceType: data.serviceType,
-        vehicleType,
-        distance,
-        ...options
-      });
+      // Time estimate (minutes) using avg speed to pass to calculator
+      const averageSpeedKmh = 30;
+      const durationMinutes = Math.ceil((distance / averageSpeedKmh) * 60);
 
-      // Calculate estimated fare
+      // Use unified fare calculator (handles base 6km + 7.5/km, surge, night, platform, VAT, city-rule)
       const fare = await FareCalculator.calculateRecoveryFare({
         vehicleType,
         serviceType: data.serviceType,
         distance,
-        duration: pricing.timeEstimate,
+        duration: durationMinutes,
         startTime: new Date(),
         hasHelper: options?.hasHelper || false,
         helperCount: options?.helperCount || 0,
         waitingTime: options?.waitingTime || 0
       });
 
-      // City-wise pricing enforcement (optional via ENV)
-      let totalFare = fare.totalFare;
-      const cityKmThreshold = Number(process.env.CITY_RULE_KM_THRESHOLD || 0);
-      const cityPerKm = Number(process.env.CITY_RULE_PER_KM || 0);
-      let cityRuleApplied = false;
-      if (cityKmThreshold > 0 && cityPerKm > 0 && distance > cityKmThreshold) {
-        // Recompute distance fare beyond base 6km using city rate
-        const baseDistance = 6;
-        const beyond = Math.max(0, distance - baseDistance);
-        const baseFare = fare.baseFare; // from calculator
-        const distanceFare = Math.ceil(beyond * cityPerKm);
-        // Rebuild total (keep other surcharges as-is)
-        totalFare = baseFare + distanceFare + (fare.waitingCharges || 0) + (fare.nightSurcharge || 0) + (fare.platformFee?.amount || 0);
-        cityRuleApplied = true;
-      }
-
-      // Round-trip discount enforcement
+      // Round-trip discount enforcement and free stay minutes (round trips only)
       const roundTrip = !!options?.roundTrip;
-      let roundTripDiscount = 0;
-      if (roundTrip) {
-        roundTripDiscount = Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10);
-        totalFare = Math.max(0, totalFare - roundTripDiscount);
-      }
+      const roundTripDiscount = roundTrip ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10) : 0;
+      const freeStayMinutes = roundTrip ? Math.min(Number(process.env.FREE_STAY_CAP_MIN || 30), Math.floor(distance * 0.5)) : 0;
 
-      // Admin-configurable negotiation window & extras (defaults if not configured)
+      // Final amount shown to customer (apply discount after VAT so user sees a simple saved AED X)
+      const amountBeforeDiscount = fare.totalWithVat ?? fare.totalFare;
+      const finalAmount = Math.max(0, (amountBeforeDiscount || 0) - roundTripDiscount);
+
+      // Negotiation window (admin configurable via env); bounds based on finalAmount
       const negotiation = {
         enabled: true,
-        minPercent: Number(process.env.NEGOTIATE_MIN_PERCENT || 0),  // e.g., 0 = no lower bound
-        maxPercent: Number(process.env.NEGOTIATE_MAX_PERCENT || 20), // e.g., max +20%
-      };
-      const surge = {
-        level: process.env.SURGE_LEVEL || 'none', // none | 1.5x | 2.0x
-        multiplier: process.env.SURGE_LEVEL === '2.0x' ? 2.0 : process.env.SURGE_LEVEL === '1.5x' ? 1.5 : 1.0
-      };
-      const vat = {
-        percent: Number(process.env.VAT_PERCENT || 0),
+        minPercent: Number(process.env.NEGOTIATE_MIN_PERCENT || 0),
+        maxPercent: Number(process.env.NEGOTIATE_MAX_PERCENT || 20)
       };
 
-      // Prepare response
       const response = {
         estimatedFare: {
-          amount: totalFare,
+          amount: finalAmount,
           currency: 'AED',
           currencySymbol: 'AED',
           breakdown: {
-            baseFare: fare.baseFare,
-            distanceFare: cityRuleApplied ? Math.ceil(Math.max(0, distance - 6) * cityPerKm) : fare.distanceFare,
-            serviceCharge: fare.serviceCharge,
-            waitingCharges: fare.waitingCharges,
-            nightSurcharge: fare.nightSurcharge,
+            baseFare: fare.baseFare || 0,
+            distanceFare: fare.distanceFare || 0,
+            serviceCharge: fare.serviceCharge || 0,
+            waitingCharges: fare.waitingCharges || 0,
+            nightSurcharge: fare.nightSurcharge || 0,
             platformFee: fare.platformFee?.amount || 0,
+            vat: fare.vat?.amount || 0,
             roundTripDiscount
           },
-          estimatedDuration: pricing.timeEstimate, // in minutes
-          estimatedDistance: {
-            value: distance,
-            unit: 'km'
-          },
+          estimatedDuration: durationMinutes, // in minutes
+          estimatedDistance: { value: distance, unit: 'km' },
           negotiationWindow: {
             enabled: negotiation.enabled,
-            min: Math.max(0, Math.round(totalFare * (1 - (negotiation.minPercent / 100)))),
-            max: Math.round(totalFare * (1 + (negotiation.maxPercent / 100)))
+            min: Math.max(0, Math.round(finalAmount * (1 - (negotiation.minPercent / 100)))),
+            max: Math.round(finalAmount * (1 + (negotiation.maxPercent / 100)))
           },
-          surge: { level: surge.level, multiplier: surge.multiplier },
-          vat: { percent: vat.percent },
-          freeStayMinutes: roundTrip ? Math.min(Number(process.env.FREE_STAY_CAP_MIN || 30), Math.floor(distance * 0.5)) : 0,
-          cityRuleApplied
+          surge: { level: process.env.SURGE_LEVEL || 'none', multiplier: (process.env.SURGE_LEVEL === '2.0x' ? 2.0 : process.env.SURGE_LEVEL === '1.5x' ? 1.5 : 1.0) },
+          vat: { percent: fare.vat?.percent || Number(process.env.VAT_PERCENT || 0) },
+          freeStayMinutes,
+          cityRuleApplied: Boolean(process.env.CITY_RULE_ENABLED || false)
         },
         pricingDetails: {
-          ...pricing,
+          timeEstimate: durationMinutes,
+          distanceRate: undefined, // handled inside FareCalculator
           vehicleType,
           serviceType: data.serviceType
         },

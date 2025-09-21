@@ -431,167 +431,195 @@ class FareCalculator {
     waitingTime = 0
   }) {
     try {
-      // Fallback configuration
+      // Fallback configuration aligned to product spec
       const FALLBACK_CONFIG = {
         vehicleTypes: {
-          CAR: { baseFare: 50, perKmRate: 5, minFare: 50, displayName: 'Car' },
-          SUV: { baseFare: 75, perKmRate: 7, minFare: 75, displayName: 'SUV' },
-          TRUCK: { baseFare: 100, perKmRate: 10, minFare: 100, displayName: 'Truck' },
-          MOTORCYCLE: { baseFare: 30, perKmRate: 3, minFare: 30, displayName: 'Motorcycle' }
+          CAR: { baseFare: 50, perKmRate: 7.5, minFare: 50, displayName: 'Car' },
+          SUV: { baseFare: 50, perKmRate: 7.5, minFare: 50, displayName: 'SUV' },
+          TRUCK: { baseFare: 50, perKmRate: 7.5, minFare: 50, displayName: 'Truck' },
+          MOTORCYCLE: { baseFare: 50, perKmRate: 7.5, minFare: 50, displayName: 'Motorcycle' }
         },
         serviceTypes: {
-          TOWING: { additionalCharge: 50, description: 'Standard towing service' },
-          WINCHING: { additionalCharge: 100, description: 'Winching service' },
-          ROADSIDE_ASSISTANCE: { flatFee: 75, description: 'Roadside assistance' }
+          // Standard recovery (towing/specialized) use base + per km
+          TOWING: { kind: 'standard', description: 'Towing (Flatbed/Wheel Lift)' },
+          SPECIALIZED_RECOVERY: { kind: 'standard', description: 'Specialized/Heavy Recovery' },
+          // Fixed-fee services (apply min arrival + convenience flat)
+          WINCHING: { kind: 'fixed', minArrivalFee: 5, convenienceFee: 50, description: 'Winching Service' },
+          ROADSIDE_ASSISTANCE: { kind: 'fixed', minArrivalFee: 5, convenienceFee: 50, description: 'Roadside Assistance' },
+          KEY_UNLOCK: { kind: 'fixed', minArrivalFee: 0, convenienceFee: 50, description: 'Key Unlock Service' }
         },
-        platformFees: {
-          percentage: 15,
-          splitRatio: { customer: 50, serviceProvider: 50 }
+        platformFees: { percentage: 15, splitRatio: { customer: 50, serviceProvider: 50 } },
+        waitingCharges: { freeMinutes: 5, perMinuteAfter: 2, maxWaitingCharge: 20 },
+        nightCharges: { active: true, mode: 'flat', surcharge: 10, multiplier: 1.25 }, // mode: 'flat' | 'multiplier'
+        surge: { level: 'none', multiplier: 1.0 },
+        vat: { percent: Number(process.env.VAT_PERCENT || 0) },
+        cityRule: {
+          enabled: Boolean(process.env.CITY_RULE_ENABLED || false),
+          country: process.env.CITY_RULE_COUNTRY || '',
+          thresholdKm: Number(process.env.CITY_RULE_KM_THRESHOLD || 10),
+          perKm: Number(process.env.CITY_RULE_PER_KM || 5)
         },
-        waitingCharges: {
-          freeMinutes: 5,
-          perMinuteAfter: 2,
-          maxWaitingCharge: 20
-        }
+        roundTrip: { discountAED: Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10) }
       };
 
       let config;
       try {
         // Try to get config from database first
-        const pricingConfig = await PricingConfig.findOne({ 
-          serviceType: 'car_recovery',
-          isActive: true 
-        });
-
+        const pricingConfig = await PricingConfig.findOne({ serviceType: 'car_recovery', isActive: true });
         if (pricingConfig?.config) {
-          console.log('Using pricing config from database');
           config = pricingConfig.config;
         } else {
-          console.log('Using fallback pricing config');
           config = FALLBACK_CONFIG;
         }
       } catch (dbError) {
         console.error('Error fetching pricing config from database, using fallback:', dbError);
         config = FALLBACK_CONFIG;
       }
-      
-      // Normalize vehicle and service types to uppercase for case-insensitive matching
+
+      // Normalize keys
       const normalizedVehicleType = vehicleType?.toUpperCase();
       const normalizedServiceType = serviceType?.toUpperCase().replace(/ /g, '_');
-      
-      // Get vehicle type configuration with case-insensitive matching
-      const vehicleConfig = config.vehicleTypes?.[normalizedVehicleType];
-      if (!vehicleConfig) {
-        const availableTypes = Object.keys(config.vehicleTypes || {}).join(', ');
-        throw new Error(`Pricing not configured for vehicle type: ${vehicleType}. Available types: ${availableTypes}`);
-      }
 
-      // Get service type configuration with case-insensitive matching
-      const serviceConfig = config.serviceTypes?.[normalizedServiceType];
-      if (!serviceConfig) {
+      const vehicleConfig = config.vehicleTypes?.[normalizedVehicleType] || FALLBACK_CONFIG.vehicleTypes.CAR;
+      const serviceCfg = config.serviceTypes?.[normalizedServiceType];
+      if (!serviceCfg) {
         const availableServices = Object.keys(config.serviceTypes || {}).join(', ');
-        console.error('Available services:', availableServices);
         throw new Error(`Pricing not configured for service type: ${serviceType}. Available services: ${availableServices}`);
       }
 
-      // Calculate base fare (first 6 km)
+      // Distance fare for standard services (after 6km)
       const baseDistance = 6;
-      const distanceBeyondBase = Math.max(0, distance - baseDistance);
-      
-      // Calculate distance-based fare
-      let distanceFare = vehicleConfig.baseFare;
-      if (distance > baseDistance) {
-        distanceFare += Math.ceil(distanceBeyondBase * vehicleConfig.perKmRate);
+      const perKmDefault = vehicleConfig.perKmRate ?? 7.5;
+
+      // City-wise override (if enabled and threshold crossed)
+      const cityRuleEnabled = !!config.cityRule?.enabled;
+      const cityThreshold = Number(config.cityRule?.thresholdKm || 10);
+      const cityPerKm = Number(config.cityRule?.perKm || 0);
+      const useCityRate = cityRuleEnabled && cityPerKm > 0 && distance > cityThreshold;
+
+      let baseFare = vehicleConfig.baseFare ?? 50;
+      let distanceFare = baseFare;
+
+      if (serviceCfg.kind === 'standard') {
+        if (distance > baseDistance) {
+          const beyond = Math.max(0, distance - baseDistance);
+          const rate = useCityRate ? cityPerKm : perKmDefault;
+          distanceFare += Math.ceil(beyond * rate);
+        }
+      } else if (serviceCfg.kind === 'fixed') {
+        // Fixed services: convenience fee + optional min arrival fee, no distance component by default
+        distanceFare = 0;
+        baseFare = 0;
       }
 
-      // Apply service type charges
-      let serviceFare = 0;
-      if (serviceConfig.flatFee) {
-        serviceFare = serviceConfig.flatFee;
-      } else if (serviceConfig.additionalCharge) {
-        serviceFare = distanceFare + serviceConfig.additionalCharge;
-      } else if (serviceConfig.multiplier) {
-        serviceFare = distanceFare * serviceConfig.multiplier;
+      // Apply service-specific charges
+      let serviceCharge = 0;
+      if (serviceCfg.kind === 'fixed') {
+        const minArrival = Number(serviceCfg.minArrivalFee ?? 0);
+        const convenienceFee = Number(serviceCfg.convenienceFee ?? 0);
+        serviceCharge = minArrival + convenienceFee;
       } else {
-        serviceFare = distanceFare;
-      }
-
-      // Calculate waiting charges
-      let waitingCharges = 0;
-      const { waitingCharges: waitConfig = {} } = config;
-      const freeMinutes = waitConfig.freeMinutes || 5;
-      const perMinuteAfter = waitConfig.perMinuteAfter || 2;
-      const maxWaitingCharge = waitConfig.maxWaitingCharge || 20;
-      
-      if (waitingTime > freeMinutes) {
-        const chargeableMinutes = waitingTime - freeMinutes;
-        waitingCharges = Math.min(
-          chargeableMinutes * perMinuteAfter,
-          maxWaitingCharge
-        );
-      }
-
-      // Calculate night charges (10 PM to 6 AM)
-      let nightSurcharge = 0;
-      const { nightCharges = {} } = config;
-      if (nightCharges.active) {
-        const hour = startTime.getHours();
-        const isNightTime = hour >= 22 || hour < 6;
-        
-        if (isNightTime) {
-          nightSurcharge = nightCharges.surcharge || 10;
+        // For standard services, no extra service charge unless configured with multiplier/addon in DB
+        if (typeof serviceCfg.additionalCharge === 'number') {
+          serviceCharge += serviceCfg.additionalCharge;
+        } else if (typeof serviceCfg.multiplier === 'number') {
+          // Apply multiplier on distance component only
+          const distOnly = Math.max(0, distanceFare - (vehicleConfig.baseFare ?? 50));
+          serviceCharge += Math.round(distOnly * (serviceCfg.multiplier - 1));
         }
       }
 
-      // Calculate subtotal
-      const subtotal = serviceFare + waitingCharges + nightSurcharge;
-      
-      // Apply minimum fare
-      const totalFare = Math.max(subtotal, vehicleConfig.minFare);
+      // Waiting charges
+      const waitCfg = config.waitingCharges || {};
+      const freeMinutes = Number(waitCfg.freeMinutes ?? 5);
+      const perMinuteAfter = Number(waitCfg.perMinuteAfter ?? 2);
+      const maxWaitingCharge = Number(waitCfg.maxWaitingCharge ?? 20);
+      let waitingCharges = 0;
+      if (waitingTime > freeMinutes) {
+        const chargeableMinutes = waitingTime - freeMinutes;
+        waitingCharges = Math.min(chargeableMinutes * perMinuteAfter, maxWaitingCharge);
+      }
 
-      // Calculate platform fee (15% of total fare, split 50/50 between customer and provider)
-      const platformFeePercentage = config.platformFees?.percentage || 15;
-      const platformFee = (totalFare * platformFeePercentage) / 100;
+      // Night charges: flat OR multiplier
+      const nightCfg = config.nightCharges || {};
+      const hour = startTime.getHours();
+      const isNightTime = nightCfg.active ? (hour >= 22 || hour < 6) : false;
+      let nightSurcharge = 0;
+
+      // Subtotal before night/surge/platform
+      let subtotalPreNight = 0;
+      if (serviceCfg.kind === 'standard') {
+        subtotalPreNight = (baseFare + Math.max(0, distanceFare - baseFare)) + serviceCharge + waitingCharges;
+        // Ensure minimum fare for standard services
+        const minFare = Number(vehicleConfig.minFare ?? baseFare);
+        subtotalPreNight = Math.max(subtotalPreNight, minFare);
+      } else {
+        // Fixed services subtotal is their fixed service charge + waiting
+        subtotalPreNight = serviceCharge + waitingCharges;
+      }
+
+      let subtotalAfterNight = subtotalPreNight;
+      if (isNightTime) {
+        const mode = nightCfg.mode || (process.env.NIGHT_MODE || 'flat');
+        if (mode === 'multiplier') {
+          const m = Number(nightCfg.multiplier || process.env.NIGHT_MULTIPLIER || 1.25);
+          subtotalAfterNight = Math.round(subtotalPreNight * m);
+        } else {
+          const s = Number(nightCfg.surcharge || process.env.NIGHT_FLAT_SURCHARGE || 10);
+          nightSurcharge = s;
+          subtotalAfterNight = subtotalPreNight + s;
+        }
+      }
+
+      // Surge pricing
+      const surgeLevel = process.env.SURGE_LEVEL || config.surge?.level || 'none';
+      const surgeMultiplier = surgeLevel === '2.0x' ? 2.0 : surgeLevel === '1.5x' ? 1.5 : (config.surge?.multiplier || 1.0);
+      const subtotalAfterSurge = Math.round(subtotalAfterNight * surgeMultiplier);
+
+      // Platform fee (15%) on subtotalAfterSurge
+      const platformFeePercentage = Number(config.platformFees?.percentage || 15);
+      const platformFee = (subtotalAfterSurge * platformFeePercentage) / 100;
       const platformFeeSplit = platformFee / 2;
 
-      // Calculate amount for service provider (after platform fee)
-      const providerAmount = totalFare - platformFeeSplit;
+      // Total before VAT
+      const totalFare = subtotalAfterSurge + platformFee;
+
+      // VAT on totalFare
+      const vatPercent = Number(config.vat?.percent || 0);
+      const vatAmount = Math.round((totalFare * vatPercent) / 100);
+      const totalWithVat = totalFare + vatAmount;
+
+      // Build breakdown
+      const distanceOnly = Math.max(0, distanceFare - (serviceCfg.kind === 'fixed' ? 0 : (vehicleConfig.baseFare ?? 50)));
+      const fareBreakdown = [
+        ...(serviceCfg.kind === 'standard' ? [{ description: 'Base Fare', amount: vehicleConfig.baseFare ?? 50 }] : []),
+        ...(serviceCfg.kind === 'standard' && distanceOnly > 0 ? [{ description: `Distance (${distance.toFixed(2)} km)`, amount: distanceOnly }] : []),
+        ...(serviceCharge > 0 ? [{ description: serviceCfg.description || serviceType, amount: serviceCharge }] : []),
+        ...(waitingCharges > 0 ? [{ description: 'Waiting Charges', amount: waitingCharges }] : []),
+        ...(nightSurcharge > 0 ? [{ description: 'Night Surcharge', amount: nightSurcharge }] : [])
+      ];
 
       return {
-        baseFare: vehicleConfig.baseFare,
+        baseFare: serviceCfg.kind === 'standard' ? (vehicleConfig.baseFare ?? 50) : 0,
         distance,
-        distanceFare,
+        distanceFare: serviceCfg.kind === 'standard' ? (serviceCfg.kind === 'standard' ? (distanceOnly + (vehicleConfig.baseFare ?? 50)) : 0) : 0,
         serviceType,
-        serviceCharge: serviceFare - distanceFare,
+        serviceCharge,
         waitingCharges,
         nightSurcharge,
-        subtotal,
+        subtotal: subtotalAfterNight, // after night mode, before surge/platform
         platformFee: {
           percentage: platformFeePercentage,
           amount: platformFee,
           customerShare: platformFeeSplit,
           providerShare: platformFeeSplit
         },
-        totalFare,
-        providerAmount,
+        totalFare, // pre-VAT
+        vat: { percent: vatPercent, amount: vatAmount },
+        totalWithVat, // final charge incl. VAT
+        providerAmount: totalFare - platformFeeSplit, // provider sees amount before VAT
         currency: 'AED',
-        fareBreakdown: [
-          { description: 'Base Fare', amount: vehicleConfig.baseFare },
-          { 
-            description: `Distance (${distance.toFixed(2)} km)`, 
-            amount: distanceFare - vehicleConfig.baseFare 
-          },
-          { 
-            description: serviceConfig.description || serviceType, 
-            amount: serviceFare - distanceFare 
-          },
-          ...(waitingCharges > 0 ? [
-            { description: 'Waiting Charges', amount: waitingCharges }
-          ] : []),
-          ...(nightSurcharge > 0 ? [
-            { description: 'Night Surcharge', amount: nightSurcharge }
-          ] : [])
-        ].filter(item => item.amount > 0)
+        fareBreakdown
       };
     } catch (error) {
       console.error('Error calculating recovery fare:', error);
