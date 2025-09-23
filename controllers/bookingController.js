@@ -7,6 +7,7 @@ import asyncHandler from "express-async-handler";
 import { calculateFare } from "../utils/fareCalculator.js";
 import { addMoneyToMLM } from "../utils/mlmHelper.js";
 import { calculateDistance } from "../utils/distanceCalculator.js";
+import { webSocketService } from "../services/websocketService.js";
 
 // Helper function to get driver socket ID
 const getDriverSocketId = (driverId) => {
@@ -744,6 +745,19 @@ const acceptBooking = asyncHandler(async (req, res) => {
     });
   }
 
+  // Enforce: a driver can only handle one active booking at a time
+  const activeForDriver = await Booking.findOne({
+    driver: driverId,
+    status: { $in: ["accepted", "in_progress"] },
+  }).select("_id status");
+  if (activeForDriver) {
+    return res.status(409).json({
+      message: "You already have an active job in progress or accepted",
+      activeBookingId: activeForDriver._id,
+      token: req.cookies.token,
+    });
+  }
+
   // Check vehicle compatibility with booking requirements
   if (booking.serviceType !== vehicle.serviceType) {
     return res.status(400).json({
@@ -764,6 +778,26 @@ const acceptBooking = asyncHandler(async (req, res) => {
       message: "Vehicle type does not match booking requirements",
       token: req.cookies.token,
     });
+  }
+
+  // Enforce: suspended drivers cannot accept
+  if (user.driverSettings?.suspended) {
+    const until = user.driverSettings.suspendedUntil;
+    if (!until || new Date(until) > new Date()) {
+      return res.status(403).json({
+        message: "You are temporarily suspended and cannot accept bookings",
+        suspendedUntil: until,
+        token: req.cookies.token,
+      });
+    } else {
+      // Auto-clear expired suspension
+      await User.findByIdAndUpdate(driverId, {
+        $set: {
+          "driverSettings.suspended": false,
+          "driverSettings.suspendedUntil": null,
+        },
+      });
+    }
   }
 
   booking.driver = driverId;
@@ -1441,8 +1475,7 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
         user: {
           _id: booking.user._id,
           name: booking.user.name,
-          phone: booking.user.phone,
-          profileImage: booking.user.selfieImage
+          phone: booking.user.phone
         },
         pickupLocation: booking.pickupLocation,
         dropoffLocation: booking.dropoffLocation,
@@ -2096,61 +2129,45 @@ const submitRating = asyncHandler(async (req, res) => {
       });
     }
     
-    // Check if user is part of this booking
-    const isUser = booking.user._id.toString() === userId.toString();
-    const isDriver = booking.driver && booking.driver._id.toString() === userId.toString();
-    
-    if (!isUser && !isDriver) {
+    // Enforce: only the customer (booking.user) can rate the service
+    const isCustomer = booking.user._id.toString() === userId.toString();
+    if (!isCustomer) {
       return res.status(403).json({
         success: false,
-        message: 'You are not authorized to rate this ride'
+        message: 'Only the customer can rate this service'
       });
     }
     
-    // Update rating based on who is rating
-    if (isUser) {
-      if (booking.rating.userRating.stars) {
-        return res.status(400).json({
-          success: false,
-          message: 'You have already rated this ride'
-        });
-      }
-      
-      booking.rating.userRating = {
-        stars,
-        comment: comment || '',
-        ratedAt: new Date()
-      };
-    } else {
-      if (booking.rating.driverRating.stars) {
-        return res.status(400).json({
-          success: false,
-          message: 'You have already rated this ride'
-        });
-      }
-      
-      booking.rating.driverRating = {
-        stars,
-        comment: comment || '',
-        ratedAt: new Date()
-      };
+    // Customer rates the driver -> store under driverRating; prevent duplicate ratings
+    if (booking.rating?.driverRating?.stars) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have already rated this service'
+      });
     }
+    
+    booking.rating = booking.rating || {};
+    booking.rating.driverRating = {
+      stars,
+      comment: comment || '',
+      ratedAt: new Date()
+    };
     
     await booking.save();
     
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Rating submitted successfully',
       data: {
         bookingId: booking._id,
-        ratedBy: isUser ? 'user' : 'driver',
+        ratedBy: 'customer',
         stars,
         comment: comment || ''
       }
     });
     
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error submitting rating',
       error: error.message
@@ -2829,11 +2846,8 @@ const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
       role: 'driver',
       kycLevel: 2,
       kycStatus: 'approved',
-      isActive: true,
-      driverStatus: 'online',
-      currentLocation: { $exists: true }
     };
-    
+
     // Handle Pink Captain preferences
     if (driverPreference === 'pink_captain') {
       driverQuery.gender = 'female';
@@ -2940,6 +2954,61 @@ const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
   }
 });
 
+// === Fraud Detection (REST) ===
+export const fraudCheckBooking = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const adminId = req.user._id;
+  const SUSPEND_MINUTES = Number(process.env.FRAUD_SUSPEND_MINUTES || 60);
+  const PROXIMITY_METERS = Number(process.env.FRAUD_PROXIMITY_METERS || 30);
+
+  const booking = await Booking.findById(bookingId).populate(
+    "user driver",
+    "currentLocation role"
+  );
+  if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+
+  const userLoc = booking.user?.currentLocation?.coordinates;
+  const driverLoc = booking.driver?.currentLocation?.coordinates;
+  if (!userLoc || !driverLoc) {
+    return res.status(200).json({
+      success: true,
+      message: "Insufficient location data to evaluate fraud",
+      data: { suspicious: false },
+    });
+  }
+
+  // Compute distance between user and driver
+  const toLatLng = (coords) => ({ lat: coords[1], lng: coords[0] });
+  const dKm = calculateDistance(toLatLng(userLoc), toLatLng(driverLoc));
+  const dMeters = dKm * 1000;
+
+  // Heuristic: same device abuse pattern -> extremely close positions repeatedly
+  const suspicious = dMeters <= PROXIMITY_METERS;
+
+  if (suspicious && booking.driver) {
+    // Temporarily suspend driver from accepting rides
+    const until = new Date(Date.now() + SUSPEND_MINUTES * 60 * 1000);
+    await User.findByIdAndUpdate(booking.driver._id, {
+      $set: {
+        "driverSettings.suspended": true,
+        "driverSettings.suspendedUntil": until,
+        "driverSettings.suspensionReason": `Fraud proximity detected at ${new Date().toISOString()}`,
+      },
+    });
+    return res.status(200).json({
+      success: true,
+      message: `Driver suspended for ${SUSPEND_MINUTES} minutes due to fraud detection`,
+      data: { suspicious: true, distanceMeters: Math.round(dMeters), suspendedUntil: until },
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: "No fraud detected",
+    data: { suspicious: false, distanceMeters: Math.round(dMeters) },
+  });
+});
+
 export {
   createBooking,
   getNearbyDrivers,
@@ -2969,3 +3038,126 @@ export {
   updateRidePreferences,
   sendBookingRequestToQualifiedDrivers,
 };
+
+// === Fare Negotiation (REST) ===
+export const proposeFare = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const { proposedAmount } = req.body || {};
+  const userId = req.user._id;
+
+  if (typeof proposedAmount !== 'number') {
+    return res.status(400).json({ success: false, message: 'proposedAmount is required' });
+  }
+
+  const booking = await Booking.findById(bookingId);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  // Only booking user or assigned driver can negotiate
+  const isParty = [booking.user?.toString(), booking.driver?.toString()].includes(userId.toString());
+  if (!isParty) return res.status(403).json({ success: false, message: 'Not authorized to negotiate on this booking' });
+
+  const minPercent = Number(process.env.NEGOTIATE_MIN_PERCENT || 0);
+  const maxPercent = Number(process.env.NEGOTIATE_MAX_PERCENT || 20);
+  const base = booking.fareDetails?.estimatedFare || booking.fare || 0;
+  const min = Math.max(0, Math.round(base * (1 - minPercent / 100)));
+  const max = Math.round(base * (1 + maxPercent / 100));
+  if (proposedAmount < min || proposedAmount > max) {
+    return res.status(400).json({ success: false, message: `Proposed amount out of bounds (${min} - ${max})` });
+  }
+
+  booking.fareDetails = booking.fareDetails || {};
+  booking.fareDetails.negotiation = {
+    state: 'proposed',
+    proposedAmount,
+    by: userId,
+    at: new Date(),
+    bounds: { min, max },
+  };
+  await booking.save();
+
+  // WS notify the counterparty (small notification)
+  try {
+    const proposerId = userId.toString();
+    const customerId = booking.user?.toString?.();
+    const driverId = booking.driver?.toString?.();
+    const recipient = proposerId === customerId ? driverId : customerId;
+    if (recipient) {
+      webSocketService.sendToUser(String(recipient), {
+        event: "price.proposed",
+        requestId: bookingId,
+        data: { bookingId, proposedAmount, by: proposerId, at: new Date() },
+      });
+    }
+  } catch (e) {}
+
+  return res.json({ success: true, message: 'Fare proposed', data: { bookingId, proposedAmount, bounds: { min, max } } });
+});
+
+export const acceptFare = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const userId = req.user._id;
+
+  const booking = await Booking.findById(bookingId);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  // Only booking user or assigned driver can accept
+  const isParty = [booking.user?.toString(), booking.driver?.toString()].includes(userId.toString());
+  if (!isParty) return res.status(403).json({ success: false, message: 'Not authorized to accept negotiation' });
+
+  if (!booking.fareDetails?.negotiation) {
+    return res.status(400).json({ success: false, message: 'No pending negotiation' });
+  }
+
+  booking.fareDetails.finalFare = booking.fareDetails.negotiation.proposedAmount;
+  booking.fareDetails.negotiation.state = 'accepted';
+  await booking.save();
+
+  // WS notify both parties
+  try {
+    const customerId = booking.user?.toString?.();
+    const driverId = booking.driver?.toString?.();
+    const payload = {
+      event: "price.accepted",
+      requestId: bookingId,
+      data: { bookingId, amount: booking.fareDetails.finalFare, by: userId.toString(), at: new Date() },
+    };
+    if (customerId) webSocketService.sendToUser(String(customerId), payload);
+    if (driverId) webSocketService.sendToUser(String(driverId), payload);
+  } catch (e) {}
+
+  return res.json({ success: true, message: 'Fare negotiation accepted', data: { bookingId, amount: booking.fareDetails.finalFare } });
+});
+
+export const rejectFare = asyncHandler(async (req, res) => {
+  const { bookingId } = req.params;
+  const userId = req.user._id;
+
+  const booking = await Booking.findById(bookingId);
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+  // Only booking user or assigned driver can reject
+  const isParty = [booking.user?.toString(), booking.driver?.toString()].includes(userId.toString());
+  if (!isParty) return res.status(403).json({ success: false, message: 'Not authorized to reject negotiation' });
+
+  if (!booking.fareDetails?.negotiation) {
+    return res.status(400).json({ success: false, message: 'No pending negotiation' });
+  }
+
+  booking.fareDetails.negotiation.state = 'rejected';
+  await booking.save();
+
+  // WS notify both parties
+  try {
+    const customerId = booking.user?.toString?.();
+    const driverId = booking.driver?.toString?.();
+    const payload = {
+      event: "price.rejected",
+      requestId: bookingId,
+      data: { bookingId, by: userId.toString(), at: new Date() },
+    };
+    if (customerId) webSocketService.sendToUser(String(customerId), payload);
+    if (driverId) webSocketService.sendToUser(String(driverId), payload);
+  } catch (e) {}
+
+  return res.json({ success: true, message: 'Fare negotiation rejected', data: { bookingId } });
+}); 

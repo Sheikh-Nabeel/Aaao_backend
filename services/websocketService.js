@@ -10,6 +10,7 @@ class WebSocketService {
     this.clients = new Map(); // Map<userId, Set<WebSocket>>
     this.handlers = new Map(); // Map<eventType, Array<handler>>
     this.recoveryHandler = new RecoveryHandler(this);
+    this.rooms = new Map(); // Map<roomName, Set<WebSocket>>
     
     // Initialize event handlers
     this.initializeEventHandlers();
@@ -18,6 +19,9 @@ class WebSocketService {
     this.on = this.on.bind(this);
     this.off = this.off.bind(this);
     this.emit = this.emit.bind(this);
+    this.joinRoom = this.joinRoom.bind(this);
+    this.leaveRoom = this.leaveRoom.bind(this);
+    this.sendToRoom = this.sendToRoom.bind(this);
   }
 
   /**
@@ -45,6 +49,37 @@ class WebSocketService {
     // Register service start event
     this.on('service.start', async (ws, message) => {
       await this.recoveryHandler.handleServiceStart(ws, message);
+    });
+
+    // Prevent 'Unhandled event: authenticated' if clients echo server's AUTHENTICATED message
+    this.on('authenticated', async () => { /* no-op to avoid unhandled warnings */ });
+
+    // Role-based (re)join rooms API (client can call after auth)
+    this.on('auth.join', async (ws) => {
+      try {
+        const rooms = this._joinDefaultRooms(ws);
+        logger.info(`auth.join -> user ${ws.userId} joined rooms: ${rooms.join(', ')}`);
+        this.send(ws, { event: 'auth.joined', data: { rooms } });
+      } catch (e) {
+        logger.error('auth.join error:', e);
+        this.sendError(ws, { code: 400, message: e.message || 'Failed to join rooms' });
+      }
+    });
+
+    // Explicit room join/leave APIs (optional)
+    this.on('room.join', async (ws, { data }) => {
+      const room = data?.room;
+      if (!room) return this.sendError(ws, { code: 400, message: 'room is required' });
+      this.joinRoom(ws, room);
+      logger.info(`room.join -> user ${ws.userId} joined room: ${room}`);
+      this.send(ws, { event: 'room.joined', data: { room } });
+    });
+    this.on('room.leave', async (ws, { data }) => {
+      const room = data?.room;
+      if (!room) return this.sendError(ws, { code: 400, message: 'room is required' });
+      this.leaveRoom(ws, room);
+      logger.info(`room.leave -> user ${ws.userId} left room: ${room}`);
+      this.send(ws, { event: 'room.left', data: { room } });
     });
   }
 
@@ -124,8 +159,12 @@ class WebSocketService {
       ws.userId = userId;  // Store userId for easier access
       ws.isAlive = true;
       ws.connectedAt = new Date();
+      ws.rooms = new Set(); // track rooms for this socket
 
-      logger.info(`WebSocket client connected: ${userId} (${user.role})`);
+      // Minimal role-based log on connect
+      const role = ws.user?.role || 'customer';
+      const roleLabel = role === 'driver' ? 'Driver' : 'Customer';
+      logger.info(`${roleLabel} connected: ${userId}`);
 
       // Set up ping-pong for connection health
       const pingIntervalId = setInterval(() => {
@@ -138,7 +177,7 @@ class WebSocketService {
         ws.ping();
       }, pingInterval);
 
-      // Handle incoming messages
+      // Handle incoming messages (no verbose payload logging)
       ws.on('message', async (message) => {
         let requestId = null;
         
@@ -147,13 +186,8 @@ class WebSocketService {
           const { event, data } = parsedMessage;
           requestId = parsedMessage.requestId;
           
-          // Log incoming message
-          logger.info('Received message', { 
-            event, 
-            requestId, 
-            userId,
-            data: event === 'auth' ? { token: '***' } : data // Hide token in logs
-          });
+          // Minimal event log without payload
+          if (event) logger.info(`WS event received: ${event}`);
 
           // Handle recovery request
           if (event === 'recovery.request') {
@@ -215,12 +249,9 @@ class WebSocketService {
           // Handle other events...
           const handlers = this.handlers.get(event) || [];
           if (handlers.length === 0) {
+            // Minimal warn without payload dumps
             logger.warn(`No handlers registered for event: ${event}`);
-            this.sendError(ws, {
-              requestId,
-              code: ERROR_CODES.UNHANDLED_EVENT,
-              message: `Unhandled event: ${event}`
-            });
+            this.sendError(ws, { requestId, code: ERROR_CODES.UNHANDLED_EVENT, message: `Unhandled event: ${event}` });
             return;
           }
 
@@ -229,23 +260,15 @@ class WebSocketService {
             try {
               await handler(ws, { requestId, data });
             } catch (error) {
-              logger.error(`Error in ${event} handler:`, error);
-              this.sendError(ws, {
-                requestId,
-                code: error.code || ERROR_CODES.INTERNAL_SERVER_ERROR,
-                message: error.message || 'Internal server error',
-                details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-              });
+              // Minimal error log without payload
+              logger.error(`WS message error: ${error.message}`);
+              this.sendError(ws, { requestId, code: error.code || ERROR_CODES.INVALID_REQUEST, message: error.message || 'Invalid message format' });
             }
           }
         } catch (error) {
-          logger.error('Error processing WebSocket message:', error);
-          this.sendError(ws, {
-            requestId,
-            code: error.code || ERROR_CODES.INVALID_REQUEST,
-            message: error.message || 'Invalid message format',
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-          });
+          // Minimal error log without payload
+          logger.error(`WS message error: ${error.message}`);
+          this.sendError(ws, { requestId, code: error.code || ERROR_CODES.INVALID_REQUEST, message: error.message || 'Invalid message format' });
         }
       });
 
@@ -264,6 +287,13 @@ class WebSocketService {
           }
         }
 
+        // Leave all rooms this socket was part of
+        if (ws.rooms && ws.rooms.size > 0) {
+          for (const room of Array.from(ws.rooms)) {
+            this.leaveRoom(ws, room);
+          }
+        }
+
         logger.info(`WebSocket client disconnected: ${userId}`);
       });
 
@@ -277,10 +307,15 @@ class WebSocketService {
         event: WS_EVENTS.AUTHENTICATED,
         data: {
           userId,
-          role: user.role,
+          role: ws.user?.role || 'customer',
           timestamp: new Date().toISOString(),
         },
       });
+
+      // Auto-join default rooms and log only role-based join
+      const joined = this._joinDefaultRooms(ws);
+      const roleRoom = joined.find(r => r.startsWith('role:'));
+      logger.info(`${roleLabel} joined room`);
     });
 
     // Handle server errors
@@ -515,9 +550,51 @@ class WebSocketService {
         this.wss = null;
         this.clients.clear();
         this.handlers.clear();
+        this.rooms.clear();
         resolve();
       });
     });
+  }
+
+  // Create or join a room
+  joinRoom(ws, roomName) {
+    if (!this.rooms.has(roomName)) {
+      this.rooms.set(roomName, new Set());
+    }
+    const room = this.rooms.get(roomName);
+    room.add(ws);
+    ws.rooms?.add(roomName);
+  }
+
+  // Leave a room
+  leaveRoom(ws, roomName) {
+    const room = this.rooms.get(roomName);
+    if (!room) return;
+    room.delete(ws);
+    ws.rooms?.delete(roomName);
+    if (room.size === 0) this.rooms.delete(roomName);
+  }
+
+  // Send to a specific room
+  sendToRoom(roomName, message) {
+    const room = this.rooms.get(roomName);
+    if (!room) return;
+    room.forEach((client) => {
+      if (client.readyState === 1) {
+        this.send(client, message);
+      }
+    });
+  }
+
+  // Internal: join default role/user rooms and return list
+  _joinDefaultRooms(ws) {
+    const rooms = [];
+    const userRoom = `user:${ws.userId}`;
+    const roleRoom = `role:${ws.user?.role || 'unknown'}`;
+    this.joinRoom(ws, userRoom);
+    this.joinRoom(ws, roleRoom);
+    rooms.push(userRoom, roleRoom);
+    return rooms;
   }
 }
 
