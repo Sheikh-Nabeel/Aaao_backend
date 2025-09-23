@@ -496,6 +496,14 @@ const bookingSchema = new mongoose.Schema({
         required: false,
       },
     },
+    language: { type: String, required: false },
+    voiceToText: { type: String, required: false },
+    attachments: [{
+      url: { type: String, required: true },
+      type: { type: String, enum: ["image", "video", "audio", "file"], default: "file" },
+      mime: { type: String, required: false },
+      sizeBytes: { type: Number, required: false }
+    }]
   }],
   // Payment and MLM tracking
   paymentDetails: {
@@ -769,6 +777,21 @@ const bookingSchema = new mongoose.Schema({
       }]
     },
     carRecovery: {
+      // Vehicle details
+      vehicleDetails: {
+        make: { type: String, required: false },
+        model: { type: String, required: false },
+        year: { type: Number, required: false },
+        color: { type: String, required: false },
+        licensePlate: { type: String, required: false },
+        vin: { type: String, required: false }
+      },
+      // Recovery details
+      issueType: {
+        type: String,
+        enum: ["breakdown", "accident", "flat_tire", "battery", "out_of_fuel", "lockout", "other"],
+        required: false
+      },
       issueDescription: {
         type: String,
         required: false
@@ -778,13 +801,135 @@ const bookingSchema = new mongoose.Schema({
         enum: ["low", "medium", "high", "emergency"],
         default: "medium"
       },
-      needHelper: {
-        type: Boolean,
-        default: false
+      // Service options
+      serviceOptions: {
+        towingRequired: { type: Boolean, default: false },
+        winchingRequired: { type: Boolean, default: false },
+        jumpStart: { type: Boolean, default: false },
+        fuelDelivery: { type: Boolean, default: false },
+        tireChange: { type: Boolean, default: false },
+        lockoutService: { type: Boolean, default: false },
+        longDistanceTowing: { type: Boolean, default: false }
       },
-      wheelchairHelper: {
-        type: Boolean,
-        default: false
+      // Location details
+      locationDetails: {
+        isVehicleDrivable: { type: Boolean, default: false },
+        isVehicleInGarage: { type: Boolean, default: false },
+        hasSteeringLock: { type: Boolean, default: false },
+        isInDangerousLocation: { type: Boolean, default: false },
+        additionalLocationInfo: { type: String, required: false }
+      },
+      // Additional services
+      additionalServices: {
+        needHelper: { type: Boolean, default: false },
+        needMechanic: { type: Boolean, default: false },
+        needFlatbed: { type: Boolean, default: false },
+        needSpecialEquipment: { type: Boolean, default: false },
+        specialEquipmentDetails: { type: String, required: false }
+      },
+      // Driver/mechanic notes
+      notes: {
+        driverNotes: { type: String, required: false },
+        mechanicNotes: { type: String, required: false },
+        customerNotes: { type: String, required: false }
+      },
+      // Status tracking
+      statusUpdates: [{
+        status: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now },
+        updatedBy: { 
+          type: mongoose.Schema.Types.ObjectId, 
+          ref: "User",
+          required: false 
+        },
+        notes: { type: String, required: false },
+        location: {
+          type: {
+            type: String,
+            enum: ["Point"],
+            default: "Point"
+          },
+          coordinates: {
+            type: [Number],
+            required: false
+          }
+        }
+      }],
+      // Photo documentation
+      photos: [{
+        url: { type: String, required: true },
+        type: { 
+          type: String, 
+          enum: ["damage", "location", "vehicle_condition", "before_service", "after_service", "other"],
+          required: true 
+        },
+        description: { type: String, required: false },
+        timestamp: { type: Date, default: Date.now }
+      }],
+      // Signature
+      customerSignature: {
+        url: { type: String, required: false },
+        signedAt: { type: Date, required: false },
+        ipAddress: { type: String, required: false }
+      },
+      // Payment details specific to recovery
+      paymentDetails: {
+        baseFee: { type: Number, default: 0 },
+        distanceFee: { type: Number, default: 0 },
+        serviceFees: { type: Number, default: 0 },
+        additionalCharges: { type: Number, default: 0 },
+        discount: { type: Number, default: 0 },
+        totalAmount: { type: Number, default: 0 },
+        paymentMethod: { 
+          type: String, 
+          enum: ["cash", "card", "insurance", "other"],
+          required: false 
+        },
+        isPaid: { type: Boolean, default: false },
+        paidAt: { type: Date, required: false },
+        invoiceNumber: { type: String, required: false }
+      },
+      // Insurance information
+      insuranceInfo: {
+        hasInsurance: { type: Boolean, default: false },
+        insuranceProvider: { type: String, required: false },
+        policyNumber: { type: String, required: false },
+        claimNumber: { type: String, required: false },
+        isClaimApproved: { type: Boolean, default: false },
+        insuranceNotes: { type: String, required: false }
+      },
+      // Driver/mechanic assignment
+      serviceProvider: {
+        driverId: { 
+          type: mongoose.Schema.Types.ObjectId, 
+          ref: "User",
+          required: false 
+        },
+        mechanicId: { 
+          type: mongoose.Schema.Types.ObjectId, 
+          ref: "User",
+          required: false 
+        },
+        assignedAt: { type: Date, required: false },
+        estimatedArrival: { type: Date, required: false },
+        actualArrival: { type: Date, required: false },
+        completionTime: { type: Date, required: false }
+      },
+      // Customer feedback
+      feedback: {
+        rating: { type: Number, min: 1, max: 5, required: false },
+        comments: { type: String, required: false },
+        submittedAt: { type: Date, required: false },
+        followUpRequired: { type: Boolean, default: false },
+        followUpNotes: { type: String, required: false }
+      },
+      // Additional metadata
+      metadata: {
+        isHighPriority: { type: Boolean, default: false },
+        requiresFollowUp: { type: Boolean, default: false },
+        isRecurringCustomer: { type: Boolean, default: false },
+        tags: [{ type: String, required: false }],
+        customFields: { type: Map, of: String, required: false }
       }
     }
   },

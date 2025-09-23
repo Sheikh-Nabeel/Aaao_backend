@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import asyncHandler from "express-async-handler";
-import { io } from "../index.js";
+import { webSocketService } from "../services/websocketService.js";
 
 const uploadsDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
@@ -882,24 +882,27 @@ const acceptBookingRequest = asyncHandler(async (req, res) => {
     .select('firstName lastName email phoneNumber selfieImage gender kycLevel kycStatus role verificationStatus vehicles');
 
   // Emit Socket.IO event to user
-  io.emit('booking_accepted', {
-    requestId: booking._id,
-    status: 'accepted',
-    driver: {
-      id: driver._id,
-      firstName: driver.firstName,
-      lastName: driver.lastName,
-      email: driver.email,
-      phoneNumber: driver.phoneNumber,
-      gender: driver.gender,
-      kycLevel: driver.kycLevel,
-      kycStatus: driver.kycStatus,
-      role: driver.role,
-      verificationStatus: driver.verificationStatus,
-      profileImage: driver.selfieImage,
-      vehicle: driver.vehicles[0]
-    },
-    acceptedAt: booking.acceptedAt
+  webSocketService.sendToClient(booking.user._id, {
+    type: 'booking_accepted',
+    data: {
+      requestId: booking._id,
+      status: 'accepted',
+      driver: {
+        id: driver._id,
+        firstName: driver.firstName,
+        lastName: driver.lastName,
+        email: driver.email,
+        phoneNumber: driver.phoneNumber,
+        gender: driver.gender,
+        kycLevel: driver.kycLevel,
+        kycStatus: driver.kycStatus,
+        role: driver.role,
+        verificationStatus: driver.verificationStatus,
+        profileImage: driver.selfieImage,
+        vehicle: driver.vehicles[0]
+      },
+      acceptedAt: booking.acceptedAt
+    }
   });
 
   res.status(200).json({
@@ -964,11 +967,14 @@ const rejectBookingRequest = asyncHandler(async (req, res) => {
   await booking.save();
 
   // Emit Socket.IO event to notify about rejection (for admin/monitoring)
-  io.emit('booking_rejected', {
-    requestId: booking._id,
-    driverId: driverId,
-    reason: reason || 'No reason provided',
-    rejectedAt: new Date()
+  webSocketService.broadcast({
+    type: 'booking_rejected',
+    data: {
+      requestId: booking._id,
+      driverId: driverId,
+      reason: reason || 'No reason provided',
+      rejectedAt: new Date()
+    }
   });
 
   res.status(200).json({
@@ -1140,24 +1146,26 @@ const offerFare = asyncHandler(async (req, res) => {
   await booking.save();
 
   // Emit real-time notification to user with all pending offers
-  const io = req.app.get('io');
   const pendingOffers = booking.driverOffers.filter(offer => offer.status === 'pending');
   
-  io.to(`user_${booking.user._id}`).emit('driver_offers_updated', {
-    bookingId: booking._id,
-    offers: pendingOffers.map(offer => ({
-      driverId: offer.offeredBy,
-      driverName: offer.driverName,
-      driverRating: offer.driverRating,
-      vehicleInfo: offer.vehicleInfo,
-      proposedFare: offer.amount,
-      estimatedArrival: offer.estimatedArrival,
-      expiresAt: offer.expiresAt,
-      offeredAt: offer.offeredAt
-    })),
-    totalOffers: pendingOffers.length,
-    originalFare: originalFare,
-    message: `${driver.firstName} ${driver.lastName} has offered a fare of ${fareAmount} AED for your booking`
+  webSocketService.sendToClient(booking.user._id, {
+    type: 'driver_offers_updated',
+    data: {
+      bookingId: booking._id,
+      offers: pendingOffers.map(offer => ({
+        driverId: offer.offeredBy,
+        driverName: offer.driverName,
+        driverRating: offer.driverRating,
+        vehicleInfo: offer.vehicleInfo,
+        proposedFare: offer.amount,
+        estimatedArrival: offer.estimatedArrival,
+        expiresAt: offer.expiresAt,
+        offeredAt: offer.offeredAt
+      })),
+      totalOffers: pendingOffers.length,
+      originalFare: originalFare,
+      message: `${driver.firstName} ${driver.lastName} has offered a fare of ${fareAmount} AED for your booking`
+    }
   });
 
   res.status(200).json({
