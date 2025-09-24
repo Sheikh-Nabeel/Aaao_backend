@@ -2784,8 +2784,14 @@ const editProfile = asyncHandler(async (req, res) => {
 });
 
 const changeOwnPassword = asyncHandler(async (req, res) => {
-  const { newPassword } = req.body;
+  const { currentPassword, newPassword } = req.body;
   const userId = req.user._id; // Get user ID from authenticated token
+
+  // Validate current password
+  if (!currentPassword) {
+    res.status(400);
+    throw new Error("Current password is required");
+  }
 
   // Validate new password
   if (!newPassword) {
@@ -2803,6 +2809,20 @@ const changeOwnPassword = asyncHandler(async (req, res) => {
   if (!user) {
     res.status(404);
     throw new Error("User not found");
+  }
+
+  // Verify current password
+  const isCurrentPasswordValid = await user.comparePassword(currentPassword);
+  if (!isCurrentPasswordValid) {
+    res.status(400);
+    throw new Error("Current password is incorrect");
+  }
+
+  // Check if new password is different from current password
+  const isSamePassword = await user.comparePassword(newPassword);
+  if (isSamePassword) {
+    res.status(400);
+    throw new Error("New password must be different from current password");
   }
 
   // Set the new password (middleware will hash it)
