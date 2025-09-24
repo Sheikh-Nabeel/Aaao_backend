@@ -27,8 +27,14 @@ import {
   updateAutoAcceptSettings,
   updateRidePreferences,
   sendBookingRequestToQualifiedDrivers,
+  // New negotiation controllers
+  proposeFare,
+  acceptFare,
+  rejectFare,
+  fraudCheckBooking,
 } from "../controllers/bookingController.js";
 import authHandler from "../middlewares/authMIddleware.js";
+import adminHandler from "../middlewares/adminMiddleware.js";
 
 const router = express.Router();
 
@@ -54,10 +60,17 @@ router.get("/:bookingId/messages", authHandler, getRideMessages);
 router.post("/:bookingId/rating", authHandler, submitRating);
 router.get("/:bookingId/receipt", authHandler, getRideReceipt);
 
+// Fare negotiation (REST)
+router.post("/:bookingId/price/propose", authHandler, proposeFare);
+router.post("/:bookingId/price/accept", authHandler, acceptFare);
+router.post("/:bookingId/price/reject", authHandler, rejectFare);
+
 // New REST API endpoints for real-time operations
 router.post("/:bookingId/reject", authHandler, rejectBooking);
 router.post("/:bookingId/modify-fare", authHandler, modifyBookingFare);
 router.post("/:bookingId/send-message", authHandler, sendMessage);
+// Fraud detection (admin-only)
+router.post("/:bookingId/fraud-check", authHandler, adminHandler, fraudCheckBooking);
 router.post("/driver/location", authHandler, updateDriverLocation);
 router.post("/user/location", authHandler, updateUserLocation);
 router.post("/driver/status", authHandler, updateDriverStatus);
