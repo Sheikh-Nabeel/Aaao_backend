@@ -105,6 +105,7 @@ class RecoveryHandler {
     this.availableDrivers = new Set();
     this.locationTracks = new Map(); // bookingId -> { driver: [{lat,lng,at}], user: [{lat,lng,at}] }
     this.negotiationLocks = new Map(); // driverId -> bookingId
+    this.requestIdToBookingId = new Map(); // requestId -> bookingId
     this.initializeEventHandlers();
   }
 
@@ -495,6 +496,7 @@ class RecoveryHandler {
           estimatedDistance: distanceKm,
           estimatedFare: estimatedFare,
           currency: "AED",
+          clientEstimatedFare: (typeof data?.estimatedFare === 'number' ? data.estimatedFare : (typeof data?.estimated?.amount === 'number' ? data.estimated.amount : undefined))
         },
         pickupLocation: pickupGeo,
         dropoffLocation: dropoffGeo,
@@ -508,17 +510,29 @@ class RecoveryHandler {
       // Store the recovery request
       this.activeRecoveries.set(rid, recoveryRequest);
 
-      // Notify client of successful request creation
-      this.emitToClient(ws, {
-        event: "recovery.request_created",
-        bookingId: rid,
-        data: {
-          bookingId: rid,
-          status: "pending",
-          estimatedTime: "Calculating...",
-          message: "Looking for available drivers",
-        },
-      });
+      // Notify client of successful request creation, include adjustment info and both estimates (server/client)
+       this.emitToClient(ws, {
+         event: "recovery.request_created",
+         bookingId: rid,
+         data: {
+           bookingId: rid,
+           status: "pending",
+           estimatedTime: "Calculating...",
+           message: "Looking for available drivers",
+           fare: {
+             estimated: {
+               admin: estimatedFare,
+               customer: (typeof data?.estimatedFare === 'number' ? data.estimatedFare : (typeof data?.estimated?.amount === 'number' ? data.estimated.amount : null))
+             },
+             selected: null,
+             adjustment: data.__fareAdjust ? {
+               allowedPct: data.__fareAdjust.allowedPct,
+               min: data.__fareAdjust.minFare,
+               max: data.__fareAdjust.maxFare
+             } : undefined
+           }
+         },
+       });
 
       // Do NOT auto-assign. Instead, fetch nearby drivers and notify requester + broadcast to drivers
       const nearbyDrivers = await this.getAvailableDrivers(
@@ -550,6 +564,7 @@ class RecoveryHandler {
             pickupLocation: recoveryRequest.pickupLocation,
             estimatedFare:
               recoveryRequest.fareContext?.estimatedFare || 0,
+            offeredFare: recoveryRequest.fareContext?.clientEstimatedFare || 0,
           },
         });
       }
@@ -763,6 +778,12 @@ class RecoveryHandler {
         });
         booking = await bookingDoc.save();
         recoveryRequest.bookingId = booking._id.toString();
+        // Map temporary requestId -> real bookingId for future resolutions (e.g., cancel by requestId)
+        try {
+          if (!this.requestIdToBookingId) this.requestIdToBookingId = new Map();
+          this.requestIdToBookingId.set(id, recoveryRequest.bookingId);
+          logger.info(`Mapped requestId ${id} -> bookingId ${recoveryRequest.bookingId}`);
+        } catch {}
         // Inform both parties that booking is now persisted
         try {
           this.emitToClient(ws, { event: "booking.persisted", bookingId: recoveryRequest.bookingId, data: { bookingId: recoveryRequest.bookingId, requestId: id } });
@@ -1295,7 +1316,11 @@ class RecoveryHandler {
       // DB fallback: if in-memory request is missing (e.g., restart or different instance), reconstruct minimal state from Booking
       if (!recoveryRequest) {
         try {
-          const booking = await Booking.findById(id)
+          const lookupId = id;
+          if (!this.requestIdToBookingId) this.requestIdToBookingId = new Map();
+          const mapped = this.requestIdToBookingId.get(id);
+          if (mapped) lookupId = mapped;
+          const booking = await Booking.findById(lookupId)
             .select(
               "user driver pickupLocation dropoffLocation status fareDetails receipt createdAt"
             )
@@ -1303,7 +1328,7 @@ class RecoveryHandler {
           if (!booking) throw new Error("Recovery request not found");
           recoveryRequest = {
             requestId: id,
-            bookingId: id,
+            bookingId: String(booking._id),
             userId: booking.user,
             driverId: booking.driver || null,
             pickupLocation: booking.pickupLocation,
@@ -1318,6 +1343,8 @@ class RecoveryHandler {
             statusHistory: [],
           };
           this.activeRecoveries.set(id, recoveryRequest);
+          // Persist the mapping for future resolutions
+          try { this.requestIdToBookingId.set(id, String(booking._id)); } catch {}
         } catch (e) {
           throw new Error("Recovery request not found");
         }
@@ -3068,7 +3095,7 @@ class RecoveryHandler {
         return;
       }
 
-      // In-memory negotiation on requestId (not yet persisted)
+      // In-memory negotiation on requestId
       const req = this.activeRecoveries.get(id);
       if (!req) throw new Error('Request not found');
       const isDriver = actorId && req.driverId && actorId === String(req.driverId);
@@ -3076,7 +3103,6 @@ class RecoveryHandler {
       const prev = req.fareContext?.negotiation || {};
       req.fareContext = req.fareContext || {};
       req.fareContext.negotiation = { ...prev, enabled: true, state: 'proposed', selectedFare: amt, history: [ ...(prev.history || []), { by: isDriver ? 'driver' : 'customer', type: 'offer', amount: amt, at: new Date() } ] };
-      // Notify counterparty if known
       const recipient = isDriver ? req.userId : req.driverId;
       if (recipient) this.webSocketService.sendToUser(String(recipient), { event: 'fare.offer', bookingId: id, data: { amount: amt } });
       this.emitToClient(ws, { event: 'fare.offer.ack', bookingId: id, data: { ok: true } });
@@ -3146,8 +3172,12 @@ class RecoveryHandler {
           }
         });
         booking = await bookingDoc.save();
-        // Map working requestId -> real bookingId
+        // Map temporary requestId -> real bookingId
         req.bookingId = booking._id.toString();
+        try {
+          if (!this.requestIdToBookingId) this.requestIdToBookingId = new Map();
+          this.requestIdToBookingId.set(id, req.bookingId);
+        } catch {}
         this.emitToClient(ws, { event: 'booking.persisted', bookingId: req.bookingId, data: { bookingId: req.bookingId, requestId: id } });
       }
       booking.fareDetails = booking.fareDetails || {};
