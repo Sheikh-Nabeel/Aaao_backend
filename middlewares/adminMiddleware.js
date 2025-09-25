@@ -20,6 +20,23 @@ const adminHandler = asyncHandler(async (req, res, next) => {
     throw new Error("User not found");
   }
 
+  // Temporary test admin bypass (for local/testing only)
+  // Enable with env TEST_ADMIN_ENABLE=true and set TEST_ADMIN_EMAIL and/or TEST_ADMIN_SECRET
+  const TEST_ADMIN_ENABLE = String(process.env.TEST_ADMIN_ENABLE || "").toLowerCase() === "true";
+  const TEST_ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "";
+  const TEST_ADMIN_SECRET = process.env.TEST_ADMIN_SECRET || "";
+  const providedSecret = req.headers["x-test-admin-secret"] || req.headers["x-test-admin-token"];
+  if (
+    TEST_ADMIN_ENABLE &&
+    (
+      (TEST_ADMIN_EMAIL && String(user.email).toLowerCase() === String(TEST_ADMIN_EMAIL).toLowerCase()) ||
+      (TEST_ADMIN_SECRET && providedSecret && String(providedSecret) === String(TEST_ADMIN_SECRET))
+    )
+  ) {
+    console.log(`Test admin bypass granted for user: ${user.email}`);
+    return next();
+  }
+
   // Check if user has admin or superadmin role
   if (!["admin", "superadmin"].includes(user.role)) {
     console.log(

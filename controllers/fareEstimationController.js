@@ -24,10 +24,16 @@ const findQualifiedDriversForEstimation = async (pickupLocation, serviceType, ve
       driverStatus: 'online'
     };
 
-    // Handle Pink Captain preferences
+    // Handle Pink Captain preferences (only for car cab and bike)
     if (driverPreference === 'pink_captain') {
-      driverQuery.gender = 'female';
-      console.log('Pink Captain requested - filtering for female drivers');
+      const st = String(serviceType || '').toLowerCase();
+      const allowed = st === 'car cab' || st === 'bike';
+      if (allowed) {
+        driverQuery.gender = 'female';
+        console.log('Pink Captain requested - filtering for female drivers');
+      } else {
+        console.log('Pink Captain ignored: only applicable for car cab and bike');
+      }
     }
 
     console.log('Driver Query:', driverQuery);
@@ -123,7 +129,7 @@ const findQualifiedDriversForEstimation = async (pickupLocation, serviceType, ve
 
     // Filter Pink Captain drivers based on their preferences
     let filteredDrivers = driversWithDistance;
-    if (driverPreference === 'pink_captain') {
+    if (driverPreference === 'pink_captain' && (String(serviceType).toLowerCase() === 'car cab' || String(serviceType).toLowerCase() === 'bike')) {
       console.log('Filtering Pink Captain drivers based on preferences...');
       
       filteredDrivers = driversWithDistance.filter(driver => {
@@ -232,9 +238,16 @@ const calculateFareByServiceType = async (serviceType, vehicleType, distance, ro
       try {
         const cfg = await PricingConfig.findOne({ serviceType: 'car_recovery', isActive: true }).lean();
         const admin = cfg?.carRecoveryConfig;
+        const comp = await ComprehensivePricing.findOne({ isActive: true }).lean();
         if (admin?.serviceCharges) {
-          const subtype = mapToCalcType(additionalData?.serviceCategory || serviceType);
-          const sc = admin.serviceCharges[subtype] || admin.serviceCharges.default || {};
+          // Prefer explicit subService if provided, else map from serviceCategory
+          const preferredSub = String(additionalData?.subService || '').trim().toLowerCase();
+          const broad = mapToCalcType(additionalData?.serviceCategory || serviceType);
+          let sc = admin.serviceCharges[preferredSub] || admin.serviceCharges[broad] || admin.serviceCharges.default || {};
+          const cityRule = comp?.cityPricing?.rules?.find?.(r => Number(distanceInKm) >= Number(r?.minKm || 0));
+          if (cityRule?.perKm) {
+            sc = { ...sc, perKm: Number(cityRule.perKm) };
+          }
           const baseKm = Number(sc.baseKm ?? 6);
           const baseFare = Number(sc.baseFare ?? 50);
           const perKm = Number(sc.perKm ?? 7.5);
@@ -243,20 +256,49 @@ const calculateFareByServiceType = async (serviceType, vehicleType, distance, ro
           const d = Math.max(0, distanceInKm);
           const extraKm = Math.max(0, d - baseKm);
           const distanceFare = Math.round(extraKm * perKm);
-          const subtotal = Math.round(baseFare + distanceFare);
+          // Night charge and surge multipliers
+          const startTime = additionalData.startTime ? new Date(additionalData.startTime) : new Date();
+          const hour = startTime.getHours();
+          let nightCharge = 0;
+          let nightMultiplier = 1;
+          const nightCfg = comp?.nightCharges;
+          const inNight = hour >= 22 || hour < 6;
+          if (inNight && nightCfg) {
+            if (String(nightCfg.mode || '').toLowerCase() === 'multiplier') nightMultiplier = Number(nightCfg.value || 1.25);
+            else nightCharge = Number(nightCfg.value || 10);
+          }
+          // Surge
+          let surgeMultiplier = 1;
+          const surge = comp?.surgePricing;
+          if (surge?.mode && String(surge.mode).toLowerCase() !== 'none') {
+            surgeMultiplier = surge.mode === '1.5x' ? 1.5 : surge.mode === '2.0x' ? 2.0 : 1;
+          }
+          let subtotal = Math.round(baseFare + distanceFare);
+          subtotal = Math.round((subtotal + nightCharge) * nightMultiplier * surgeMultiplier);
           const platformFee = Math.round((subtotal * platformPct) / 100);
+          const platformCustomer = Math.round(platformFee / 2);
+          const platformDriver = platformFee - platformCustomer;
           const subtotalWithPlatform = subtotal + platformFee;
           const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
-          const totalFare = subtotalWithPlatform + vatAmount;
+          // Round-trip discount
+          const roundTrip = routeType === 'two_way' || routeType === 'round_trip';
+          const rtDiscount = roundTrip ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10) : 0;
+          const totalFare = Math.max(0, subtotalWithPlatform + vatAmount - rtDiscount);
           return {
             currency: 'AED',
             baseFare,
             distanceFare,
             platformFee,
+            platformFeeSplit: { customer: platformCustomer, driver: platformDriver },
+            nightCharge: nightCharge || undefined,
+            nightMultiplier: nightMultiplier !== 1 ? nightMultiplier : undefined,
+            surgeMultiplier: surgeMultiplier !== 1 ? surgeMultiplier : undefined,
+            cityOverridePerKm: cityRule?.perKm || undefined,
+            roundTripDiscount: rtDiscount || undefined,
             vatAmount,
             subtotal: subtotalWithPlatform,
             totalFare,
-            breakdown: { baseKm, perKm, distanceInKm: d },
+            breakdown: { baseKm, perKm, distanceInKm: d, usedSubService: preferredSub || broad },
           };
         }
       } catch (_) {}
@@ -405,10 +447,17 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         try {
           const cfg = await PricingConfig.findOne({ serviceType: 'car_recovery', isActive: true }).lean();
           const admin = cfg?.carRecoveryConfig;
+          const comp = await ComprehensivePricing.findOne({ isActive: true }).lean();
           if (admin?.serviceCharges) {
             usedAdmin = true;
-            const subtype = mapToCalcType(booking.serviceCategory);
-            const sc = admin.serviceCharges[subtype] || admin.serviceCharges.default || {};
+            // Prefer explicit subService if provided, else map from serviceCategory
+            const preferredSub = String(req.body?.subService || '').trim().toLowerCase();
+            const broad = mapToCalcType(booking.serviceCategory);
+            let sc = admin.serviceCharges[preferredSub] || admin.serviceCharges[broad] || admin.serviceCharges.default || {};
+            const cityRule = comp?.cityPricing?.rules?.find?.(r => Number(distanceKm) >= Number(r?.minKm || 0));
+            if (cityRule?.perKm) {
+              sc = { ...sc, perKm: Number(cityRule.perKm) };
+            }
             const baseKm = Number(sc.baseKm ?? 6);
             const baseFare = Number(sc.baseFare ?? 50);
             const perKm = Number(sc.perKm ?? 7.5);
@@ -417,21 +466,50 @@ const getFareEstimation = asyncHandler(async (req, res) => {
             const d = Math.max(0, distanceKm);
             const extraKm = Math.max(0, d - baseKm);
             const distanceFare = Math.round(extraKm * perKm);
-            const subtotal = Math.round(baseFare + distanceFare);
+            // Night charge and surge multipliers
+            const startTime = new Date();
+            const hour = startTime.getHours();
+            let nightCharge = 0;
+            let nightMultiplier = 1;
+            const nightCfg = comp?.nightCharges;
+            const inNight = hour >= 22 || hour < 6;
+            if (inNight && nightCfg) {
+              if (String(nightCfg.mode || '').toLowerCase() === 'multiplier') nightMultiplier = Number(nightCfg.value || 1.25);
+              else nightCharge = Number(nightCfg.value || 10);
+            }
+            // Surge
+            let surgeMultiplier = 1;
+            const surge = comp?.surgePricing;
+            if (surge?.mode && String(surge.mode).toLowerCase() !== 'none') {
+              surgeMultiplier = surge.mode === '1.5x' ? 1.5 : surge.mode === '2.0x' ? 2.0 : 1;
+            }
+            let subtotal = Math.round(baseFare + distanceFare);
+            subtotal = Math.round((subtotal + nightCharge) * nightMultiplier * surgeMultiplier);
             const platformFee = Math.round((subtotal * platformPct) / 100);
+            const platformCustomer = Math.round(platformFee / 2);
+            const platformDriver = platformFee - platformCustomer;
             const subtotalWithPlatform = subtotal + platformFee;
             const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
-            const totalFare = subtotalWithPlatform + vatAmount;
+            // Round-trip discount
+            const roundTrip = booking.routeType === 'two_way' || booking.routeType === 'round_trip';
+            const rtDiscount = roundTrip ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10) : 0;
+            const totalFare = Math.max(0, subtotalWithPlatform + vatAmount - rtDiscount);
             estimatedFare = totalFare;
             fareResult = {
               currency: 'AED',
               baseFare,
               distanceFare,
               platformFee,
+              platformFeeSplit: { customer: platformCustomer, driver: platformDriver },
+              nightCharge: nightCharge || undefined,
+              nightMultiplier: nightMultiplier !== 1 ? nightMultiplier : undefined,
+              surgeMultiplier: surgeMultiplier !== 1 ? surgeMultiplier : undefined,
+              cityOverridePerKm: cityRule?.perKm || undefined,
+              roundTripDiscount: rtDiscount || undefined,
               vatAmount,
               subtotal: subtotalWithPlatform,
               totalFare,
-              breakdown: { baseKm, perKm, distanceInKm: d }
+              breakdown: { baseKm, perKm, distanceInKm: d, usedSubService: preferredSub || broad },
             };
           }
         } catch (_) {}
@@ -598,10 +676,14 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       try {
         const cfg = await PricingConfig.findOne({ serviceType: 'car_recovery', isActive: true }).lean();
         const admin = cfg?.carRecoveryConfig;
+        const comp = await ComprehensivePricing.findOne({ isActive: true }).lean();
         if (admin?.serviceCharges) {
           usedAdmin = true;
-          const subtype = mapToCalcType(serviceCategory);
-          const sc = admin.serviceCharges[subtype] || admin.serviceCharges.default || {};
+          const preferredSub = String(req.body?.subService || '').trim().toLowerCase();
+          const broad = mapToCalcType(serviceCategory);
+          let sc = admin.serviceCharges[preferredSub] || admin.serviceCharges[broad] || admin.serviceCharges.default || {};
+          const cityRule = comp?.cityPricing?.rules?.find?.(r => Number(computedDistanceMeters / 1000) >= Number(r?.minKm || 0));
+          if (cityRule?.perKm) sc = { ...sc, perKm: Number(cityRule.perKm) };
           const baseKm = Number(sc.baseKm ?? 6);
           const baseFare = Number(sc.baseFare ?? 50);
           const perKm = Number(sc.perKm ?? 7.5);
@@ -610,21 +692,48 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           const d = Math.max(0, computedDistanceMeters / 1000);
           const extraKm = Math.max(0, d - baseKm);
           const distanceFare = Math.round(extraKm * perKm);
-          const subtotal = Math.round(baseFare + distanceFare);
+          // Night/surge
+          const startTime = req.body.startTime ? new Date(req.body.startTime) : new Date();
+          const hour = startTime.getHours();
+          let nightCharge = 0;
+          let nightMultiplier = 1;
+          const nightCfg = comp?.nightCharges;
+          const inNight = hour >= 22 || hour < 6;
+          if (inNight && nightCfg) {
+            if (String(nightCfg.mode || '').toLowerCase() === 'multiplier') nightMultiplier = Number(nightCfg.value || 1.25);
+            else nightCharge = Number(nightCfg.value || 10);
+          }
+          let surgeMultiplier = 1;
+          const surge = comp?.surgePricing;
+          if (surge?.mode && String(surge.mode).toLowerCase() !== 'none') {
+            surgeMultiplier = surge.mode === '1.5x' ? 1.5 : surge.mode === '2.0x' ? 2.0 : 1;
+          }
+          let subtotal = Math.round(baseFare + distanceFare);
+          subtotal = Math.round((subtotal + nightCharge) * nightMultiplier * surgeMultiplier);
           const platformFee = Math.round((subtotal * platformPct) / 100);
+          const platformCustomer = Math.round(platformFee / 2);
+          const platformDriver = platformFee - platformCustomer;
           const subtotalWithPlatform = subtotal + platformFee;
           const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
-          const totalFare = subtotalWithPlatform + vatAmount;
+          const roundTrip = routeType === 'two_way' || routeType === 'round_trip';
+          const rtDiscount = roundTrip ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10) : 0;
+          const totalFare = Math.max(0, subtotalWithPlatform + vatAmount - rtDiscount);
           estimatedFare = totalFare;
           fareResult = {
             currency: 'AED',
             baseFare,
             distanceFare,
             platformFee,
+            platformFeeSplit: { customer: platformCustomer, driver: platformDriver },
+            nightCharge: nightCharge || undefined,
+            nightMultiplier: nightMultiplier !== 1 ? nightMultiplier : undefined,
+            surgeMultiplier: surgeMultiplier !== 1 ? surgeMultiplier : undefined,
+            cityOverridePerKm: cityRule?.perKm || undefined,
+            roundTripDiscount: rtDiscount || undefined,
             vatAmount,
             subtotal: subtotalWithPlatform,
             totalFare,
-            breakdown: { baseKm, perKm, distanceInKm: d }
+            breakdown: { baseKm, perKm, distanceInKm: d, usedSubService: preferredSub || broad }
           };
         }
       } catch (_) {}
@@ -746,7 +855,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       token: req.cookies.token
     });
   }
-});
+})
 
 // Adjust fare estimation
 const adjustFareEstimation = asyncHandler(async (req, res) => {
