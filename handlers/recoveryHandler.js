@@ -299,13 +299,15 @@ class RecoveryHandler {
         );
       }
 
-      // Create a Booking immediately and use its _id as the single ID for both WS and REST
+      // Do NOT create DB booking yet; generate a working requestId for WS lifecycle
       const creatorId =
         ws?.user?.id ||
         ws?.user?._id?.toString?.() ||
         data.customerId ||
         data.userId ||
         null;
+
+      const workingId = uuidv4();
 
       // Normalize incoming coordinates
       const pLat =
@@ -441,27 +443,8 @@ class RecoveryHandler {
         );
       }
 
-      const bookingDoc = new Booking({
-        user: creatorId,
-        serviceType: bookingServiceType,
-        serviceCategory: bookingServiceCategory,
-        pickupLocation: pickupGeo,
-        dropoffLocation: dropoffGeo,
-        distance: distanceKm,
-        distanceInMeters,
-        fare: estimatedFare,
-        offeredFare: estimatedFare,
-        vehicleDetails: data.vehicleDetails || {},
-        status: "pending",
-        createdAt: new Date(),
-        fareDetails: {
-          estimatedDistance: distanceKm,
-          estimatedFare: estimatedFare,
-          currency: "AED",
-        },
-      });
-      await bookingDoc.save();
-      const rid = bookingDoc._id.toString();
+      // Use workingId as the temporary identifier for this request until persisted
+      const rid = workingId;
 
       // Create new recovery request
       const recoveryRequest = {
@@ -472,7 +455,7 @@ class RecoveryHandler {
         // Ensure we persist who created this request for authorization
         userId: creatorId,
         // Initialize additional fields
-        driverId: bookingDoc.driver || null,
+        driverId: null,
         driverLocation: null,
         statusHistory: [
           {
@@ -481,7 +464,7 @@ class RecoveryHandler {
             message: "Recovery request created",
           },
         ],
-        bookingId: rid,
+        bookingId: null, // will be set once persisted in DB after accept
         searchRadiusKm: selectedRadiusKm,
         // Capture pink captain and safety preferences if provided at creation
         discoveryFilters: {
@@ -507,6 +490,19 @@ class RecoveryHandler {
               null,
           },
         },
+        // Store initial fare context in memory for later persistence
+        fareContext: {
+          estimatedDistance: distanceKm,
+          estimatedFare: estimatedFare,
+          currency: "AED",
+        },
+        pickupLocation: pickupGeo,
+        dropoffLocation: dropoffGeo,
+        distance: distanceKm,
+        distanceInMeters,
+        serviceType: bookingServiceType,
+        serviceCategory: bookingServiceCategory,
+        vehicleDetails: data.vehicleDetails || {},
       };
 
       // Store the recovery request
@@ -553,7 +549,7 @@ class RecoveryHandler {
             bookingId: rid,
             pickupLocation: recoveryRequest.pickupLocation,
             estimatedFare:
-              bookingDoc.fareDetails?.estimatedFare || bookingDoc.fare || 0,
+              recoveryRequest.fareContext?.estimatedFare || 0,
           },
         });
       }
@@ -678,20 +674,18 @@ class RecoveryHandler {
       }
 
       // Guard: booking can only be accepted once
-      const bid = data?.bookingId || id;
-      const booking = await Booking.findById(bid).select(
+      const existingBid = recoveryRequest.bookingId || data?.bookingId || id;
+      const existingBooking = await Booking.findById(existingBid).select(
         "fareDetails user driver status"
       );
-      if (!booking) {
-        throw new Error("Booking not found");
-      }
       if (
+        existingBooking &&
         ["accepted", "in_progress", "completed", "cancelled"].includes(
-          booking.status
+          existingBooking.status
         )
       ) {
         throw new Error(
-          `Booking already ${booking.status}, cannot accept again`
+          `Booking already ${existingBooking.status}, cannot accept again`
         );
       }
 
@@ -715,10 +709,10 @@ class RecoveryHandler {
       }
 
       // Enforce: negotiation must be accepted before allowing driver to accept
-      const negotiationState = booking.fareDetails?.negotiation?.state;
+      const negotiationState = existingBooking?.fareDetails?.negotiation?.state;
       const hasFinalFare =
-        typeof booking.fareDetails?.finalFare === "number" &&
-        booking.fareDetails.finalFare > 0;
+        typeof existingBooking?.fareDetails?.finalFare === "number" &&
+        existingBooking.fareDetails.finalFare > 0;
       if (negotiationState !== "accepted" && !hasFinalFare) {
         throw new Error(
           "Price must be accepted before driver can accept the job"
@@ -736,6 +730,50 @@ class RecoveryHandler {
         message: "Driver accepted the recovery request",
       });
 
+      // Ensure Booking exists now (persist on accept if not already created)
+      let booking = existingBooking || null;
+      if (!booking) {
+        // Create booking now from in-memory request
+        const finalFareFromNegotiation =
+          Number(
+            recoveryRequest?.fareContext?.negotiation?.finalFare ||
+              recoveryRequest?.fareContext?.negotiation?.selectedFare ||
+              recoveryRequest?.fareContext?.estimatedFare ||
+              0
+          ) || 0;
+        const bookingDoc = new Booking({
+          user: recoveryRequest.userId,
+          serviceType: recoveryRequest.serviceType,
+          serviceCategory: recoveryRequest.serviceCategory,
+          pickupLocation: recoveryRequest.pickupLocation,
+          dropoffLocation: recoveryRequest.dropoffLocation,
+          distance: recoveryRequest.distance,
+          distanceInMeters: recoveryRequest.distanceInMeters,
+          fare: finalFareFromNegotiation || recoveryRequest.fareContext?.estimatedFare || 0,
+          offeredFare: finalFareFromNegotiation || recoveryRequest.fareContext?.estimatedFare || 0,
+          vehicleDetails: recoveryRequest.vehicleDetails || {},
+          status: "pending",
+          createdAt: new Date(),
+          fareDetails: {
+            estimatedDistance: recoveryRequest.fareContext?.estimatedDistance,
+            estimatedFare: recoveryRequest.fareContext?.estimatedFare,
+            currency: recoveryRequest.fareContext?.currency || "AED",
+            negotiation: recoveryRequest.fareContext?.negotiation || undefined,
+          },
+        });
+        booking = await bookingDoc.save();
+        recoveryRequest.bookingId = booking._id.toString();
+        // Inform both parties that booking is now persisted
+        try {
+          this.emitToClient(ws, { event: "booking.persisted", bookingId: recoveryRequest.bookingId, data: { bookingId: recoveryRequest.bookingId, requestId: id } });
+          if (recoveryRequest.userId) {
+            this.webSocketService.sendToUser(String(recoveryRequest.userId), { event: "booking.persisted", bookingId: recoveryRequest.bookingId, data: { bookingId: recoveryRequest.bookingId, requestId: id } });
+          }
+          if (recoveryRequest.driverId) {
+            this.webSocketService.sendToUser(String(recoveryRequest.driverId), { event: "booking.persisted", bookingId: recoveryRequest.bookingId, data: { bookingId: recoveryRequest.bookingId, requestId: id } });
+          }
+        } catch {}
+      }
       // Persist booking acceptance (single-accept rule)
       booking.driver = data.driverId;
       booking.status = "accepted";
@@ -1253,10 +1291,6 @@ class RecoveryHandler {
     const id = bookingId || requestId;
 
     try {
-      if (!id || !data) {
-        throw new Error("Missing required field: requestId");
-      }
-
       let recoveryRequest = this.activeRecoveries.get(id);
       // DB fallback: if in-memory request is missing (e.g., restart or different instance), reconstruct minimal state from Booking
       if (!recoveryRequest) {
@@ -1818,7 +1852,10 @@ class RecoveryHandler {
           companyCommission = Number(breakdown.platformFee || 0);
           if (!companyCommission) {
             const pct = Number(process.env.PLATFORM_PCT || 15);
-            const beforeVat = Math.max(0, totalWithVat - vatAmount);
+            const beforeVat = Math.max(
+              0,
+              totalWithVat - vatAmount
+            );
             companyCommission = Math.round((beforeVat * pct) / 100);
           }
           commissionCollected = paymentMethod === "card";
@@ -3047,13 +3084,53 @@ class RecoveryHandler {
     const id = message?.bookingId || message?.requestId;
 
     try {
-      const booking = await Booking.findById(id).select('fareDetails user driver'); if (!booking) throw new Error('Booking not found');
-      const prev = booking.fareDetails?.negotiation || {}; const sel = Number(prev.selectedFare || 0);
-      booking.fareDetails = booking.fareDetails || {}; booking.fareDetails.negotiation = { ...prev, enabled: true, state: 'accepted', finalFare: sel > 0 ? sel : prev.finalFare, history: [ ...(prev.history || []), { type: 'accept', at: new Date() } ] };
-      await booking.save(); try { if (booking.driver) this.negotiationLocks.delete(String(booking.driver)); } catch {}
+      // If booking doesn't exist yet, create it now from in-memory request and negotiation context
+      let booking = await Booking.findById(id).select('fareDetails user driver status');
+      if (!booking) {
+        const req = this.activeRecoveries.get(id);
+        if (!req) throw new Error('Booking not found');
+        const selFare = Number(req?.fareContext?.negotiation?.selectedFare || req?.fareContext?.estimatedFare || 0);
+        const bookingDoc = new Booking({
+          user: req.userId,
+          serviceType: req.serviceType,
+          serviceCategory: req.serviceCategory,
+          pickupLocation: req.pickupLocation,
+          dropoffLocation: req.dropoffLocation,
+          distance: req.distance,
+          distanceInMeters: req.distanceInMeters,
+          fare: selFare,
+          offeredFare: selFare,
+          vehicleDetails: req.vehicleDetails || {},
+          status: 'pending',
+          createdAt: new Date(),
+          fareDetails: {
+            estimatedDistance: req.fareContext?.estimatedDistance,
+            estimatedFare: req.fareContext?.estimatedFare,
+            currency: req.fareContext?.currency || 'AED',
+            negotiation: { ...(req.fareContext?.negotiation || {}), selectedFare: selFare }
+          }
+        });
+        booking = await bookingDoc.save();
+        // Map working requestId -> real bookingId
+        req.bookingId = booking._id.toString();
+        this.emitToClient(ws, { event: 'booking.persisted', bookingId: req.bookingId, data: { bookingId: req.bookingId, requestId: id } });
+      }
+      booking.fareDetails = booking.fareDetails || {};
+      const sel = Number(booking.fareDetails?.negotiation?.selectedFare || booking.fareDetails?.estimatedFare || 0);
+      booking.fareDetails.negotiation = {
+        ...(booking.fareDetails.negotiation || {}),
+        enabled: true,
+        state: 'accepted',
+        finalFare: sel > 0 ? sel : booking.fareDetails.finalFare,
+        history: [ ...(booking.fareDetails.negotiation?.history || []), { type: 'accept', at: new Date() } ],
+      };
+      await booking.save();
+      // Release lock if held
+      try { if (booking.driver) this.negotiationLocks.delete(String(booking.driver)); } catch {}
+      // Notify both parties
       if (booking.user) this.webSocketService.sendToUser(String(booking.user), { event: 'fare.accepted', bookingId: id, data: { finalFare: booking.fareDetails.negotiation.finalFare } });
       if (booking.driver) this.webSocketService.sendToUser(String(booking.driver), { event: 'fare.accepted', bookingId: id, data: { finalFare: booking.fareDetails.negotiation.finalFare } });
-      this.emitToClient(ws, { event: 'fare.accept.ack', bookingId: id });
+      this.emitToClient(ws, { event: 'fare.accept.ack', bookingId: id, data: { ok: true } });
     } catch (e) { this.emitToClient(ws, { event: 'error', bookingId: id, error: { code: 'FARE_ACCEPT_ERROR', message: e.message } }); }
   }
 
