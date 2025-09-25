@@ -3054,13 +3054,31 @@ class RecoveryHandler {
     const { bookingId, requestId, data } = message || {}; const id = bookingId || requestId;
 
     try {
-      const booking = await Booking.findById(id).select('fareDetails user driver'); if (!booking) throw new Error('Booking not found');
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString(); const isDriver = actorId && booking.driver && actorId === String(booking.driver);
-      if (isDriver) { const lock = this.negotiationLocks.get(actorId); if (lock && lock !== id.toString()) throw new Error('Driver already negotiating another request'); this.negotiationLocks.set(actorId, id.toString()); }
+      const booking = await Booking.findById(id).select('fareDetails user driver');
+      const actorId = (ws?.user?.id || ws?.user?._id)?.toString();
       const amt = Number(data?.amount || 0);
-      booking.fareDetails = booking.fareDetails || {}; const prev = booking.fareDetails.negotiation || {};
-      booking.fareDetails.negotiation = { ...prev, enabled: true, state: 'proposed', selectedFare: amt, history: [ ...(prev.history || []), { by: isDriver ? 'driver' : 'customer', type: 'offer', amount: amt, at: new Date() } ] };
-      await booking.save(); const recipient = isDriver ? booking.user : booking.driver; if (recipient) this.webSocketService.sendToUser(String(recipient), { event: 'fare.offer', bookingId: id, data: { amount: amt } });
+
+      if (booking) {
+        const isDriver = actorId && booking.driver && actorId === String(booking.driver);
+        if (isDriver) { const lock = this.negotiationLocks.get(actorId); if (lock && lock !== id.toString()) throw new Error('Driver already negotiating another request'); this.negotiationLocks.set(actorId, id.toString()); }
+        booking.fareDetails = booking.fareDetails || {}; const prev = booking.fareDetails.negotiation || {};
+        booking.fareDetails.negotiation = { ...prev, enabled: true, state: 'proposed', selectedFare: amt, history: [ ...(prev.history || []), { by: isDriver ? 'driver' : 'customer', type: 'offer', amount: amt, at: new Date() } ] };
+        await booking.save(); const recipient = isDriver ? booking.user : booking.driver; if (recipient) this.webSocketService.sendToUser(String(recipient), { event: 'fare.offer', bookingId: id, data: { amount: amt } });
+        this.emitToClient(ws, { event: 'fare.offer.ack', bookingId: id, data: { ok: true } });
+        return;
+      }
+
+      // In-memory negotiation on requestId (not yet persisted)
+      const req = this.activeRecoveries.get(id);
+      if (!req) throw new Error('Request not found');
+      const isDriver = actorId && req.driverId && actorId === String(req.driverId);
+      if (isDriver) { const lock = this.negotiationLocks.get(actorId); if (lock && lock !== id.toString()) throw new Error('Driver already negotiating another request'); this.negotiationLocks.set(actorId, id.toString()); }
+      const prev = req.fareContext?.negotiation || {};
+      req.fareContext = req.fareContext || {};
+      req.fareContext.negotiation = { ...prev, enabled: true, state: 'proposed', selectedFare: amt, history: [ ...(prev.history || []), { by: isDriver ? 'driver' : 'customer', type: 'offer', amount: amt, at: new Date() } ] };
+      // Notify counterparty if known
+      const recipient = isDriver ? req.userId : req.driverId;
+      if (recipient) this.webSocketService.sendToUser(String(recipient), { event: 'fare.offer', bookingId: id, data: { amount: amt } });
       this.emitToClient(ws, { event: 'fare.offer.ack', bookingId: id, data: { ok: true } });
     } catch (e) { this.emitToClient(ws, { event: 'error', bookingId: id, error: { code: 'FARE_OFFER_ERROR', message: e.message } }); }
   }
@@ -3069,13 +3087,30 @@ class RecoveryHandler {
     const { bookingId, requestId, data } = message || {}; const id = bookingId || requestId;
 
     try {
-      const booking = await Booking.findById(id).select('fareDetails user driver'); if (!booking) throw new Error('Booking not found');
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString(); const isDriver = actorId && booking.driver && actorId === String(booking.driver);
-      if (isDriver) { const lock = this.negotiationLocks.get(actorId); if (lock && lock !== id.toString()) throw new Error('Driver already negotiating another request'); this.negotiationLocks.set(actorId, id.toString()); }
+      const booking = await Booking.findById(id).select('fareDetails user driver');
+      const actorId = (ws?.user?.id || ws?.user?._id)?.toString();
       const amt = Number(data?.amount || 0);
-      booking.fareDetails = booking.fareDetails || {}; const prev = booking.fareDetails.negotiation || {};
-      booking.fareDetails.negotiation = { ...prev, enabled: true, state: 'countered', selectedFare: amt, history: [ ...(prev.history || []), { by: isDriver ? 'driver' : 'customer', type: 'counter', amount: amt, at: new Date() } ] };
-      await booking.save(); const recipient = isDriver ? booking.user : booking.driver; if (recipient) this.webSocketService.sendToUser(String(recipient), { event: 'fare.counter', bookingId: id, data: { amount: amt } });
+
+      if (booking) {
+        const isDriver = actorId && booking.driver && actorId === String(booking.driver);
+        if (isDriver) { const lock = this.negotiationLocks.get(actorId); if (lock && lock !== id.toString()) throw new Error('Driver already negotiating another request'); this.negotiationLocks.set(actorId, id.toString()); }
+        booking.fareDetails = booking.fareDetails || {}; const prev = booking.fareDetails.negotiation || {};
+        booking.fareDetails.negotiation = { ...prev, enabled: true, state: 'countered', selectedFare: amt, history: [ ...(prev.history || []), { by: isDriver ? 'driver' : 'customer', type: 'counter', amount: amt, at: new Date() } ] };
+        await booking.save(); const recipient = isDriver ? booking.user : booking.driver; if (recipient) this.webSocketService.sendToUser(String(recipient), { event: 'fare.counter', bookingId: id, data: { amount: amt } });
+        this.emitToClient(ws, { event: 'fare.counter.ack', bookingId: id, data: { ok: true } });
+        return;
+      }
+
+      // In-memory negotiation on requestId
+      const req = this.activeRecoveries.get(id);
+      if (!req) throw new Error('Request not found');
+      const isDriver = actorId && req.driverId && actorId === String(req.driverId);
+      if (isDriver) { const lock = this.negotiationLocks.get(actorId); if (lock && lock !== id.toString()) throw new Error('Driver already negotiating another request'); this.negotiationLocks.set(actorId, id.toString()); }
+      const prev = req.fareContext?.negotiation || {};
+      req.fareContext = req.fareContext || {};
+      req.fareContext.negotiation = { ...prev, enabled: true, state: 'countered', selectedFare: amt, history: [ ...(prev.history || []), { by: isDriver ? 'driver' : 'customer', type: 'counter', amount: amt, at: new Date() } ] };
+      const recipient = isDriver ? req.userId : req.driverId;
+      if (recipient) this.webSocketService.sendToUser(String(recipient), { event: 'fare.counter', bookingId: id, data: { amount: amt } });
       this.emitToClient(ws, { event: 'fare.counter.ack', bookingId: id, data: { ok: true } });
     } catch (e) { this.emitToClient(ws, { event: 'error', bookingId: id, error: { code: 'FARE_COUNTER_ERROR', message: e.message } }); }
   }
@@ -3138,12 +3173,27 @@ class RecoveryHandler {
     const id = message?.bookingId || message?.requestId;
 
     try {
-      const booking = await Booking.findById(id).select('fareDetails user driver'); if (!booking) throw new Error('Booking not found');
-      const prev = booking.fareDetails?.negotiation || {};
-      booking.fareDetails = booking.fareDetails || {}; booking.fareDetails.negotiation = { ...prev, enabled: true, state: 'rejected', history: [ ...(prev.history || []), { type: 'reject', at: new Date() } ] };
-      await booking.save(); try { if (booking.driver) this.negotiationLocks.delete(String(booking.driver)); } catch {}
-      if (booking.user) this.webSocketService.sendToUser(String(booking.user), { event: 'fare.rejected', bookingId: id });
-      if (booking.driver) this.webSocketService.sendToUser(String(booking.driver), { event: 'fare.rejected', bookingId: id });
+      const booking = await Booking.findById(id).select('fareDetails user driver');
+      if (booking) {
+        const prev = booking.fareDetails?.negotiation || {};
+        booking.fareDetails = booking.fareDetails || {};
+        booking.fareDetails.negotiation = { ...prev, enabled: true, state: 'rejected', history: [ ...(prev.history || []), { type: 'reject', at: new Date() } ] };
+        await booking.save(); try { if (booking.driver) this.negotiationLocks.delete(String(booking.driver)); } catch {}
+        if (booking.user) this.webSocketService.sendToUser(String(booking.user), { event: 'fare.rejected', bookingId: id });
+        if (booking.driver) this.webSocketService.sendToUser(String(booking.driver), { event: 'fare.rejected', bookingId: id });
+        this.emitToClient(ws, { event: 'fare.reject.ack', bookingId: id });
+        return;
+      }
+
+      // In-memory reject on requestId
+      const req = this.activeRecoveries.get(id);
+      if (!req) throw new Error('Request not found');
+      const prev = req.fareContext?.negotiation || {};
+      req.fareContext = req.fareContext || {};
+      req.fareContext.negotiation = { ...prev, enabled: true, state: 'rejected', history: [ ...(prev.history || []), { type: 'reject', at: new Date() } ] };
+      try { if (req.driverId) this.negotiationLocks.delete(String(req.driverId)); } catch {}
+      if (req.userId) this.webSocketService.sendToUser(String(req.userId), { event: 'fare.rejected', bookingId: id });
+      if (req.driverId) this.webSocketService.sendToUser(String(req.driverId), { event: 'fare.rejected', bookingId: id });
       this.emitToClient(ws, { event: 'fare.reject.ack', bookingId: id });
     } catch (e) { this.emitToClient(ws, { event: 'error', bookingId: id, error: { code: 'FARE_REJECT_ERROR', message: e.message } }); }
   }
