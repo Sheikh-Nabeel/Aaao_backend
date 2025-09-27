@@ -27,7 +27,7 @@ import {
   updateAutoAcceptSettings,
   updateRidePreferences,
   sendBookingRequestToQualifiedDrivers,
-  // New negotiation controllers
+  // Unified negotiation controllers
   proposeFare,
   acceptFare,
   rejectFare,
@@ -60,10 +60,10 @@ router.get("/:bookingId/messages", authHandler, getRideMessages);
 router.post("/:bookingId/rating", authHandler, submitRating);
 router.get("/:bookingId/receipt", authHandler, getRideReceipt);
 
-// Fare negotiation (REST)
-router.post("/:bookingId/price/propose", authHandler, proposeFare);
-router.post("/:bookingId/price/accept", authHandler, acceptFare);
-router.post("/:bookingId/price/reject", authHandler, rejectFare);
+// Unified fare negotiation (single shape; id comes from body: { id | bookingId | requestId })
+router.post("/price/propose", authHandler, proposeFare);
+router.post("/price/accept", authHandler, acceptFare);
+router.post("/price/reject", authHandler, rejectFare);
 
 // New REST API endpoints for real-time operations
 router.post("/:bookingId/reject", authHandler, rejectBooking);

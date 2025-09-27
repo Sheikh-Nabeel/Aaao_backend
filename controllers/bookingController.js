@@ -1986,7 +1986,6 @@ const startRide = asyncHandler(async (req, res) => {
 
     if (booking.status !== "accepted") {
       return res.status(400).json({
-        success: false,
         message: "Booking must be accepted before starting ride",
       });
     }
@@ -2057,7 +2056,6 @@ const completeRide = asyncHandler(async (req, res) => {
 
     if (!["started", "in_progress"].includes(booking.status)) {
       return res.status(400).json({
-        success: false,
         message: "Ride must be started or in progress to complete",
       });
     }
@@ -3238,71 +3236,58 @@ export const fraudCheckBooking = asyncHandler(async (req, res) => {
   });
 });
 
-export {
-  createBooking,
-  getNearbyDrivers,
-  acceptBooking,
-  updateBookingStatus,
-  getUserBookings,
-  cancelBooking,
-  raiseFare,
-  lowerFare,
-  respondToDriverFareOffer,
-  getBookingDetails,
-  updateBookingFare,
-  getBookingFareHistory,
-  startRide,
-  completeRide,
-  getRideMessages,
-  submitRating,
-  getRideReceipt,
-  // New REST API exports
-  rejectBooking,
-  modifyBookingFare,
-  sendMessage,
-  updateDriverLocation,
-  updateUserLocation,
-  updateDriverStatus,
-  updateAutoAcceptSettings,
-  updateRidePreferences,
-  sendBookingRequestToQualifiedDrivers,
-};
-
-// === Fare Negotiation (REST) ===
-export const proposeFare = asyncHandler(async (req, res) => {
-  const { bookingId } = req.params;
+// === Fare Negotiation (REST for persisted bookings; uses Mongo ObjectId) ===
+const proposeFare = asyncHandler(async (req, res) => {
+  const bookingId =
+    req.body?.id || req.body?.bookingId || req.params?.bookingId;
   const { proposedAmount } = req.body || {};
   const userId = req.user._id;
 
-  if (typeof proposedAmount !== "number") {
+  if (typeof proposedAmount !== "number" && typeof proposedAmount !== "string") {
     return res
       .status(400)
       .json({ success: false, message: "proposedAmount is required" });
   }
 
+  const isObjectId =
+    typeof bookingId === "string" && /^[a-f\d]{24}$/i.test(bookingId);
+  if (!isObjectId) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid id. Provide the MongoDB booking _id.",
+    });
+  }
   const booking = await Booking.findById(bookingId);
   if (!booking)
     return res
       .status(404)
       .json({ success: false, message: "Booking not found" });
 
-  // Only booking user or assigned driver can negotiate
-  const isParty = [
-    booking.user?.toString(),
-    booking.driver?.toString(),
-  ].includes(userId.toString());
-  if (!isParty)
+  // Authorization: allow
+  // - booking user
+  // - assigned driver
+  // - any driver when booking has no assigned driver yet (status pending)
+  const isCustomer = booking.user?.toString() === userId.toString();
+  const isAssignedDriver = booking.driver?.toString() === userId.toString();
+  const roleStr = String(
+    req.user?.role || req.user?.accountType || req.user?.userType || ""
+  ).toLowerCase();
+  const userIsDriver = roleStr.includes("driver") || roleStr.includes("captain") || !!req.user?.isDriver;
+  const allowUnassignedDriver = !booking.driver && userIsDriver;
+  if (!(isCustomer || isAssignedDriver || allowUnassignedDriver)) {
     return res.status(403).json({
       success: false,
       message: "Not authorized to negotiate on this booking",
     });
+  }
 
   const minPercent = Number(process.env.NEGOTIATE_MIN_PERCENT || 0);
   const maxPercent = Number(process.env.NEGOTIATE_MAX_PERCENT || 20);
   const base = booking.fareDetails?.estimatedFare || booking.fare || 0;
   const min = Math.max(0, Math.round(base * (1 - minPercent / 100)));
   const max = Math.round(base * (1 + maxPercent / 100));
-  if (proposedAmount < min || proposedAmount > max) {
+  const amount = Number(proposedAmount);
+  if (amount < min || amount > max) {
     return res.status(400).json({
       success: false,
       message: `Proposed amount out of bounds (${min} - ${max})`,
@@ -3312,10 +3297,15 @@ export const proposeFare = asyncHandler(async (req, res) => {
   booking.fareDetails = booking.fareDetails || {};
   booking.fareDetails.negotiation = {
     state: "proposed",
-    proposedAmount,
+    proposedAmount: amount,
     by: userId,
     at: new Date(),
     bounds: { min, max },
+    proposerRole: (String(
+      req.user?.role || req.user?.accountType || req.user?.userType || ""
+    ).toLowerCase().includes("driver") || req.user?.isDriver)
+      ? "driver"
+      : "customer",
   };
   await booking.save();
 
@@ -3329,7 +3319,7 @@ export const proposeFare = asyncHandler(async (req, res) => {
       webSocketService.sendToUser(String(recipient), {
         event: "price.proposed",
         requestId: bookingId,
-        data: { bookingId, proposedAmount, by: proposerId, at: new Date() },
+        data: { bookingId, proposedAmount: amount, by: proposerId, at: new Date() },
       });
     }
   } catch (e) {}
@@ -3337,40 +3327,76 @@ export const proposeFare = asyncHandler(async (req, res) => {
   return res.json({
     success: true,
     message: "Fare proposed",
-    data: { bookingId, proposedAmount, bounds: { min, max } },
+    data: { bookingId, proposedAmount: amount, bounds: { min, max } },
   });
 });
 
-export const acceptFare = asyncHandler(async (req, res) => {
-  const { bookingId } = req.params;
+const acceptFare = asyncHandler(async (req, res) => {
+  const bookingId =
+    req.body?.id || req.body?.bookingId || req.params?.bookingId;
   const userId = req.user._id;
 
+  const isObjectId =
+    typeof bookingId === "string" && /^[a-f\d]{24}$/i.test(bookingId);
+  if (!isObjectId) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid id. Provide the MongoDB booking _id.",
+    });
+  }
   const booking = await Booking.findById(bookingId);
   if (!booking)
     return res
       .status(404)
       .json({ success: false, message: "Booking not found" });
 
-  // Only booking user or assigned driver can accept
-  const isParty = [
-    booking.user?.toString(),
-    booking.driver?.toString(),
-  ].includes(userId.toString());
-  if (!isParty)
+  // Authorization: allow
+  // - booking user
+  // - assigned driver
+  // - any driver when booking has no assigned driver yet (status pending)
+  const isCustomer = booking.user?.toString() === userId.toString();
+  const isAssignedDriver = booking.driver?.toString() === userId.toString();
+  const roleStr = String(
+    req.user?.role || req.user?.accountType || req.user?.userType || ""
+  ).toLowerCase();
+  const userIsDriver = roleStr.includes("driver") || roleStr.includes("captain") || !!req.user?.isDriver;
+  const allowUnassignedDriver = !booking.driver && userIsDriver;
+  if (!(isCustomer || isAssignedDriver || allowUnassignedDriver)) {
     return res.status(403).json({
       success: false,
       message: "Not authorized to accept negotiation",
     });
-
-  if (!booking.fareDetails?.negotiation) {
-    return res
-      .status(400)
-      .json({ success: false, message: "No pending negotiation" });
   }
 
-  booking.fareDetails.finalFare =
-    booking.fareDetails.negotiation.proposedAmount;
+  // If no pending negotiation, allow accepting a numeric amount provided in body
+  if (!booking.fareDetails?.negotiation) {
+    const bodyAmount = req.body?.amount ?? req.body?.proposedAmount;
+    const parsed = Number(bodyAmount);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No pending negotiation. Provide amount in body to accept (amount/proposedAmount)",
+      });
+    }
+    booking.fareDetails = booking.fareDetails || {};
+    booking.fareDetails.negotiation = {
+      state: "accepted",
+      proposedAmount: parsed,
+      by: userId,
+      at: new Date(),
+    };
+  }
+
+  booking.fareDetails.finalFare = booking.fareDetails.negotiation.proposedAmount;
   booking.fareDetails.negotiation.state = "accepted";
+  // Keep top-level fare in sync
+  booking.fare = booking.fareDetails.finalFare;
+  let rideJustStarted = false;
+  if (booking.driver && booking.status !== "in_progress") {
+    booking.status = "in_progress";
+    booking.serviceStartedAt = new Date();
+    rideJustStarted = true;
+  }
   await booking.save();
 
   // WS notify both parties
@@ -3389,6 +3415,22 @@ export const acceptFare = asyncHandler(async (req, res) => {
     };
     if (customerId) webSocketService.sendToUser(String(customerId), payload);
     if (driverId) webSocketService.sendToUser(String(driverId), payload);
+
+    // If ride started, notify both parties explicitly
+    if (rideJustStarted) {
+      const startPayload = {
+        event: "service.started",
+        requestId: bookingId,
+        data: {
+          bookingId,
+          startedAt: booking.serviceStartedAt,
+          status: booking.status,
+          amount: booking.fare,
+        },
+      };
+      if (customerId) webSocketService.sendToUser(String(customerId), startPayload);
+      if (driverId) webSocketService.sendToUser(String(driverId), startPayload);
+    }
   } catch (e) {}
 
   return res.json({
@@ -3398,10 +3440,19 @@ export const acceptFare = asyncHandler(async (req, res) => {
   });
 });
 
-export const rejectFare = asyncHandler(async (req, res) => {
-  const { bookingId } = req.params;
+const rejectFare = asyncHandler(async (req, res) => {
+  const bookingId =
+    req.body?.id || req.body?.bookingId || req.params?.bookingId;
   const userId = req.user._id;
 
+  const isObjectId =
+    typeof bookingId === "string" && /^[a-f\d]{24}$/i.test(bookingId);
+  if (!isObjectId) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid id. Provide the MongoDB booking _id.",
+    });
+  }
   const booking = await Booking.findById(bookingId);
   if (!booking)
     return res
@@ -3447,3 +3498,36 @@ export const rejectFare = asyncHandler(async (req, res) => {
     data: { bookingId },
   });
 });
+
+export {
+  createBooking,
+  getNearbyDrivers,
+  acceptBooking,
+  updateBookingStatus,
+  getUserBookings,
+  cancelBooking,
+  raiseFare,
+  lowerFare,
+  respondToDriverFareOffer,
+  getBookingDetails,
+  updateBookingFare,
+  getBookingFareHistory,
+  startRide,
+  completeRide,
+  getRideMessages,
+  submitRating,
+  getRideReceipt,
+  // New REST API exports
+  rejectBooking,
+  modifyBookingFare,
+  sendMessage,
+  updateDriverLocation,
+  updateUserLocation,
+  updateDriverStatus,
+  updateAutoAcceptSettings,
+  updateRidePreferences,
+  sendBookingRequestToQualifiedDrivers,
+  proposeFare,
+  acceptFare,
+  rejectFare,
+};
