@@ -99,6 +99,58 @@ const carRecoveryPricingSchema = new mongoose.Schema({
       roadside_assistance: { baseKm: 6, baseFare: 50, perKm: 7.5 },
       key_unlock: { baseKm: 6, baseFare: 50, perKm: 7.5 },
       specialized_recovery: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      // Granular sub-services for backward compatibility (flat keys)
+      flatbed_towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      wheel_lift_towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      on_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      off_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      battery_jump_start: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      fuel_delivery: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      luxury_exotic: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      accident_collision: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      heavy_duty: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      basement_pull_out: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+    },
+  },
+  // New structured map for easy admin editing per category and sub-service
+  serviceChargesByCategory: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {
+      towing: {
+        default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        subServices: {
+          flatbed_towing: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          wheel_lift_towing: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        },
+      },
+      winching: {
+        default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 5 },
+        subServices: {
+          on_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 5 },
+          off_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 5 },
+        },
+      },
+      roadside_assistance: {
+        default: { baseKm: 0, baseFare: 45, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+        subServices: {
+          battery_jump_start: { baseKm: 0, baseFare: 50, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+          fuel_delivery: { baseKm: 0, baseFare: 45, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+          key_unlock: { baseKm: 0, baseFare: 80, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+        },
+      },
+      specialized_recovery: {
+        default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        subServices: {
+          luxury_exotic: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          accident_collision: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          heavy_duty: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          basement_pull_out: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        },
+      },
+      default: {
+        default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        subServices: {},
+      },
     },
   },
   platformCharges: {

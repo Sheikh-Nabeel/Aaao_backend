@@ -213,6 +213,45 @@ const getFareAdjustmentSettings = async (serviceType) => {
   }
 };
 
+// Helpers for recovery sub-service/category normalization
+const normalizeRecoverySubService = (s) => {
+  if (!s) return null;
+  const x = String(s).trim().toLowerCase().replace(/\s+/g, "_");
+  // Map common doc labels to snake_case keys
+  const map = {
+    flatbed: "flatbed_towing",
+    flatbed_towing: "flatbed_towing",
+    wheel_lift: "wheel_lift_towing",
+    wheel_lift_towing: "wheel_lift_towing",
+    on_road_winching: "on_road_winching",
+    onroad_winching: "on_road_winching",
+    off_road_winching: "off_road_winching",
+    offroad_winching: "off_road_winching",
+    battery_jump_start: "battery_jump_start",
+    jump_start: "battery_jump_start",
+    fuel_delivery: "fuel_delivery",
+    luxury_exotic: "luxury_exotic",
+    luxury_exotic_car_recovery: "luxury_exotic",
+    accident_collision: "accident_collision",
+    heavy_duty: "heavy_duty",
+    basement_pull_out: "basement_pull_out",
+    basement_pullout: "basement_pull_out",
+    key_unlock: "key_unlock",
+  };
+  return map[x] || x;
+};
+
+const normalizeRecoveryCategoryBucket = (c) => {
+  if (!c) return null;
+  const x = String(c).trim().toLowerCase();
+  if (x.includes("towing")) return "towing";
+  if (x.includes("winching")) return "winching";
+  if (x.includes("roadside")) return "roadside_assistance";
+  if (x.includes("key")) return "key_unlock";
+  if (x.includes("special") || x.includes("heavy")) return "specialized_recovery";
+  return null;
+};
+
 // Calculate fare by service type using comprehensive system
 const calculateFareByServiceType = async (
   serviceType,
@@ -230,9 +269,7 @@ const calculateFareByServiceType = async (
 
   if (
     comprehensiveConfig &&
-    (serviceType === "car cab" ||
-      serviceType === "bike" ||
-      serviceType === "car recovery")
+    (serviceType === "car cab" || serviceType === "bike")
   ) {
     // Use comprehensive fare calculation
     const bookingData = {
@@ -270,147 +307,79 @@ const calculateFareByServiceType = async (
       });
 
     case "car recovery":
-      // Prefer Admin PricingConfig (carRecoveryConfig); fallback to calculator
-      const mapToCalcType = (cat) => {
-        const v = String(cat || "").toLowerCase();
-        if (v.includes("towing")) return "towing";
-        if (v.includes("winching")) return "winching";
-        if (v.includes("roadside")) return "roadside_assistance";
-        if (v.includes("key")) return "key_unlock";
-        return "specialized_recovery";
-      };
-      try {
-        const cfg = await PricingConfig.findOne({
-          serviceType: "car_recovery",
-          isActive: true,
-        }).lean();
-        const admin = cfg?.carRecoveryConfig;
-        const comp = await ComprehensivePricing.findOne({
-          isActive: true,
-        }).lean();
-        if (admin?.serviceCharges) {
-          // Prefer explicit subService if provided, else map from serviceCategory
-          const preferredSub = String(additionalData?.subService || "")
-            .trim()
-            .toLowerCase();
-          const broad = mapToCalcType(
-            additionalData?.serviceCategory || serviceType
-          );
-          let sc =
-            admin.serviceCharges[preferredSub] ||
-            admin.serviceCharges[broad] ||
-            admin.serviceCharges.default ||
-            {};
-          const cityRule = comp?.cityPricing?.rules?.find?.(
-            (r) => Number(distanceInKm) >= Number(r?.minKm || 0)
-          );
-          if (cityRule?.perKm) {
-            sc = { ...sc, perKm: Number(cityRule.perKm) };
-          }
-          const baseKm = Number(sc.baseKm ?? 6);
-          const baseFare = Number(sc.baseFare ?? 50);
-          const perKm = Number(sc.perKm ?? 7.5);
-          const platformPct = Number(admin.platformCharges?.percentage ?? 0);
-          const vatPct = Number(process.env.VAT_PERCENT || 0);
-          const d = Math.max(0, distanceInKm);
-          const extraKm = Math.max(0, d - baseKm);
-          const distanceFare = Math.round(extraKm * perKm);
-          // Night charge and surge multipliers
-          const startTime = additionalData.startTime
-            ? new Date(additionalData.startTime)
-            : new Date();
-          const hour = startTime.getHours();
-          let nightCharge = 0;
-          let nightMultiplier = 1;
-          const nightCfg = comp?.nightCharges;
-          const inNight = hour >= 22 || hour < 6;
-          if (inNight && nightCfg) {
-            if (String(nightCfg.mode || "").toLowerCase() === "multiplier")
-              nightMultiplier = Number(nightCfg.value || 1.25);
-            else nightCharge = Number(nightCfg.value || 10);
-          }
-          // Surge
-          let surgeMultiplier = 1;
-          const surge = comp?.surgePricing;
-          if (surge?.mode && String(surge.mode).toLowerCase() !== "none") {
-            surgeMultiplier =
-              surge.mode === "1.5x" ? 1.5 : surge.mode === "2.0x" ? 2.0 : 1;
-          }
-          let subtotal = Math.round(baseFare + distanceFare);
-          subtotal = Math.round(
-            (subtotal + nightCharge) * nightMultiplier * surgeMultiplier
-          );
-          const platformFee = Math.round((subtotal * platformPct) / 100);
-          const platformCustomer = Math.round(platformFee / 2);
-          const platformDriver = platformFee - platformCustomer;
-          const subtotalWithPlatform = subtotal + platformFee;
-          const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
-          // Round-trip discount
-          const roundTrip =
-            routeType === "two_way" || routeType === "round_trip";
-          const rtDiscount = roundTrip
-            ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10)
-            : 0;
-          const totalFare = Math.max(
-            0,
-            subtotalWithPlatform + vatAmount - rtDiscount
-          );
-          return {
-            currency: "AED",
-            baseFare,
-            distanceFare,
-            platformFee,
-            platformFeeSplit: {
-              customer: platformCustomer,
-              driver: platformDriver,
-            },
-            nightCharge: nightCharge || undefined,
-            nightMultiplier:
-              nightMultiplier !== 1 ? nightMultiplier : undefined,
-            surgeMultiplier:
-              surgeMultiplier !== 1 ? surgeMultiplier : undefined,
-            cityOverridePerKm: cityRule?.perKm || undefined,
-            roundTripDiscount: rtDiscount || undefined,
-            vatAmount,
-            subtotal: subtotalWithPlatform,
-            totalFare,
-            breakdown: {
-              baseKm,
-              perKm,
-              distanceInKm: d,
-              usedSubService: preferredSub || broad,
-            },
-          };
-        }
-      } catch (_) {}
-      // Fallback to unified recovery calculator
-      {
-        const fare = await FareCalculator.calculateRecoveryFare({
-          vehicleType: vehicleType,
-          serviceType: mapToCalcType(serviceType),
-          distance: distanceInKm,
-          duration: Math.ceil((distanceInKm / 30) * 60),
-          startTime: new Date(),
-          waitingTime: Number(additionalData.waitingMinutes || 0),
-        });
-        const estimatedFare = fare.totalWithVat ?? fare.totalFare ?? 0;
-        return {
-          currency: "AED",
-          breakdown: fare.fareBreakdown,
-          baseFare: fare.baseFare,
-          distanceFare: fare.distanceFare,
-          platformFee: fare.platformFee?.amount,
-          nightCharges: fare.nightSurcharge,
-          surgeCharges: undefined,
-          waitingCharges: fare.waitingCharges,
-          vatAmount: fare.vat?.amount,
-          subtotal: fare.subtotal,
-          totalFare: estimatedFare,
-        };
-      }
+    case "car_recovery":
+      return await computeAdminCarRecoveryFare({
+        distanceKm: distanceInKm,
+        routeType,
+        startTime: additionalData.startTime,
+        pickupLocation: additionalData.pickupLocation,
+        vehicleType,
+        serviceCategory: additionalData.serviceCategory || serviceType,
+        subService: additionalData.subService,
+        helper: additionalData.helper || additionalData.options?.helper,
+        waitingMinutes: additionalData.waitingMinutes,
+      });
 
     default:
       return 20; // Default minimum fare
+  }
+};
+
+// Compute demand/supply ratio around pickup to drive auto-surge
+const computeDemandRatio = async ({ pickupLocation, serviceType, vehicleType }) => {
+  try {
+    const radiusKm = 10; // search radius
+    const timeWindowMin = 30; // recent demand window
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - timeWindowMin * 60 * 1000);
+
+    // Supply: online drivers with matching service (and vehicleType if provided)
+    const driverQuery = {
+      role: "driver",
+      kycLevel: { $gte: 2 },
+      kycStatus: "approved",
+      isActive: true,
+      driverStatus: "online",
+      "currentLocation.coordinates": { $exists: true },
+      "vehicleDetails.serviceType": serviceType,
+    };
+    if (vehicleType && vehicleType !== "any") {
+      driverQuery["vehicleDetails.vehicleType"] = vehicleType;
+    }
+    const drivers = await User.find(driverQuery).select(
+      "currentLocation.coordinates vehicleDetails"
+    );
+    const supply = drivers.filter((d) => {
+      const c = d.currentLocation?.coordinates;
+      if (!Array.isArray(c) || c.length < 2) return false;
+      const dist = calculateDistance(
+        { lat: pickupLocation.coordinates?.[1], lng: pickupLocation.coordinates?.[0] },
+        { lat: c[1], lng: c[0] }
+      );
+      return dist <= radiusKm;
+    }).length;
+
+    // Demand: active bookings near pickup in window
+    const activeStatuses = ["pending", "searching", "finding_driver"];
+    const recentBookings = await Booking.find({
+      serviceType,
+      status: { $in: activeStatuses },
+      createdAt: { $gte: windowStart },
+    }).select("pickupLocation.coordinates");
+    const demand = recentBookings.filter((b) => {
+      const c = b.pickupLocation?.coordinates;
+      if (!Array.isArray(c) || c.length < 2) return false;
+      const dist = calculateDistance(
+        { lat: pickupLocation.coordinates?.[1], lng: pickupLocation.coordinates?.[0] },
+        { lat: c[1], lng: c[0] }
+      );
+      return dist <= radiusKm;
+    }).length;
+
+    const ratio = supply > 0 ? demand / supply : demand > 0 ? Infinity : 1;
+    return { demand, supply, ratio };
+  } catch (e) {
+    return { demand: 0, supply: 0, ratio: 1 };
   }
 };
 
@@ -542,6 +511,14 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     if (!serviceCategory) serviceCategory = shortMap.category;
   }
 
+  // Normalize underscore variants to canonical labels expected by calculators
+  const normSt = String(serviceType || serviceTypeRaw || "").toLowerCase().replace(/\s+/g, "_");
+  if (normSt === "car_recovery") {
+    serviceType = "car recovery";
+  } else if (normSt === "car_cab") {
+    serviceType = "car cab";
+  }
+
   // Authentication validation
   if (!req.user || !req.user._id) {
     return res.status(401).json({
@@ -618,247 +595,22 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         if (v.includes("key")) return "key_unlock";
         return "specialized_recovery";
       };
-
       let fareResult;
       let estimatedFare;
+
       if (booking.serviceType === "car recovery") {
-        // Prefer Admin PricingConfig (carRecoveryConfig); fallback to calculator
-        const mapToCalcType = (cat) => {
-          const v = String(cat || "").toLowerCase();
-          if (v.includes("towing")) return "towing";
-          if (v.includes("winching")) return "winching";
-          if (v.includes("roadside")) return "roadside_assistance";
-          if (v.includes("key")) return "key_unlock";
-          return "specialized_recovery";
-        };
-        let usedAdmin = false;
-        try {
-          const cfg = await PricingConfig.findOne({
-            serviceType: "car_recovery",
-            isActive: true,
-          }).lean();
-          const admin = cfg?.carRecoveryConfig;
-          const comp = await ComprehensivePricing.findOne({
-            isActive: true,
-          }).lean();
-          if (admin?.serviceCharges) {
-            usedAdmin = true;
-            console.log(
-              "[fare-estimate][car-recovery][admin] using admin pricing (Branch A)"
-            );
-            // Prefer explicit subService if provided, else map from serviceCategory
-            const preferredSub = String(req.body?.subService || "")
-              .trim()
-              .toLowerCase();
-            const broad = mapToCalcType(booking.serviceCategory);
-            let sc =
-              admin.serviceCharges[preferredSub] ||
-              admin.serviceCharges[broad] ||
-              admin.serviceCharges.default ||
-              {};
-            // Effective distance for route type (2x for round-trip)
-            const isRoundTrip =
-              booking.routeType === "two_way" ||
-              booking.routeType === "round_trip" ||
-              !!req.body?.options?.roundTrip;
-            const dEff = Math.max(0, isRoundTrip ? distanceKm * 2 : distanceKm);
-            const cityRule = comp?.cityPricing?.rules?.find?.(
-              (r) => Number(dEff) >= Number(r?.minKm || 0)
-            );
-            if (cityRule?.perKm) {
-              sc = { ...sc, perKm: Number(cityRule.perKm) };
-            }
-            const baseKm = Number(sc.baseKm ?? 6);
-            const baseFare = Number(sc.baseFare ?? 50);
-            const perKm = Number(sc.perKm ?? 7.5);
-            const platformPct = Number(admin.platformCharges?.percentage ?? 15);
-            const vatPct = Number(process.env.VAT_PERCENT || 0);
-            const d = dEff;
-            const extraKm = Math.max(0, d - baseKm);
-            const distanceFare = Math.round(extraKm * perKm);
-            // Night charge and surge multipliers
-            const startTime = new Date();
-            const hour = startTime.getHours();
-            let nightCharge = 0;
-            let nightMultiplier = 1;
-            const nightCfg = comp?.nightCharges;
-            const inNight = hour >= 22 || hour < 6;
-            if (inNight && nightCfg) {
-              if (String(nightCfg.mode || "").toLowerCase() === "multiplier")
-                nightMultiplier = Number(nightCfg.value || 1.25);
-              else nightCharge = Number(nightCfg.value || 10);
-            }
-            // Surge
-            let surgeMultiplier = 1;
-            const surge = comp?.surgePricing;
-            if (surge?.mode && String(surge.mode).toLowerCase() !== "none") {
-              surgeMultiplier =
-                surge.mode === "1.5x" ? 1.5 : surge.mode === "2.0x" ? 2.0 : 1;
-            }
-            let subtotal = Math.round(baseFare + distanceFare);
-            subtotal = Math.round(
-              (subtotal + nightCharge) * nightMultiplier * surgeMultiplier
-            );
-            const platformFee = Math.round((subtotal * platformPct) / 100);
-            const platformCustomer = Math.round(platformFee / 2);
-            const platformDriver = platformFee - platformCustomer;
-            const subtotalWithPlatform = subtotal + platformFee;
-            const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
-            // Round-trip discount
-            const roundTrip = isRoundTrip;
-            const rtDiscount = roundTrip
-              ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10)
-              : 0;
-            const totalFare = Math.max(
-              0,
-              subtotalWithPlatform + vatAmount - rtDiscount
-            );
-            estimatedFare = totalFare;
-            const helperEnabled = !!(
-              req.body?.helper === true || req.body?.options?.helper === true
-            );
-            const helperFeeAed = helperEnabled
-              ? Number(comp?.helper?.fee ?? process.env.HELPER_FEE_AED ?? 25)
-              : 0;
-            fareResult = {
-              currency: "AED",
-              baseFare,
-              distanceFare,
-              platformFee,
-              platformFeeSplit: {
-                customer: platformCustomer,
-                driver: platformDriver,
-              },
-              nightCharge: nightCharge || undefined,
-              nightCharges: nightCharge || undefined,
-              nightMultiplier:
-                nightMultiplier !== 1 ? nightMultiplier : undefined,
-              surgeMultiplier:
-                surgeMultiplier !== 1 ? surgeMultiplier : undefined,
-              cityOverridePerKm: cityRule?.perKm || undefined,
-              roundTripDiscount: rtDiscount || undefined,
-              vatAmount,
-              subtotal: subtotalWithPlatform,
-              totalFare,
-              breakdown: {
-                baseKm,
-                perKm,
-                distanceInKm: d,
-                usedSubService: preferredSub || broad,
-              },
-              policies: {
-                cancellation: {
-                  thresholds: {
-                    beforeArrivalAfter25pct: 2,
-                    halfWayOrMore: 5,
-                    afterArrived: 10,
-                  },
-                  notes:
-                    "Cancellation fees apply based on driver progress. Only charged once rider crosses 25% of driver distance.",
-                },
-                refreshmentAlert: {
-                  triggerDistanceKm: 20,
-                  triggerDurationMin: 30,
-                  perMinute: 1,
-                  per5Min: 5,
-                  maxMinutes: 30,
-                },
-              },
-              helper: { enabled: helperEnabled, fee: helperFeeAed },
-            };
-          }
-        } catch (_) {}
-        if (!usedAdmin) {
-          console.log(
-            "[fare-estimate][car-recovery][fallback] using calculator (Branch A)"
-          );
-          const isRoundTrip =
-            booking.routeType === "two_way" || !!req.body?.options?.roundTrip;
-          const fare = await FareCalculator.calculateRecoveryFare({
-            vehicleType: booking.vehicleType || "car",
-            serviceType: mapToCalcType(booking.serviceCategory),
-            distance: isRoundTrip ? distanceKm * 2 : distanceKm,
-            duration: durationMinutes,
-            startTime: new Date(),
-            waitingTime: Number(req.body?.options?.waitingTime || 0),
-          });
-          const calcTotal = Number(fare.totalWithVat ?? fare.totalFare ?? 0);
-          const calcVat = Number(fare.vat?.amount ?? fare.vatAmount ?? 0);
-          const calcSubtotal = Number(
-            fare.subtotal ?? (calcTotal > 0 ? calcTotal - calcVat : 0)
-          );
-          const calcPlatform = Number(
-            fare.platformFee?.amount ?? fare.platformFee ?? 0
-          );
-          const platformPct = 15;
-          // Recompose subtotal with our waiting/helper/platform policy
-          const comp = await ComprehensivePricing.findOne({
-            isActive: true,
-          }).lean();
-          const helperEnabled = !!(
-            req.body?.helper === true || req.body?.options?.helper === true
-          );
-          const helperFeeAed = helperEnabled
-            ? Number(comp?.helper?.fee ?? process.env.HELPER_FEE_AED ?? 25)
-            : 0;
-          const wc = computeWaitingCharges({
-            waitingMinutes: Number(req.body?.options?.waitingTime || 0),
-            isRoundTrip,
-            distanceKm: isRoundTrip ? distanceKm * 2 : distanceKm,
-            comp,
-          });
-          const basePlusDistance = Math.max(0, calcSubtotal - calcPlatform);
-          const recomputedPlatform = Math.round(
-            (basePlusDistance * platformPct) / 100
-          );
-          const recomposedSubtotal =
-            basePlusDistance +
-            recomputedPlatform +
-            wc.waitingCharges +
-            helperFeeAed;
-          const vatPct = Number(process.env.VAT_PERCENT || 0);
-          const vatAmount = Math.round((recomposedSubtotal * vatPct) / 100);
-          const discount = isRoundTrip
-            ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10)
-            : 0;
-          const finalAmount = Math.max(
-            0,
-            recomposedSubtotal + vatAmount - discount
-          );
-          estimatedFare = finalAmount;
-          fareResult = {
-            currency: "AED",
-            breakdown: fare.fareBreakdown,
-            baseFare: Number(fare.baseFare ?? 0),
-            distanceFare: Number(fare.distanceFare ?? 0),
-            platformFee: recomputedPlatform,
-            nightCharges: Number(fare.nightSurcharge ?? fare.nightCharges ?? 0),
-            surgeCharges: undefined,
-            waitingCharges: wc.waitingCharges,
-            vatAmount,
-            subtotal: recomposedSubtotal,
-            totalFare: finalAmount,
-            policies: {
-              cancellation: {
-                thresholds: {
-                  beforeArrivalAfter25pct: 2,
-                  halfWayOrMore: 5,
-                  afterArrived: 10,
-                },
-                notes:
-                  "Cancellation fees apply based on driver progress. Only charged once rider crosses 25% of driver distance.",
-              },
-              refreshmentAlert: {
-                triggerDistanceKm: 20,
-                triggerDurationMin: 30,
-                perMinute: 1,
-                per5Min: 5,
-                maxMinutes: 30,
-              },
-            },
-            helper: { enabled: helperEnabled, fee: helperFeeAed },
-          };
-        }
+        fareResult = await computeAdminCarRecoveryFare({
+          distanceKm,
+          routeType,
+          startTime: new Date(),
+          pickupLocation: pickup,
+          vehicleType: booking.vehicleType,
+          serviceCategory: booking.serviceCategory,
+          subService: req.body.subService,
+          helper: req.body.helper || req.body.options?.helper,
+          waitingMinutes: req.body.options?.waitingTime || req.body.waitingMinutes || 0,
+        });
+        estimatedFare = fareResult.totalFare || 0;
       } else {
         // Use existing comprehensive flow for cab/bike/etc.
         fareResult = await calculateFareByServiceType(
@@ -1062,263 +814,20 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       estimatedFare = fareData?.totalCalculatedFare || fareData?.totalFare || 0;
       fareResult = fareData;
     } else if (serviceType === "car recovery") {
-      // Prefer Admin PricingConfig (carRecoveryConfig); fallback to calculator
-      const mapToCalcType = (cat) => {
-        const v = String(cat || "").toLowerCase();
-        if (v.includes("towing")) return "towing";
-        if (v.includes("winching")) return "winching";
-        if (v.includes("roadside")) return "roadside_assistance";
-        if (v.includes("key")) return "key_unlock";
-        return "specialized_recovery";
-      };
-      let usedAdmin = false;
-      try {
-        const cfg = await PricingConfig.findOne({
-          serviceType: "car_recovery",
-          isActive: true,
-        }).lean();
-        const admin = cfg?.carRecoveryConfig;
-        const comp = await ComprehensivePricing.findOne({
-          isActive: true,
-        }).lean();
-        if (admin?.serviceCharges) {
-          usedAdmin = true;
-          console.log(
-            "[fare-estimate][car-recovery][admin] using admin pricing (Branch B)"
-          );
-          // Prefer explicit subService if provided, else map from serviceCategory
-          const preferredSub = String(req.body?.subService || "")
-            .trim()
-            .toLowerCase();
-          const broad = mapToCalcType(serviceCategory);
-          let sc =
-            admin.serviceCharges[preferredSub] ||
-            admin.serviceCharges[broad] ||
-            admin.serviceCharges.default ||
-            {};
-          // Effective distance for route type (2x for round-trip)
-          const isRoundTrip =
-            routeType === "two_way" ||
-            routeType === "round_trip" ||
-            !!req.body?.options?.roundTrip;
-          const dEff = Math.max(
-            0,
-            isRoundTrip
-              ? (computedDistanceMeters / 1000) * 2
-              : computedDistanceMeters / 1000
-          );
-          const cityRule = comp?.cityPricing?.rules?.find?.(
-            (r) => Number(dEff) >= Number(r?.minKm || 0)
-          );
-          if (cityRule?.perKm) sc = { ...sc, perKm: Number(cityRule.perKm) };
-          const baseKm = Number(sc.baseKm ?? 6);
-          const baseFare = Number(sc.baseFare ?? 50);
-          const perKm = Number(sc.perKm ?? 7.5);
-          const platformPct = Number(admin.platformCharges?.percentage ?? 15);
-          const vatPct = Number(process.env.VAT_PERCENT || 0);
-          const d = dEff;
-          const extraKm = Math.max(0, d - baseKm);
-          const distanceFare = Math.round(extraKm * perKm);
-          // Night/surge
-          const startTime = req.body.startTime
-            ? new Date(req.body.startTime)
-            : new Date();
-          const hour = startTime.getHours();
-          let nightCharge = 0;
-          let nightMultiplier = 1;
-          const nightCfg = comp?.nightCharges;
-          const inNight = hour >= 22 || hour < 6;
-          if (inNight && nightCfg) {
-            if (String(nightCfg.mode || "").toLowerCase() === "multiplier")
-              nightMultiplier = Number(nightCfg.value || 1.25);
-            else nightCharge = Number(nightCfg.value || 10);
-          }
-          let surgeMultiplier = 1;
-          const surge = comp?.surgePricing;
-          if (surge?.mode && String(surge.mode).toLowerCase() !== "none") {
-            surgeMultiplier =
-              surge.mode === "1.5x" ? 1.5 : surge.mode === "2.0x" ? 2.0 : 1;
-          }
-          let subtotalFare = Math.round(baseFare + distanceFare);
-          subtotalFare = Math.round(
-            (subtotalFare + nightCharge) * nightMultiplier * surgeMultiplier
-          );
-          // Platform and waiting
-          const platformFee = Math.round((subtotalFare * platformPct) / 100);
-          const platformCustomer = Math.round(platformFee / 2);
-          const platformDriver = platformFee - platformCustomer;
-          const wc = computeWaitingCharges({
-            waitingMinutes: Number(
-              req.body?.options?.waitingTime || req.body.waitingMinutes || 0
-            ),
-            isRoundTrip,
-            distanceKm: isRoundTrip
-              ? (computedDistanceMeters / 1000) * 2
-              : computedDistanceMeters / 1000,
-            comp,
-          });
-          const helperEnabled = !!(
-            req.body?.helper === true || req.body?.options?.helper === true
-          );
-          const helperFeeAed = helperEnabled
-            ? Number(comp?.helper?.fee ?? process.env.HELPER_FEE_AED ?? 25)
-            : 0;
-          const subtotalWithPlatform =
-            subtotalFare + platformFee + wc.waitingCharges + helperFeeAed;
-          const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
-          // Round-trip discount
-          const roundTrip = isRoundTrip;
-          const rtDiscount = roundTrip
-            ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10)
-            : 0;
-          const totalFare = Math.max(
-            0,
-            subtotalWithPlatform + vatAmount - rtDiscount
-          );
-          estimatedFare = totalFare;
-          fareResult = {
-            currency: "AED",
-            baseFare,
-            distanceFare,
-            platformFee,
-            platformFeeSplit: {
-              customer: platformCustomer,
-              driver: platformDriver,
-            },
-            nightCharge: nightCharge || undefined,
-            nightCharges: nightCharge || undefined,
-            nightMultiplier:
-              nightMultiplier !== 1 ? nightMultiplier : undefined,
-            surgeMultiplier:
-              surgeMultiplier !== 1 ? surgeMultiplier : undefined,
-            cityOverridePerKm: cityRule?.perKm || undefined,
-            waiting: wc,
-            helper: { enabled: helperEnabled, fee: helperFeeAed },
-            roundTripDiscount: rtDiscount || undefined,
-            vatAmount,
-            subtotal: subtotalWithPlatform,
-            totalFare,
-            breakdown: {
-              baseKm,
-              perKm,
-              distanceInKm: d,
-              usedSubService: preferredSub || broad,
-            },
-            policies: {
-              cancellation: {
-                thresholds: {
-                  beforeArrivalAfter25pct: 2,
-                  halfWayOrMore: 5,
-                  afterArrived: 10,
-                },
-                notes:
-                  "Cancellation fees apply based on driver progress. Only charged once rider crosses 25% of driver distance.",
-              },
-              refreshmentAlert: {
-                triggerDistanceKm: 20,
-                triggerDurationMin: 30,
-                perMinute: 1,
-                per5Min: 5,
-                maxMinutes: 30,
-              },
-            },
-          };
-        }
-      } catch (_) {}
-      if (!usedAdmin) {
-        console.log(
-          "[fare-estimate][car-recovery][fallback] using calculator (Branch B)"
-        );
-        const isRoundTrip =
-          routeType === "two_way" || !!req.body?.options?.roundTrip;
-        const fare = await FareCalculator.calculateRecoveryFare({
-          vehicleType: vehicleType,
-          serviceType: mapToCalcType(serviceCategory),
-          distance: isRoundTrip
-            ? (computedDistanceMeters / 1000) * 2
-            : computedDistanceMeters / 1000,
-          duration: Math.ceil((computedDistanceMeters / 1000 / 30) * 60),
-          startTime: req.body.startTime
-            ? new Date(req.body.startTime)
-            : new Date(),
-          waitingTime: Number(req.body.waitingMinutes || 0),
-        });
-        const calcTotal = Number(fare.totalWithVat ?? fare.totalFare ?? 0);
-        const calcVat = Number(fare.vat?.amount ?? fare.vatAmount ?? 0);
-        const calcSubtotal = Number(
-          fare.subtotal ?? (calcTotal > 0 ? calcTotal - calcVat : 0)
-        );
-        const calcPlatform = Number(
-          fare.platformFee?.amount ?? fare.platformFee ?? 0
-        );
-        const platformPct = 15;
-        // Recompose subtotal with our waiting/helper/platform policy
-        const comp = await ComprehensivePricing.findOne({
-          isActive: true,
-        }).lean();
-        const helperEnabled = !!(
-          req.body?.helper === true || req.body?.options?.helper === true
-        );
-        const helperFeeAed = helperEnabled
-          ? Number(comp?.helper?.fee ?? process.env.HELPER_FEE_AED ?? 25)
-          : 0;
-        const wc = computeWaitingCharges({
-          waitingMinutes: Number(
-            req.body?.options?.waitingTime || req.body.waitingMinutes || 0
-          ),
-          isRoundTrip,
-          distanceKm: isRoundTrip
-            ? (computedDistanceMeters / 1000) * 2
-            : computedDistanceMeters / 1000,
-          comp,
-        });
-        const basePlusDistance = Math.max(0, calcSubtotal - calcPlatform);
-        const recomputedPlatform = Math.round(
-          (basePlusDistance * platformPct) / 100
-        );
-        const recomposedSubtotal =
-          basePlusDistance +
-          recomputedPlatform +
-          wc.waitingCharges +
-          helperFeeAed;
-        const vatPct = Number(process.env.VAT_PERCENT || 0);
-        const vatAmount = Math.round((recomposedSubtotal * vatPct) / 100);
-        const discount = isRoundTrip
-          ? Number(process.env.ROUND_TRIP_DISCOUNT_AED || 10)
-          : 0;
-        const finalAmount = Math.max(
-          0,
-          recomposedSubtotal + vatAmount - discount
-        );
-        estimatedFare = finalAmount;
-        fareResult = {
-          currency: "AED",
-          breakdown: fare.fareBreakdown,
-          waiting: wc,
-          helper: { enabled: helperEnabled, fee: helperFeeAed },
-          vatAmount,
-          subtotal: recomposedSubtotal,
-          totalFare: finalAmount,
-          policies: {
-            cancellation: {
-              thresholds: {
-                beforeArrivalAfter25pct: 2,
-                halfWayOrMore: 5,
-                afterArrived: 10,
-              },
-            },
-            refreshmentAlert: {
-              triggerDistanceKm: 20,
-              triggerDurationMin: 30,
-              perMinute: 1,
-              per5Min: 5,
-              maxMinutes: 30,
-            },
-          },
-        };
-      }
+      fareResult = await computeAdminCarRecoveryFare({
+        distanceKm: computedDistanceMeters / 1000,
+        routeType,
+        startTime: req.body.startTime,
+        pickupLocation,
+        vehicleType,
+        serviceCategory,
+        subService: req.body.subService,
+        helper: req.body.helper || req.body.options?.helper,
+        waitingMinutes: req.body.options?.waitingTime || req.body.waitingMinutes || 0,
+      });
+      estimatedFare = fareResult.totalFare || 0;
     } else {
-      // Use comprehensive fare calculation for car cab, bike, and car recovery
+      // Use comprehensive fare calculation for car cab and bike only
       fareResult = await calculateFareByServiceType(
         serviceType,
         vehicleType,
@@ -1329,7 +838,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           waitingMinutes: req.body.waitingMinutes || 0,
           estimatedDuration:
             req.body.estimatedDuration ||
-            Math.ceil((computedDistanceMeters / 1000 / 40) * 60), // Estimate based on 40km/h average speed
+            Math.ceil((computedDistanceMeters / 1000 / 40) * 60),
         }
       );
 
@@ -1523,8 +1032,189 @@ const adjustFareEstimation = asyncHandler(async (req, res) => {
   }
 });
 
+// Clean Admin-only calculator for Car Recovery (winching, towing, roadside, etc.)
+async function computeAdminCarRecoveryFare({
+  distanceKm,
+  routeType,
+  startTime,
+  pickupLocation,
+  vehicleType,
+  serviceCategory,
+  subService,
+  helper,
+  waitingMinutes,
+}) {
+  // Hardcoded Admin Defaults (mirror pricingModel.js schema defaults)
+  const admin = {
+    serviceCharges: {
+      default: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      roadside_assistance: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      key_unlock: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      specialized_recovery: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      flatbed_towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      wheel_lift_towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      on_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      off_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      battery_jump_start: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      fuel_delivery: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      luxury_exotic: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      accident_collision: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      heavy_duty: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+      basement_pull_out: { baseKm: 6, baseFare: 50, perKm: 7.5 },
+    },
+    serviceChargesByCategory: {
+      towing: {
+        default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        subServices: {
+          flatbed_towing: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          wheel_lift_towing: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        },
+      },
+      winching: {
+        default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 5 },
+        subServices: {
+          on_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 5 },
+          off_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 5 },
+        },
+      },
+      roadside_assistance: {
+        default: { baseKm: 0, baseFare: 45, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+        subServices: {
+          battery_jump_start: { baseKm: 0, baseFare: 50, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+          fuel_delivery: { baseKm: 0, baseFare: 45, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+          key_unlock: { baseKm: 0, baseFare: 80, perKm: 0, convenienceFee: 0, minArrivalFee: 5 },
+        },
+      },
+      specialized_recovery: {
+        default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        subServices: {
+          luxury_exotic: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          accident_collision: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          heavy_duty: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+          basement_pull_out: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 },
+        },
+      },
+      default: { default: { baseKm: 6, baseFare: 50, perKm: 7.5, convenienceFee: 0, minArrivalFee: 0 }, subServices: {} },
+    },
+    platformCharges: { percentage: 15, splitRatio: { customer: 50, serviceProvider: 50 } },
+  };
+
+  const mapToCalcType = (cat) => {
+    const v = String(cat || "").toLowerCase();
+    if (v.includes("towing")) return "towing";
+    if (v.includes("winching")) return "winching";
+    if (v.includes("roadside")) return "roadside_assistance";
+    if (v.includes("key")) return "key_unlock";
+    return "specialized_recovery";
+  };
+  const normalizeRecoverySubService = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, "_");
+  const normalizeRecoveryCategoryBucket = (s) => mapToCalcType(s);
+
+  const isRoundTrip = routeType === "two_way" || routeType === "round_trip";
+  const dEff = Math.max(0, isRoundTrip ? distanceKm * 2 : distanceKm);
+  const legMultiplier = isRoundTrip ? 2 : 1;
+
+  // Resolve charges (prefer structured, then flat)
+  const preferredSub = normalizeRecoverySubService(subService);
+  const broad = normalizeRecoveryCategoryBucket(serviceCategory);
+  let sc = {};
+  const byCat = admin.serviceChargesByCategory;
+  if (byCat && (byCat[broad] || byCat.default)) {
+    const bucket = byCat[broad] || byCat.default;
+    sc = (bucket.subServices && bucket.subServices[preferredSub]) || bucket.default || {};
+  }
+  if (!sc || Object.keys(sc).length === 0) {
+    sc = admin.serviceCharges[preferredSub] || admin.serviceCharges[broad] || admin.serviceCharges.default || {};
+  }
+
+  // No city/comprehensive overrides: use admin hardcoded values only
+
+  const baseKm = Number(sc.baseKm ?? 6);
+  const baseFare = Number(sc.baseFare ?? 50);
+  const perKm = Number(sc.perKm ?? 7.5);
+  const convenienceFee = Number(sc.convenienceFee || 0);
+  const minArrivalFee = Number(sc.minArrivalFee || 0);
+  const platformPct = Number(admin.platformCharges?.percentage ?? 15);
+  const vatPct = Number(process.env.VAT_PERCENT || 0);
+
+  const extraKm = Math.max(0, dEff - baseKm);
+  const distanceFare = Math.round(extraKm * perKm);
+
+  // No night/surge when using hardcoded admin-only pricing
+  const nightCharge = 0;
+  const nightMultiplier = 1;
+  const surgeMultiplier = 1;
+
+  // Subtotal core
+  let subtotalCore = Math.round(baseFare * legMultiplier + distanceFare + convenienceFee * legMultiplier + minArrivalFee * legMultiplier);
+  subtotalCore = Math.round((subtotalCore + nightCharge) * nightMultiplier * surgeMultiplier);
+
+  // Waiting and helper
+  const wc = { freeMinutes: 0, billableMinutes: 0, perMinute: 0, waitingCharges: 0 };
+  const helperEnabled = !!helper;
+  const helperFeeAed = helperEnabled ? Number(process.env.HELPER_FEE_AED || 25) : 0;
+
+  // Platform after waiting/helper
+  const preVatTotalBeforePlatform = subtotalCore + wc.waitingCharges + helperFeeAed;
+  const platformFee = Math.round((preVatTotalBeforePlatform * platformPct) / 100);
+  const platformCustomer = Math.round(platformFee / 2);
+  const platformDriver = platformFee - platformCustomer;
+  const subtotalWithPlatform = preVatTotalBeforePlatform + platformFee;
+  const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
+
+  // Round-trip discount
+  const rtDiscount = 0;
+  let totalFare = Math.max(0, subtotalWithPlatform + vatAmount - rtDiscount);
+
+  // Monotonicity guard: two_way >= one_way
+  if (isRoundTrip) {
+    const d1 = Math.max(0, dEff / 2);
+    const extraKm1 = Math.max(0, d1 - baseKm);
+    const distanceFare1 = Math.round(extraKm1 * perKm);
+    let subtotalCore1 = Math.round(baseFare + distanceFare1 + convenienceFee + minArrivalFee);
+    subtotalCore1 = Math.round((subtotalCore1 + nightCharge) * nightMultiplier * surgeMultiplier);
+    const preVatBeforePlatform1 = subtotalCore1; // waiting/helper assumed 0 for one-way baseline guard
+    const platformFee1 = Math.round((preVatBeforePlatform1 * platformPct) / 100);
+    const subtotalWithPlatform1 = preVatBeforePlatform1 + platformFee1;
+    const vatAmount1 = Math.round((subtotalWithPlatform1 * vatPct) / 100);
+    const oneWayTotal = Math.max(0, subtotalWithPlatform1 + vatAmount1);
+    if (totalFare < oneWayTotal) totalFare = oneWayTotal;
+  }
+
+  return {
+    currency: "AED",
+    baseFare,
+    distanceFare,
+    platformFee,
+    platformFeeSplit: { customer: platformCustomer, driver: platformDriver },
+    nightCharge: nightCharge || undefined,
+    nightCharges: nightCharge || undefined,
+    nightMultiplier: nightMultiplier !== 1 ? nightMultiplier : undefined,
+    surgeMultiplier: surgeMultiplier !== 1 ? surgeMultiplier : undefined,
+    cityOverridePerKm: undefined,
+    waiting: wc,
+    helper: { enabled: helperEnabled, fee: helperFeeAed },
+    roundTripDiscount: rtDiscount || undefined,
+    vatAmount,
+    subtotal: subtotalWithPlatform,
+    totalFare,
+    breakdown: {
+      baseKm,
+      perKm,
+      distanceInKm: dEff,
+      effectiveDistanceKm: dEff,
+      perKmUsed: perKm,
+      routeType,
+      usedSubService: preferredSub || broad,
+    },
+  };
+}
+
 export {
   getFareEstimation,
   adjustFareEstimation,
   findQualifiedDriversForEstimation,
+  computeAdminCarRecoveryFare,
 };

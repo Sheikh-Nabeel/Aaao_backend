@@ -20,6 +20,7 @@ class WebSocketService {
     this.joinRoom = this.joinRoom.bind(this);
     this.leaveRoom = this.leaveRoom.bind(this);
     this.sendToRoom = this.sendToRoom.bind(this);
+    this.sendToRoomUsers = this.sendToRoomUsers.bind(this);
     this._serviceRoomName = this._serviceRoomName.bind(this);
     this.joinServiceRooms = this.joinServiceRooms.bind(this);
 
@@ -296,6 +297,16 @@ class WebSocketService {
     if (!room) return;
     room.forEach((client) => {
       if (client.readyState === 1) this.send(client, message);
+    });
+  }
+  sendToRoomUsers(roomName, userIds = [], message) {
+    const room = this.rooms.get(roomName);
+    if (!room || !Array.isArray(userIds) || userIds.length === 0) return;
+    const allowed = new Set(userIds.map(String));
+    room.forEach((client) => {
+      if (client.readyState === 1 && allowed.has(String(client.userId))) {
+        this.send(client, message);
+      }
     });
   }
   _joinDefaultRooms(ws) {
