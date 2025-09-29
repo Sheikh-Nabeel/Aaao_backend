@@ -68,10 +68,11 @@ class WebSocketService {
       try {
         // Validate role from DB to prevent spoofing
         const user = await User.findById(ws.userId).select("role").lean();
-        if (!user) return this.sendError(ws, { code: 404, message: "User not found" });
-        const role = user.role || 'customer';
+        if (!user)
+          return this.sendError(ws, { code: 404, message: "User not found" });
+        const role = user.role || "customer";
         // Leave previous role room if needed
-        const prevRole = ws.user?.role || 'customer';
+        const prevRole = ws.user?.role || "customer";
         if (prevRole !== role) this.leaveRoom(ws, `role:${prevRole}`);
         // Join role room and user room
         this.joinRoom(ws, `role:${role}`);
@@ -83,14 +84,76 @@ class WebSocketService {
         if (Array.isArray(data?.services)) {
           this.joinServiceRooms(ws, data.services);
         }
-        this.send(ws, { event: 'auth.joined', data: { role, rooms: Array.from(ws.rooms || []) } });
+
+        // Optional: persist initial location if provided
+        const loc = data?.location || data?.coordinates;
+        const lat = loc?.lat ?? loc?.latitude;
+        const lng = loc?.lng ?? loc?.longitude;
+        if (typeof lat === "number" && typeof lng === "number") {
+          const update = {
+            currentLocation: { type: "Point", coordinates: [lng, lat] },
+            lastActiveAt: new Date(),
+          };
+          if (role === "driver") {
+            update.isActive = true;
+            update.driverStatus = "online";
+          }
+          try {
+            await User.findByIdAndUpdate(
+              ws.userId,
+              { $set: update },
+              { new: false }
+            );
+          } catch (e) {
+            logger.warn("auth.join location persist failed:", e?.message);
+          }
+        }
+
+        this.send(ws, {
+          event: "auth.joined",
+          data: { role, rooms: Array.from(ws.rooms || []) },
+        });
       } catch (e) {
-        logger.error('auth.join error:', e);
-        this.sendError(ws, { code: 500, message: 'Failed to join rooms' });
+        logger.error("auth.join error:", e);
+        this.sendError(ws, { code: 500, message: "Failed to join rooms" });
       }
     });
 
-    // Explicit room join/leave APIs (optional)
+    // Generic user location setter (no booking required)
+    this.on("location.set", async (ws, { data }) => {
+      try {
+        const loc = data?.location || data?.coordinates;
+        const lat = loc?.lat ?? loc?.latitude;
+        const lng = loc?.lng ?? loc?.longitude;
+        if (typeof lat !== "number" || typeof lng !== "number") {
+          return this.sendError(ws, {
+            code: 400,
+            message: "location {lat,lng} is required",
+          });
+        }
+        const update = {
+          currentLocation: { type: "Point", coordinates: [lng, lat] },
+          lastActiveAt: new Date(),
+        };
+        // If driver, optionally mark active online
+        const dbUser = await User.findById(ws.userId).select("role").lean();
+        if ((dbUser?.role || "customer") === "driver") {
+          update.isActive = true;
+          update.driverStatus = "online";
+        }
+        await User.findByIdAndUpdate(
+          ws.userId,
+          { $set: update },
+          { new: false }
+        );
+        this.send(ws, { event: "location.updated", data: { lat, lng } });
+      } catch (e) {
+        logger.error("location.set error:", e);
+        this.sendError(ws, { code: 500, message: "Failed to set location" });
+      }
+    });
+
+    // Explicit role/service join API (client can call after auth)
     this.on("room.join", async (ws, { data }) => {
       const room = data?.room;
       if (!room)
@@ -319,7 +382,11 @@ class WebSocketService {
 
   // Build normalized room name for a service/subservice
   _serviceRoomName(serviceType, subService) {
-    const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '_');
+    const norm = (s) =>
+      String(s || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "_");
     const st = norm(serviceType);
     const sub = norm(subService);
     if (!st) return null;
@@ -402,7 +469,8 @@ class WebSocketService {
       ws.on("message", async (message) => {
         try {
           // Normalize to string and trim
-          let raw = typeof message === "string" ? message : (message?.toString?.() || "");
+          let raw =
+            typeof message === "string" ? message : message?.toString?.() || "";
           raw = raw.trim();
           // Empty or non-JSON -> error
           if (!raw || (!raw.startsWith("{") && !raw.startsWith("["))) {
@@ -487,34 +555,40 @@ class WebSocketService {
 
       this.send(ws, {
         event: WS_EVENTS.AUTHENTICATED,
-        data: (ws.user?.role || "customer") === "driver"
-          ? { driverId: userId }
-          : { userId },
+        data:
+          (ws.user?.role || "customer") === "driver"
+            ? { driverId: userId }
+            : { userId },
       });
       // After AUTH, resolve and join proper role room from DB, not just token
       (async () => {
         try {
-          const dbUser = await User.findById(userId).select('role services vehicleDetails driverSettings').lean();
-          const dbRole = dbUser?.role || 'customer';
+          const dbUser = await User.findById(userId)
+            .select("role services vehicleDetails driverSettings")
+            .lean();
+          const dbRole = dbUser?.role || "customer";
           this.joinRoom(ws, `role:${dbRole}`);
           ws.user.role = dbRole;
           // Optionally auto-join service rooms for drivers based on their capabilities
-          if (dbRole === 'driver') {
+          if (dbRole === "driver") {
             // If you store explicit services list on user, map them; else join broad rooms
             const services = [];
             // Example: join car recovery broad room by default
             // You can enrich this with actual driver service registry
-            services.push({ serviceType: 'car recovery' });
+            services.push({ serviceType: "car recovery" });
             this.joinServiceRooms(ws, services);
           }
-          logger.info(`Joined rooms: ${Array.from(ws.rooms || []).join(', ')}`);
+          logger.info(`Joined rooms: ${Array.from(ws.rooms || []).join(", ")}`);
           // Emit authenticated with dynamic role from DB and appropriate id field
           this.send(ws, {
             event: WS_EVENTS.AUTHENTICATED,
-            data: dbRole === 'driver' ? { driverId: userId, role: 'driver' } : { userId, role: 'customer' },
+            data:
+              dbRole === "driver"
+                ? { driverId: userId, role: "driver" }
+                : { userId, role: "customer" },
           });
         } catch (e) {
-          logger.warn('Room join failed:', e?.message);
+          logger.warn("Room join failed:", e?.message);
         }
       })();
     });

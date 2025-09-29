@@ -276,20 +276,35 @@ class RecoveryHandler {
     );
 
     // Availability + user location (optional)
-    this.webSocketService.on(
-      "driver.availability",
-      this.handleDriverAvailability.bind(this)
-    );
-    this.webSocketService.on(
-      "user.location.update",
-      this.handleUserLocationUpdate.bind(this)
-    );
+    if (typeof this.handleDriverAvailability === "function") {
+      this.webSocketService.on(
+        "driver.availability",
+        this.handleDriverAvailability.bind(this)
+      );
+    }
+    if (typeof this.handleUserLocationUpdate === "function") {
+      this.webSocketService.on(
+        "user.location.update",
+        this.handleUserLocationUpdate.bind(this)
+      );
+    }
 
     // Negotiation WS
-    this.webSocketService.on("fare.offer", this.handleFareOffer.bind(this));
-    this.webSocketService.on("fare.counter", this.handleFareCounter.bind(this));
-    this.webSocketService.on("fare.accept", this.handleFareAccept.bind(this));
-    this.webSocketService.on("fare.reject", this.handleFareReject.bind(this));
+    if (typeof this.handleFareOffer === "function") {
+      this.webSocketService.on("fare.offer", this.handleFareOffer.bind(this));
+    }
+    if (typeof this.handleFareCounter === "function") {
+      this.webSocketService.on(
+        "fare.counter",
+        this.handleFareCounter.bind(this)
+      );
+    }
+    if (typeof this.handleFareAccept === "function") {
+      this.webSocketService.on("fare.accept", this.handleFareAccept.bind(this));
+    }
+    if (typeof this.handleFareReject === "function") {
+      this.webSocketService.on("fare.reject", this.handleFareReject.bind(this));
+    }
   }
 
   /**
@@ -649,20 +664,15 @@ class RecoveryHandler {
    */
   async handleDriverAssignment(ws, message) {
     const { bookingId, data } = message || {};
-    // Tolerate multiple shapes: bookingId may be top-level or inside data/id
-    const id = bookingId || data?.bookingId || data?.id || message?.id || null;
-    const parsedDriverId = data?.driverId || message?.driverId || null;
 
     try {
-      if (!id || !parsedDriverId) {
+      if (!bookingId || !data || !data.driverId) {
         throw new Error(
-          `Missing required fields: bookingId and driverId are required (got bookingId=${
-            id || "null"
-          }, driverId=${parsedDriverId || "null"})`
+          "Missing required fields: bookingId and driverId are required"
         );
       }
 
-      const recoveryRequest = this.activeRecoveries.get(id);
+      const recoveryRequest = this.activeRecoveries.get(bookingId);
       if (!recoveryRequest) {
         throw new Error("Recovery request not found");
       }
@@ -677,18 +687,18 @@ class RecoveryHandler {
       // IMPORTANT: Do NOT set driverId/status here. Treat as a proposal only.
       // Persist a pending assignment proposal to wait for accept/reject & negotiation.
       recoveryRequest.pendingAssignment = {
-        driverId: String(parsedDriverId),
+        driverId: String(data.driverId),
         proposedAt: new Date(),
       };
       // Keep status unchanged (e.g., 'pending' or current). Do NOT set 'driver_assigned' yet.
-      this.activeRecoveries.set(id, recoveryRequest);
+      this.activeRecoveries.set(bookingId, recoveryRequest);
 
       // Notify customer: assignment requested, requires acceptance/negotiation
       this.emitToClient(ws, {
         event: "driver.assignment.requested",
-        bookingId: id,
+        bookingId: bookingId,
         data: {
-          driverId: parsedDriverId,
+          driverId: data.driverId,
           status: "pending_acceptance",
           proposedAt: recoveryRequest.pendingAssignment.proposedAt,
           requiresAcceptance: true,
@@ -698,9 +708,9 @@ class RecoveryHandler {
 
       // Notify driver with a request to review/accept/negotiate
       try {
-        this.webSocketService.sendToUser(String(parsedDriverId), {
+        this.webSocketService.sendToUser(String(data.driverId), {
           event: "driver.assignment.request",
-          bookingId: id,
+          bookingId: bookingId,
           data: {
             status: "pending_acceptance",
             requiresAcceptance: true,
@@ -715,13 +725,13 @@ class RecoveryHandler {
       }
 
       logger.info(
-        `Driver ${parsedDriverId} assignment requested for recovery request ${id} (awaiting acceptance)`
+        `Driver ${data.driverId} assignment requested for recovery request ${bookingId} (awaiting acceptance)`
       );
     } catch (error) {
       logger.error("Error in handleDriverAssignment:", error);
       this.emitToClient(ws, {
         event: "error",
-        bookingId: id,
+        bookingId: bookingId,
         error: {
           code: "DRIVER_ASSIGNMENT_ERROR",
           message: error.message || "Failed to request driver assignment",
@@ -735,22 +745,21 @@ class RecoveryHandler {
    */
   async handleAcceptRequest(ws, message) {
     const { bookingId, data } = message || {};
-    const id = bookingId;
 
     try {
-      if (!id || !data || !data.driverId) {
+      if (!bookingId || !data || !data.driverId) {
         throw new Error(
           "Missing required fields: bookingId and driverId are required"
         );
       }
 
-      const recoveryRequest = this.activeRecoveries.get(id);
+      const recoveryRequest = this.activeRecoveries.get(bookingId);
       if (!recoveryRequest) {
         throw new Error("Recovery request not found");
       }
 
       // Guard: booking can only be accepted once
-      const existingBooking = await Booking.findById(id).select(
+      const existingBooking = await Booking.findById(bookingId).select(
         "fareDetails user driver status"
       );
       if (
@@ -832,7 +841,7 @@ class RecoveryHandler {
       // Notify client about acceptance
       this.emitToClient(ws, {
         event: "recovery.accepted",
-        bookingId: id,
+        bookingId: bookingId,
         data: {
           status: "accepted",
           acceptedAt: recoveryRequest.acceptedAt,
@@ -851,12 +860,14 @@ class RecoveryHandler {
         },
       });
 
-      logger.info(`Recovery request ${id} accepted by driver ${data.driverId}`);
+      logger.info(
+        `Recovery request ${bookingId} accepted by driver ${data.driverId}`
+      );
     } catch (error) {
       logger.error("Error in handleAcceptRequest:", error);
       this.emitToClient(ws, {
         event: "error",
-        bookingId: id,
+        bookingId: bookingId,
         error: {
           code: ERROR_CODES.ACCEPT_REQUEST_ERROR,
           message: error.message || "Failed to accept recovery request",
@@ -870,19 +881,20 @@ class RecoveryHandler {
    */
   async handleRejectRequest(ws, message) {
     const { bookingId, data } = message || {};
-    const id = bookingId;
 
     try {
-      if (!id || !data || !data.driverId) {
+      if (!bookingId || !data || !data.driverId) {
         throw new Error(
           "Missing required fields: bookingId and driverId are required"
         );
       }
-      const recoveryRequest = this.activeRecoveries.get(id);
+      const recoveryRequest = this.activeRecoveries.get(bookingId);
       if (!recoveryRequest) throw new Error("Recovery request not found");
 
       // If booking already accepted/in_progress, rejection is not allowed here
-      const existing = await Booking.findById(id).select("status driver");
+      const existing = await Booking.findById(bookingId).select(
+        "status driver"
+      );
       if (existing && ["accepted", "in_progress"].includes(existing.status)) {
         throw new Error("Cannot reject after acceptance has occurred");
       }
@@ -902,12 +914,12 @@ class RecoveryHandler {
         driverId: data.driverId,
         message: "Driver rejected the assignment request",
       });
-      this.activeRecoveries.set(id, recoveryRequest);
+      this.activeRecoveries.set(bookingId, recoveryRequest);
 
       // Notify customer
       this.emitToClient(ws, {
         event: "driver.assignment.rejected",
-        bookingId: id,
+        bookingId: bookingId,
         data: {
           driverId: data.driverId,
           status: "rejected",
@@ -919,14 +931,14 @@ class RecoveryHandler {
       try {
         this.webSocketService.sendToUser(String(data.driverId), {
           event: "driver.assignment.rejected.ack",
-          bookingId: id,
+          bookingId: bookingId,
           data: { status: "rejected", rejectedAt: new Date() },
         });
       } catch {}
     } catch (error) {
       this.emitToClient(ws, {
         event: "error",
-        bookingId: id,
+        bookingId: bookingId,
         error: {
           code: "DRIVER_REJECT_ERROR",
           message: error.message || "Failed to reject assignment",
@@ -1735,118 +1747,6 @@ class RecoveryHandler {
   }
 
   /**
-   * Handle getting available drivers for car recovery
-   */
-  async handleGetDrivers(ws, message) {
-    // Normalize message and robustly resolve bookingId
-    let msg = message || {};
-    if (typeof msg === "string") {
-      try {
-        msg = JSON.parse(msg);
-      } catch {
-        msg = { raw: message };
-      }
-    }
-    const data = msg?.data || {};
-    const payload = msg?.payload || {};
-    const body = msg?.body || {};
-    const payloadData = payload?.data || {};
-    const normalizeId = (v) => {
-      try {
-        if (!v) return null;
-        if (typeof v === "string") return v.trim();
-        if (typeof v === "number") return String(v);
-        if (typeof v === "object") {
-          if (v.$oid) return String(v.$oid).trim();
-          if (v._id) return String(v._id).trim();
-          if (typeof v.toString === "function")
-            return String(v.toString()).trim();
-        }
-      } catch {}
-      return null;
-    };
-    const id =
-      [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        payloadData?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-        payloadData?.id,
-        msg?.requestId,
-        data?.requestId,
-        payload?.requestId,
-        body?.requestId,
-        payloadData?.requestId,
-      ]
-        .map(normalizeId)
-        .find((v) => typeof v === "string" && v.length > 0) || null;
-
-    if (!id) throw new Error("Missing required field: bookingId");
-
-    let recoveryRequest = this.activeRecoveries.get(id);
-    if (!recoveryRequest) {
-      // DB-first fallback: reconstruct minimal context
-      const booking = await Booking.findById(id)
-        .select("pickupLocation user")
-        .lean();
-      if (!booking || !booking.pickupLocation) {
-        throw new Error("Recovery request not found");
-      }
-      recoveryRequest = {
-        bookingId: id,
-        userId: booking.user,
-        pickupLocation: booking.pickupLocation,
-        discoveryFilters: {},
-        searchRadiusKm: Number(data?.searchRadius) || 10,
-      };
-    }
-
-    // Get available drivers from the webSocketService
-    const radiusKm = Math.max(
-      1,
-      Math.min(
-        50,
-        Number(data?.searchRadius) || recoveryRequest.searchRadiusKm || 10
-      )
-    );
-    const onlyAssignable =
-      data?.onlyAssignable === undefined ? true : !!data?.onlyAssignable; // default to only online
-
-    const availableDrivers = await this.getAvailableDrivers(
-      recoveryRequest.pickupLocation,
-      radiusKm,
-      {
-        ...(recoveryRequest.discoveryFilters || {}),
-        onlyAssignable,
-        multiStopEnabled: !!recoveryRequest?.multiStop?.enabled,
-        favoriteUserId: recoveryRequest.userId,
-      }
-    );
-
-    // Send available drivers to the client
-    this.emitToClient(ws, {
-      event: "carRecovery:driversAvailable",
-      bookingId: id,
-      data: {
-        drivers: availableDrivers,
-        count: availableDrivers.length,
-        updatedAt: new Date(),
-        dispatchMode:
-          recoveryRequest.discoveryFilters?.preferredDispatch?.mode || null,
-      },
-    });
-
-    logger.info(
-      `Sent ${availableDrivers.length} available drivers for request ${id}`
-    );
-  }
-
-  /**
    * Handle fare estimation for a recovery request
    */
   async handleFareEstimate(ws, message) {
@@ -2182,6 +2082,7 @@ class RecoveryHandler {
         onlyAssignable,
         multiStopEnabled: !!recoveryRequest?.multiStop?.enabled,
         favoriteUserId: recoveryRequest.userId,
+        ignoreGeo: data?.searchRadius === undefined,
       }
     );
 
@@ -3728,659 +3629,220 @@ class RecoveryHandler {
       }
       if (typeof lat !== "number" || typeof lng !== "number") return [];
 
-      // Find available drivers near the pickup location
-      // Uses User model with role 'driver', geospatial index on currentLocation
-      const query = {
-        role: "driver",
-        kycLevel: { $gte: 2 },
-        kycStatus: "approved",
-        isActive: true,
-        "statusFlags.blockedForDues": { $ne: true },
-        // Enforce: Pink captains are NOT eligible for Car Recovery
-        "driverSettings.ridePreferences.pinkCaptainMode": { $ne: true },
-        driverStatus: filters.onlyAssignable
-          ? "online"
-          : { $in: ["online", "on_ride", "busy"] },
-        currentLocation: {
-          $near: {
-            $geometry: { type: "Point", coordinates: [lng, lat] },
-            $maxDistance: maxDistanceKm * 1000,
+      // If ignoreGeo is set, we will not filter by location at all
+      const ignoreGeo = !!filters?.ignoreGeo;
+      if (!ignoreGeo) {
+        // Find available drivers near the pickup location
+        // Uses User model with role 'driver', geospatial index on currentLocation
+        const query = {
+          role: "driver",
+          kycLevel: { $gte: 2 },
+          kycStatus: "approved",
+          isActive: true,
+          "statusFlags.blockedForDues": { $ne: true },
+          // Enforce: Pink captains are NOT eligible for Car Recovery
+          "driverSettings.ridePreferences.pinkCaptainMode": { $ne: true },
+          driverStatus: filters.onlyAssignable
+            ? "online"
+            : { $in: ["online", "on_ride", "busy"] },
+          currentLocation: {
+            $near: {
+              $geometry: { type: "Point", coordinates: [lng, lat] },
+              $maxDistance: maxDistanceKm * 1000,
+            },
           },
-        },
-      };
-
-      // Apply discovery filters
-      if (filters.pinkCaptainOnly) {
-        query.gender = "female";
-        query["driverSettings.ridePreferences.pinkCaptainMode"] = true;
-      }
-      if (filters?.safety?.noMaleCompanion) {
-        query["driverSettings.ridePreferences.acceptFemaleOnly"] = true;
-      }
-      if (filters?.safety?.familyWithGuardianMale) {
-        query["driverSettings.ridePreferences.allowFamilyWithGuardian"] = true;
-      }
-      if (filters?.safety?.maleWithoutFemale) {
-        query["driverSettings.ridePreferences.allowMaleWithoutFemale"] = true;
-      }
-      if (filters?.multiStopEnabled === true) {
-        query["driverSettings.ridePreferences.allowMultiStop"] = { $ne: false };
-      }
-
-      // Apply preferred dispatch filters
-      const mode = String(filters?.preferredDispatch?.mode || "").toLowerCase();
-      const pinnedId = filters?.preferredDispatch?.driverId;
-      if (mode === "female_only") {
-        query.gender = "female";
-      }
-      if (mode === "pinned" && pinnedId) {
-        query._id = String(pinnedId);
-      } else if (mode === "favorite") {
-        // Restrict to user's favourite drivers
-        try {
-          let favIds = filters?.favoriteDriverIds || [];
-          if ((!favIds || favIds.length === 0) && filters?.favoriteUserId) {
-            const user = await User.findById(filters.favoriteUserId).select(
-              "favoriteDrivers"
-            );
-            favIds = (user?.favoriteDrivers || []).map((x) => String(x));
-          }
-          if (favIds?.length) {
-            query._id = { $in: favIds };
-          } else {
-            // No favourites: return empty list
-            return [];
-          }
-        } catch {}
-      }
-
-      const drivers = await User.find(query)
-        .limit(10)
-        .select(
-          "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
-        );
-
-      // Map to the shape expected by findAndAssignDriver
-      return drivers.map((d) => {
-        let distanceKmDriver = null;
-        let etaMinutes = null;
-        if (
-          Array.isArray(d.currentLocation?.coordinates) &&
-          d.currentLocation.coordinates.length >= 2
-        ) {
-          const dlat = d.currentLocation.coordinates[1];
-          const dlng = d.currentLocation.coordinates[0];
-          distanceKmDriver = this._calcDistanceKm(
-            { lat, lng },
-            { lat: dlat, lng: dlng }
-          );
-          const avgSpeed = 30; // km/h
-          etaMinutes = Math.ceil((distanceKmDriver / avgSpeed) * 60);
-        }
-        return {
-          id: d._id.toString(),
-          name: `${d.firstName ?? ""}`.trim(),
-          phone: d.phoneNumber,
-          rating: 5,
-          status: d.driverStatus,
-          pendingAmounts: Number(d?.dues?.outstanding || 0) > 0,
-          distanceKm: distanceKmDriver,
-          etaMinutes,
-          location: d.currentLocation
-            ? {
-                coordinates: {
-                  lat: d.currentLocation.coordinates?.[1],
-                  lng: d.currentLocation.coordinates?.[0],
-                },
-              }
-            : null,
         };
-      });
+
+        // Apply discovery filters
+        if (filters.pinkCaptainOnly) {
+          query.gender = "female";
+          query["driverSettings.ridePreferences.pinkCaptainMode"] = true;
+        }
+        if (filters?.safety?.noMaleCompanion) {
+          query["driverSettings.ridePreferences.acceptFemaleOnly"] = true;
+        }
+        if (filters?.safety?.familyWithGuardianMale) {
+          query[
+            "driverSettings.ridePreferences.allowFamilyWithGuardian"
+          ] = true;
+        }
+        if (filters?.safety?.maleWithoutFemale) {
+          query["driverSettings.ridePreferences.allowMaleWithoutFemale"] = true;
+        }
+        if (filters?.multiStopEnabled === true) {
+          query["driverSettings.ridePreferences.allowMultiStop"] = {
+            $ne: false,
+          };
+        }
+
+        // Apply preferred dispatch filters
+        const mode = String(
+          filters?.preferredDispatch?.mode || ""
+        ).toLowerCase();
+        const pinnedId = filters?.preferredDispatch?.driverId;
+        if (mode === "female_only") {
+          query.gender = "female";
+        }
+        if (mode === "pinned" && pinnedId) {
+          query._id = String(pinnedId);
+        } else if (mode === "favorite") {
+          // Restrict to user's favourite drivers
+          try {
+            let favIds = filters?.favoriteDriverIds || [];
+            if ((!favIds || favIds.length === 0) && filters?.favoriteUserId) {
+              const user = await User.findById(filters.favoriteUserId).select(
+                "favoriteDrivers"
+              );
+              favIds = (user?.favoriteDrivers || []).map((x) => String(x));
+            }
+            if (favIds?.length) {
+              query._id = { $in: favIds };
+            } else {
+              // No favourites: return empty list
+              return [];
+            }
+          } catch {}
+        }
+
+        const drivers = await User.find(query)
+          .limit(10)
+          .select(
+            "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
+          );
+
+        // Map to the shape expected by findAndAssignDriver
+        return drivers.map((d) => {
+          let distanceKmDriver = null;
+          let etaMinutes = null;
+          if (
+            Array.isArray(d.currentLocation?.coordinates) &&
+            d.currentLocation.coordinates.length >= 2
+          ) {
+            const dlat = d.currentLocation.coordinates[1];
+            const dlng = d.currentLocation.coordinates[0];
+            distanceKmDriver = this._calcDistanceKm(
+              { lat, lng },
+              { lat: dlat, lng: dlng }
+            );
+            const avgSpeed = 30; // km/h
+            etaMinutes = Math.ceil((distanceKmDriver / avgSpeed) * 60);
+          }
+          return {
+            id: d._id.toString(),
+            name: `${d.firstName ?? ""}`.trim(),
+            phone: d.phoneNumber,
+            rating: 5,
+            status: d.driverStatus,
+            pendingAmounts: Number(d?.dues?.outstanding || 0) > 0,
+            distanceKm: distanceKmDriver,
+            etaMinutes,
+            location: d.currentLocation
+              ? {
+                  coordinates: {
+                    lat: d.currentLocation.coordinates?.[1],
+                    lng: d.currentLocation.coordinates?.[0],
+                  },
+                }
+              : null,
+          };
+        });
+      } else {
+        // If ignoreGeo is set, we will not filter by location at all
+        const query = {
+          role: "driver",
+          kycLevel: { $gte: 2 },
+          kycStatus: "approved",
+          isActive: true,
+          "statusFlags.blockedForDues": { $ne: true },
+          // Enforce: Pink captains are NOT eligible for Car Recovery
+          "driverSettings.ridePreferences.pinkCaptainMode": { $ne: true },
+          driverStatus: filters.onlyAssignable
+            ? "online"
+            : { $in: ["online", "on_ride", "busy"] },
+        };
+
+        // Apply discovery filters
+        if (filters.pinkCaptainOnly) {
+          query.gender = "female";
+          query["driverSettings.ridePreferences.pinkCaptainMode"] = true;
+        }
+        if (filters?.safety?.noMaleCompanion) {
+          query["driverSettings.ridePreferences.acceptFemaleOnly"] = true;
+        }
+        if (filters?.safety?.familyWithGuardianMale) {
+          query[
+            "driverSettings.ridePreferences.allowFamilyWithGuardian"
+          ] = true;
+        }
+        if (filters?.safety?.maleWithoutFemale) {
+          query["driverSettings.ridePreferences.allowMaleWithoutFemale"] = true;
+        }
+        if (filters?.multiStopEnabled === true) {
+          query["driverSettings.ridePreferences.allowMultiStop"] = {
+            $ne: false,
+          };
+        }
+
+        // Apply preferred dispatch filters
+        const mode = String(
+          filters?.preferredDispatch?.mode || ""
+        ).toLowerCase();
+        const pinnedId = filters?.preferredDispatch?.driverId;
+        if (mode === "female_only") {
+          query.gender = "female";
+        }
+        if (mode === "pinned" && pinnedId) {
+          query._id = String(pinnedId);
+        } else if (mode === "favorite") {
+          // Restrict to user's favourite drivers
+          try {
+            let favIds = filters?.favoriteDriverIds || [];
+            if ((!favIds || favIds.length === 0) && filters?.favoriteUserId) {
+              const user = await User.findById(filters.favoriteUserId).select(
+                "favoriteDrivers"
+              );
+              favIds = (user?.favoriteDrivers || []).map((x) => String(x));
+            }
+            if (favIds?.length) {
+              query._id = { $in: favIds };
+            } else {
+              // No favourites: return empty list
+              return [];
+            }
+          } catch {}
+        }
+
+        const drivers = await User.find(query)
+          .limit(10)
+          .select(
+            "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
+          );
+
+        // Map to the shape expected by findAndAssignDriver
+        return drivers.map((d) => {
+          return {
+            id: d._id.toString(),
+            name: `${d.firstName ?? ""}`.trim(),
+            phone: d.phoneNumber,
+            rating: 5,
+            status: d.driverStatus,
+            pendingAmounts: Number(d?.dues?.outstanding || 0) > 0,
+            distanceKm: null,
+            etaMinutes: null,
+            location: d.currentLocation
+              ? {
+                  coordinates: {
+                    lat: d.currentLocation.coordinates?.[1],
+                    lng: d.currentLocation.coordinates?.[0],
+                  },
+                }
+              : null,
+          };
+        });
+      }
     } catch (e) {
       logger.error("Error querying available drivers:", e);
       return [];
-    }
-  }
-
-  async handleDriverAvailability(ws, message) {
-    // Normalize message (string or object)
-    let msg = message || {};
-    if (typeof msg === "string") {
-      try {
-        msg = JSON.parse(msg);
-      } catch {
-        msg = { raw: message };
-      }
-    }
-    const data = msg?.data || {};
-    const payload = msg?.payload || {};
-    const body = msg?.body || {};
-
-    const toStr = (v) => (v == null ? null : String(v));
-    const normalizeId = (v) => {
-      try {
-        if (!v) return null;
-        if (typeof v === "string") return v.trim();
-        if (typeof v === "number") return String(v);
-        if (typeof v === "object") {
-          if (v.$oid) return String(v.$oid).trim();
-          if (v._id) return String(v._id).trim();
-          if (typeof v.toString === "function")
-            return String(v.toString()).trim();
-        }
-      } catch {}
-      return null;
-    };
-
-    // Resolve flags and ids
-    const online =
-      data?.online === true ||
-      payload?.online === true ||
-      body?.online === true ||
-      msg?.online === true;
-    const driverId = normalizeId(
-      data?.driverId ||
-        payload?.driverId ||
-        body?.driverId ||
-        ws?.user?.id ||
-        ws?.user?._id
-    );
-    const bookingId =
-      [msg?.bookingId, data?.bookingId, payload?.bookingId, body?.bookingId]
-        .map(normalizeId)
-        .find((v) => typeof v === "string" && v.length > 0) || null;
-
-    try {
-      if (!driverId) throw new Error("Driver ID missing or unauthenticated");
-
-      // Optional: if bookingId supplied, ensure driver is the assigned driver (if any)
-      if (bookingId) {
-        const booking = await Booking.findById(bookingId).select("driver");
-        if (!booking)
-          throw new Error("Booking not found for availability update");
-        if (booking.driver && String(booking.driver) !== driverId) {
-          throw new Error("Driver not assigned to this booking");
-        }
-      }
-
-      await User.findByIdAndUpdate(driverId, {
-        $set: {
-          isActive: !!online,
-          driverStatus: online ? "online" : "offline",
-          lastActiveAt: new Date(),
-        },
-      });
-
-      // Build optional nearby drivers list if bookingId provided
-      let nearbyDrivers = null;
-      if (bookingId) {
-        try {
-          const booking = await Booking.findById(bookingId)
-            .select("pickupLocation user")
-            .lean();
-          if (booking?.pickupLocation) {
-            const radiusKm = Math.max(
-              1,
-              Math.min(
-                50,
-                Number(
-                  data?.searchRadius ||
-                    payload?.searchRadius ||
-                    body?.searchRadius
-                ) || 10
-              )
-            );
-            const onlyAssignable =
-              data?.onlyAssignable ??
-              payload?.onlyAssignable ??
-              body?.onlyAssignable;
-            const drivers = await this.getAvailableDrivers(
-              booking.pickupLocation,
-              radiusKm,
-              {
-                onlyAssignable:
-                  onlyAssignable === undefined ? true : !!onlyAssignable,
-                favoriteUserId: booking.user,
-              }
-            );
-            nearbyDrivers = { drivers, count: drivers.length, radiusKm };
-          }
-        } catch (e) {
-          logger.warn(
-            "driver.availability: failed to load nearby drivers:",
-            e?.message || e
-          );
-        }
-      }
-
-      // Emit ack including bookingId and optional nearby drivers
-      this.emitToClient(ws, {
-        event: "driver.availability.ack",
-        bookingId: bookingId || null,
-        data: {
-          online: !!online,
-          driverId,
-          bookingId: bookingId || undefined,
-          nearbyDrivers,
-        },
-      });
-    } catch (e) {
-      this.emitToClient(ws, {
-        event: "error",
-        bookingId: bookingId || null,
-        error: { code: "DRIVER_AVAIL_ERROR", message: e.message },
-      });
-    }
-  }
-
-  async handleUserLocationUpdate(ws, message) {
-    const { bookingId, data } = message || {};
-    const id = bookingId;
-
-    try {
-      const lat = data?.location?.latitude ?? data?.location?.lat;
-      const lng = data?.location?.longitude ?? data?.location?.lng;
-      if (!id || typeof lat !== "number" || typeof lng !== "number")
-        throw new Error("Invalid");
-      this._recordTrack(id, "user", lat, lng);
-      this.emitToClient(ws, {
-        event: "user.location.updated.ack",
-        bookingId: id,
-      });
-    } catch (e) {
-      this.emitToClient(ws, {
-        event: "error",
-        bookingId: id,
-        error: { code: "USER_LOC_UPDATE_ERROR", message: e.message },
-      });
-    }
-  }
-
-  async handleFareOffer(ws, message) {
-    // Normalize
-    let msg = message || {};
-    if (typeof msg === "string") {
-      try {
-        msg = JSON.parse(msg);
-      } catch {
-        msg = { raw: message };
-      }
-    }
-    const data = msg?.data || {};
-    const payload = msg?.payload || {};
-    const body = msg?.body || {};
-    const norm = (v) => {
-      try {
-        if (!v) return null;
-        if (typeof v === "string") return v.trim();
-        if (typeof v === "number") return String(v);
-        if (typeof v === "object") {
-          if (v.$oid) return String(v.$oid).trim();
-          if (v._id) return String(v._id).trim();
-          if (typeof v.toString === "function")
-            return String(v.toString()).trim();
-        }
-      } catch {}
-      return null;
-    };
-    const id =
-      [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-        msg?.requestId,
-        data?.requestId,
-        payload?.requestId,
-        body?.requestId,
-      ]
-        .map(norm)
-        .find((v) => typeof v === "string" && v.length > 0) || null;
-    const amount = Number(data?.amount ?? payload?.amount ?? body?.amount);
-    try {
-      if (!id) throw new Error("bookingId is required");
-      if (!(amount > 0)) throw new Error("Valid amount is required");
-      const booking = await Booking.findById(id).select(
-        "user driver fareDetails status"
-      );
-      if (!booking) throw new Error("Booking not found");
-
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString();
-      if (!actorId) throw new Error("Unauthenticated");
-      const offeredBy =
-        String(booking.user) === actorId
-          ? "user"
-          : String(booking.driver) === actorId
-          ? "driver"
-          : null;
-      if (!offeredBy) throw new Error("Actor not part of this booking");
-
-      booking.fareDetails = booking.fareDetails || {};
-      booking.fareDetails.negotiation = {
-        state: "offered",
-        lastActionAt: new Date(),
-        history: [
-          ...(booking.fareDetails.negotiation?.history || []),
-          { type: "offer", by: offeredBy, amount, at: new Date() },
-        ],
-        last: { type: "offer", by: offeredBy, amount },
-      };
-      booking.fareDetails.lastOfferedFare = amount;
-      await booking.save();
-
-      // Notify counterparty
-      const recipient = offeredBy === "user" ? booking.driver : booking.user;
-      if (recipient) {
-        this.webSocketService.sendToUser(String(recipient), {
-          event: "fare.offer",
-          bookingId: id,
-          data: { by: offeredBy, amount },
-        });
-      }
-      // Ack to sender
-      this.emitToClient(ws, {
-        event: "fare.offer.ack",
-        bookingId: id,
-        data: { amount, by: offeredBy },
-      });
-    } catch (error) {
-      this.emitToClient(ws, {
-        event: "error",
-        bookingId: id || null,
-        error: { code: "FARE_OFFER_ERROR", message: error.message },
-      });
-    }
-  }
-
-  async handleFareCounter(ws, message) {
-    // Normalize
-    let msg = message || {};
-    if (typeof msg === "string") {
-      try {
-        msg = JSON.parse(msg);
-      } catch {
-        msg = { raw: message };
-      }
-    }
-    const data = msg?.data || {};
-    const payload = msg?.payload || {};
-    const body = msg?.body || {};
-    const norm = (v) => {
-      try {
-        if (!v) return null;
-        if (typeof v === "string") return v.trim();
-        if (typeof v === "number") return String(v);
-        if (typeof v === "object") {
-          if (v.$oid) return String(v.$oid).trim();
-          if (v._id) return String(v._id).trim();
-          if (typeof v.toString === "function")
-            return String(v.toString()).trim();
-        }
-      } catch {}
-      return null;
-    };
-    const id =
-      [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-      ]
-        .map(norm)
-        .find((v) => typeof v === "string" && v.length > 0) || null;
-    const amount = Number(data?.amount ?? payload?.amount ?? body?.amount);
-    try {
-      if (!id) throw new Error("bookingId is required");
-      if (!(amount > 0)) throw new Error("Valid amount is required");
-      const booking = await Booking.findById(id).select(
-        "user driver fareDetails status"
-      );
-      if (!booking) throw new Error("Booking not found");
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString();
-      if (!actorId) throw new Error("Unauthenticated");
-      const by =
-        String(booking.user) === actorId
-          ? "user"
-          : String(booking.driver) === actorId
-          ? "driver"
-          : null;
-      if (!by) throw new Error("Actor not part of this booking");
-
-      booking.fareDetails = booking.fareDetails || {};
-      booking.fareDetails.negotiation = {
-        state: "counter",
-        lastActionAt: new Date(),
-        history: [
-          ...(booking.fareDetails.negotiation?.history || []),
-          { type: "counter", by, amount, at: new Date() },
-        ],
-        last: { type: "counter", by, amount },
-      };
-      booking.fareDetails.lastCounterFare = amount;
-      await booking.save();
-
-      const recipient = by === "user" ? booking.driver : booking.user;
-      if (recipient) {
-        this.webSocketService.sendToUser(String(recipient), {
-          event: "fare.counter",
-          bookingId: id,
-          data: { by, amount },
-        });
-      }
-      this.emitToClient(ws, {
-        event: "fare.counter.ack",
-        bookingId: id,
-        data: { by, amount },
-      });
-    } catch (error) {
-      this.emitToClient(ws, {
-        event: "error",
-        bookingId: id || null,
-        error: { code: "FARE_COUNTER_ERROR", message: error.message },
-      });
-    }
-  }
-
-  async handleFareAccept(ws, message) {
-    // Normalize
-    let msg = message || {};
-    if (typeof msg === "string") {
-      try {
-        msg = JSON.parse(msg);
-      } catch {
-        msg = { raw: message };
-      }
-    }
-    const data = msg?.data || {};
-    const payload = msg?.payload || {};
-    const body = msg?.body || {};
-    const norm = (v) => {
-      try {
-        if (!v) return null;
-        if (typeof v === "string") return v.trim();
-        if (typeof v === "number") return String(v);
-        if (typeof v === "object") {
-          if (v.$oid) return String(v.$oid).trim();
-          if (v._id) return String(v._id).trim();
-          if (typeof v.toString === "function")
-            return String(v.toString()).trim();
-        }
-      } catch {}
-      return null;
-    };
-    const id =
-      [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-      ]
-        .map(norm)
-        .find((v) => typeof v === "string" && v.length > 0) || null;
-    const amount = Number(data?.amount ?? payload?.amount ?? body?.amount);
-    try {
-      if (!id) throw new Error("bookingId is required");
-      const booking = await Booking.findById(id).select(
-        "user driver fareDetails status"
-      );
-      if (!booking) throw new Error("Booking not found");
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString();
-      if (!actorId) throw new Error("Unauthenticated");
-      const by =
-        String(booking.user) === actorId
-          ? "user"
-          : String(booking.driver) === actorId
-          ? "driver"
-          : null;
-      if (!by) throw new Error("Actor not part of this booking");
-
-      // Determine the accepted amount
-      const acceptedAmount =
-        amount > 0
-          ? amount
-          : booking.fareDetails?.negotiation?.last?.amount ||
-            booking.fareDetails?.lastCounterFare ||
-            booking.fareDetails?.lastOfferedFare;
-      if (!(acceptedAmount > 0)) throw new Error("No offer to accept");
-
-      booking.fareDetails = booking.fareDetails || {};
-      booking.fareDetails.finalFare = acceptedAmount;
-      booking.fareDetails.negotiation = {
-        state: "accepted",
-        acceptedBy: by,
-        acceptedAt: new Date(),
-        lastActionAt: new Date(),
-        history: [
-          ...(booking.fareDetails.negotiation?.history || []),
-          { type: "accept", by, amount: acceptedAmount, at: new Date() },
-        ],
-        last: { type: "accept", by, amount: acceptedAmount },
-      };
-      await booking.save();
-
-      const recipient = by === "user" ? booking.driver : booking.user;
-      if (recipient) {
-        this.webSocketService.sendToUser(String(recipient), {
-          event: "fare.accepted",
-          bookingId: id,
-          data: { by, amount: acceptedAmount },
-        });
-      }
-      this.emitToClient(ws, {
-        event: "fare.accepted.ack",
-        bookingId: id,
-        data: { by, amount: acceptedAmount },
-      });
-    } catch (error) {
-      this.emitToClient(ws, {
-        event: "error",
-        bookingId: id || null,
-        error: { code: "FARE_ACCEPT_ERROR", message: error.message },
-      });
-    }
-  }
-
-  async handleFareReject(ws, message) {
-    // Normalize
-    let msg = message || {};
-    if (typeof msg === "string") {
-      try {
-        msg = JSON.parse(msg);
-      } catch {
-        msg = { raw: message };
-      }
-    }
-    const data = msg?.data || {};
-    const payload = msg?.payload || {};
-    const body = msg?.body || {};
-    const norm = (v) => {
-      try {
-        if (!v) return null;
-        if (typeof v === "string") return v.trim();
-        if (typeof v === "number") return String(v);
-        if (typeof v === "object") {
-          if (v.$oid) return String(v.$oid).trim();
-          if (v._id) return String(v._id).trim();
-          if (typeof v.toString === "function")
-            return String(v.toString()).trim();
-        }
-      } catch {}
-      return null;
-    };
-    const id =
-      [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-      ]
-        .map(norm)
-        .find((v) => typeof v === "string" && v.length > 0) || null;
-    try {
-      if (!id) throw new Error("bookingId is required");
-      const booking = await Booking.findById(id).select(
-        "user driver fareDetails status"
-      );
-      if (!booking) throw new Error("Booking not found");
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString();
-      if (!actorId) throw new Error("Unauthenticated");
-      const by =
-        String(booking.user) === actorId
-          ? "user"
-          : String(booking.driver) === actorId
-          ? "driver"
-          : null;
-      if (!by) throw new Error("Actor not part of this booking");
-
-      booking.fareDetails = booking.fareDetails || {};
-      booking.fareDetails.negotiation = {
-        state: "rejected",
-        rejectedBy: by,
-        rejectedAt: new Date(),
-        lastActionAt: new Date(),
-        history: [
-          ...(booking.fareDetails.negotiation?.history || []),
-          { type: "reject", by, at: new Date() },
-        ],
-        last: { type: "reject", by },
-      };
-      await booking.save();
-
-      const recipient = by === "user" ? booking.driver : booking.user;
-      if (recipient) {
-        this.webSocketService.sendToUser(String(recipient), {
-          event: "fare.rejected",
-          bookingId: id,
-          data: { by },
-        });
-      }
-      this.emitToClient(ws, {
-        event: "fare.rejected.ack",
-        bookingId: id,
-        data: { by },
-      });
-    } catch (error) {
-      this.emitToClient(ws, {
-        event: "error",
-        bookingId: id || null,
-        error: { code: "FARE_REJECT_ERROR", message: error.message },
-      });
     }
   }
 
