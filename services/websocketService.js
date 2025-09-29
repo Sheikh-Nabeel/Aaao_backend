@@ -59,9 +59,9 @@ class WebSocketService {
     });
 
     // Prevent 'Unhandled event: authenticated' if clients echo server's AUTHENTICATED message
-    // this.on("authenticated", async () => {
-    //   /* no-op to avoid unhandled warnings */
-    // });
+    this.on("authenticated", async () => {
+      /* no-op to avoid unhandled warnings */
+    });
 
     // Unified role/service join API (client can call after auth)
     this.on("auth.join", async (ws, { data }) => {
@@ -230,10 +230,9 @@ class WebSocketService {
   }
 
   // Send standardized error
-  sendError(ws, { requestId, code, message, details }) {
+  sendError(ws, { code, message, details }) {
     this.send(ws, {
       event: "error",
-      requestId,
       error: { code, message, ...(details && { details }) },
       timestamp: new Date().toISOString(),
     });
@@ -401,13 +400,39 @@ class WebSocketService {
       }, pingInterval);
 
       ws.on("message", async (message) => {
-        let requestId = null;
         try {
-          const parsed = JSON.parse(message);
-          const { event, data } = parsed;
-          requestId = parsed.requestId;
-          if (event) logger.info(`WS event received: ${event}`);
-          const handlers = this.handlers.get(event) || [];
+          // Normalize to string and trim
+          let raw = typeof message === "string" ? message : (message?.toString?.() || "");
+          raw = raw.trim();
+          // Empty or non-JSON -> error
+          if (!raw || (!raw.startsWith("{") && !raw.startsWith("["))) {
+            return this.sendError(ws, {
+              code: ERROR_CODES.INVALID_REQUEST,
+              message: "Invalid or empty message payload",
+              details: { hint: "Send a JSON object with { event, data }" },
+            });
+          }
+
+          let parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (e) {
+            return this.sendError(ws, {
+              code: ERROR_CODES.INVALID_REQUEST,
+              message: e?.message || "Invalid JSON payload",
+            });
+          }
+
+          const { event, data } = parsed || {};
+          if (!event || typeof event !== "string") {
+            return this.sendError(ws, {
+              code: ERROR_CODES.INVALID_REQUEST,
+              message: "Missing or invalid 'event' field",
+            });
+          }
+
+          logger.info(`WS event received: ${event}`);
+          const handlers = this.handlers.get(event) || new Set();
           if (
             handlers.size === 0 &&
             event !== "recovery.request" &&
@@ -416,30 +441,29 @@ class WebSocketService {
           ) {
             logger.warn(`No handlers registered for event: ${event}`);
             return this.sendError(ws, {
-              requestId,
               code: ERROR_CODES.UNHANDLED_EVENT,
               message: `Unhandled event: ${event}`,
             });
           }
-          // Allow recovery.request and driver.assignment/accept_request to be routed explicitly by handler if needed
+
+          // Dispatch to handlers (pass only data)
           for (const handler of Array.from(handlers)) {
             try {
-              await handler(ws, { requestId, data });
+              await handler(ws, { data });
             } catch (err) {
-              logger.error(`WS message error: ${err.message}`);
+              logger.error(`WS handler error for ${event}: ${err?.message}`);
               this.sendError(ws, {
-                requestId,
-                code: err.code || ERROR_CODES.INVALID_REQUEST,
-                message: err.message || "Invalid message format",
+                code: err?.code || ERROR_CODES.INVALID_REQUEST,
+                message: err?.message || "Handler error",
               });
             }
           }
         } catch (err) {
-          logger.error(`WS message error: ${err.message}`);
+          // Final safety net
+          logger.error(`WS message fatal error: ${err?.message}`);
           this.sendError(ws, {
-            requestId,
             code: ERROR_CODES.INVALID_REQUEST,
-            message: err.message || "Invalid message format",
+            message: err?.message || "Invalid message",
           });
         }
       });
@@ -463,11 +487,9 @@ class WebSocketService {
 
       this.send(ws, {
         event: WS_EVENTS.AUTHENTICATED,
-        data: {
-          userId,
-          role: ws.user?.role || "customer",
-          timestamp: new Date().toISOString(),
-        },
+        data: (ws.user?.role || "customer") === "driver"
+          ? { driverId: userId }
+          : { userId },
       });
       // After AUTH, resolve and join proper role room from DB, not just token
       (async () => {
@@ -486,6 +508,11 @@ class WebSocketService {
             this.joinServiceRooms(ws, services);
           }
           logger.info(`Joined rooms: ${Array.from(ws.rooms || []).join(', ')}`);
+          // Emit authenticated with dynamic role from DB and appropriate id field
+          this.send(ws, {
+            event: WS_EVENTS.AUTHENTICATED,
+            data: dbRole === 'driver' ? { driverId: userId, role: 'driver' } : { userId, role: 'customer' },
+          });
         } catch (e) {
           logger.warn('Room join failed:', e?.message);
         }
