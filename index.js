@@ -31,6 +31,7 @@ const corsOptions = {
     "http://localhost:5173",
     "https://aaaogo.com",
     "https://aaaogodashboard.netlify.app",
+    "https://dashboard.aaaogo.com"
   ],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   credentials: true,
