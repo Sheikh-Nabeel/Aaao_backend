@@ -1,20 +1,18 @@
-import { WebSocketServer } from 'ws';
-import { verifyToken } from '../utils/jwt.js';
-import { WS_EVENTS, ERROR_CODES } from '../constants/websocketEvents.js';
-import logger from '../utils/logger.js';
-import RecoveryHandler from '../handlers/recoveryHandler.js';
+import { WebSocketServer } from "ws";
+import { verifyToken } from "../utils/jwt.js";
+import { WS_EVENTS, ERROR_CODES } from "../constants/websocketEvents.js";
+import logger from "../utils/logger.js";
+import RecoveryHandler from "../handlers/recoveryHandler.js";
+import User from "../models/userModel.js"; // Import User model
 
 class WebSocketService {
   constructor() {
     this.wss = null;
     this.clients = new Map(); // Map<userId, Set<WebSocket>>
     this.handlers = new Map(); // Map<eventType, Array<handler>>
-    this.recoveryHandler = new RecoveryHandler(this);
     this.rooms = new Map(); // Map<roomName, Set<WebSocket>>
-    
-    // Initialize event handlers
-    this.initializeEventHandlers();
-    
+
+    // Bind core APIs BEFORE constructing handlers so they can call .on()
     this.initialize = this.initialize.bind(this);
     this.on = this.on.bind(this);
     this.off = this.off.bind(this);
@@ -22,6 +20,15 @@ class WebSocketService {
     this.joinRoom = this.joinRoom.bind(this);
     this.leaveRoom = this.leaveRoom.bind(this);
     this.sendToRoom = this.sendToRoom.bind(this);
+    this.sendToRoomUsers = this.sendToRoomUsers.bind(this);
+    this._serviceRoomName = this._serviceRoomName.bind(this);
+    this.joinServiceRooms = this.joinServiceRooms.bind(this);
+
+    // Now construct RecoveryHandler (it will register handlers using .on())
+    this.recoveryHandler = new RecoveryHandler(this);
+
+    // Initialize event handlers
+    this.initializeEventHandlers();
   }
 
   /**
@@ -30,369 +37,164 @@ class WebSocketService {
   initializeEventHandlers() {
     // Register recovery handler events
     this.recoveryHandler.initializeEventHandlers();
-    
+
     // Register car recovery specific events
-    this.on('carRecovery:getDrivers', async (ws, message) => {
+    this.on("carRecovery:getDrivers", async (ws, message) => {
       await this.recoveryHandler.handleGetDrivers(ws, message);
     });
 
     // Register driver arrival event
-    this.on('driver.arrival', async (ws, message) => {
+    this.on("driver.arrival", async (ws, message) => {
       await this.recoveryHandler.handleDriverArrival(ws, message);
     });
 
     // Register waiting time updates
-    this.on('waiting.time.update', async (ws, message) => {
+    this.on("waiting.time.update", async (ws, message) => {
       await this.recoveryHandler.handleWaitingTimeUpdate(ws, message);
     });
 
     // Register service start event
-    this.on('service.start', async (ws, message) => {
+    this.on("service.start", async (ws, message) => {
       await this.recoveryHandler.handleServiceStart(ws, message);
     });
 
     // Prevent 'Unhandled event: authenticated' if clients echo server's AUTHENTICATED message
-    this.on('authenticated', async () => { /* no-op to avoid unhandled warnings */ });
+    this.on("authenticated", async () => {
+      /* no-op to avoid unhandled warnings */
+    });
 
-    // Role-based (re)join rooms API (client can call after auth)
-    this.on('auth.join', async (ws) => {
+    // Unified role/service join API (client can call after auth)
+    this.on("auth.join", async (ws, { data }) => {
       try {
-        const rooms = this._joinDefaultRooms(ws);
-        logger.info(`auth.join -> user ${ws.userId} joined rooms: ${rooms.join(', ')}`);
-        this.send(ws, { event: 'auth.joined', data: { rooms } });
+        // Validate role from DB to prevent spoofing
+        const user = await User.findById(ws.userId).select("role").lean();
+        if (!user) return this.sendError(ws, { code: 404, message: "User not found" });
+        const role = user.role || 'customer';
+        // Leave previous role room if needed
+        const prevRole = ws.user?.role || 'customer';
+        if (prevRole !== role) this.leaveRoom(ws, `role:${prevRole}`);
+        // Join role room and user room
+        this.joinRoom(ws, `role:${role}`);
+        this.joinRoom(ws, `user:${ws.userId}`);
+        ws.user.role = role;
+
+        // Optionally join service/subservice rooms
+        // Expected data.services: [{ serviceType: 'car recovery'|'car cab'|'bike'|..., subService: 'towing'|'winching'|... }]
+        if (Array.isArray(data?.services)) {
+          this.joinServiceRooms(ws, data.services);
+        }
+        this.send(ws, { event: 'auth.joined', data: { role, rooms: Array.from(ws.rooms || []) } });
       } catch (e) {
         logger.error('auth.join error:', e);
-        this.sendError(ws, { code: 400, message: e.message || 'Failed to join rooms' });
+        this.sendError(ws, { code: 500, message: 'Failed to join rooms' });
       }
     });
 
     // Explicit room join/leave APIs (optional)
-    this.on('room.join', async (ws, { data }) => {
+    this.on("room.join", async (ws, { data }) => {
       const room = data?.room;
-      if (!room) return this.sendError(ws, { code: 400, message: 'room is required' });
+      if (!room)
+        return this.sendError(ws, { code: 400, message: "room is required" });
       this.joinRoom(ws, room);
       logger.info(`room.join -> user ${ws.userId} joined room: ${room}`);
-      this.send(ws, { event: 'room.joined', data: { room } });
+      this.send(ws, { event: "room.joined", data: { room } });
     });
-    this.on('room.leave', async (ws, { data }) => {
+    this.on("room.leave", async (ws, { data }) => {
       const room = data?.room;
-      if (!room) return this.sendError(ws, { code: 400, message: 'room is required' });
+      if (!room)
+        return this.sendError(ws, { code: 400, message: "room is required" });
       this.leaveRoom(ws, room);
       logger.info(`room.leave -> user ${ws.userId} left room: ${room}`);
-      this.send(ws, { event: 'room.left', data: { room } });
+      this.send(ws, { event: "room.left", data: { room } });
+    });
+
+    // Explicit customer-only room join
+    this.on("auth.join.customer", async (ws) => {
+      try {
+        const prevRole = ws.user?.role || "customer";
+        const oldRoom = `role:${prevRole}`;
+        const newRoom = "role:customer";
+        if (prevRole !== "customer") {
+          this.leaveRoom(ws, oldRoom);
+        }
+        this.joinRoom(ws, newRoom);
+        this.joinRoom(ws, `user:${ws.userId}`);
+        ws.user.role = "customer";
+        logger.info(
+          `auth.join.customer -> user ${ws.userId} joined ${newRoom}`
+        );
+        this.send(ws, {
+          event: "auth.joined",
+          data: { role: "customer", rooms: Array.from(ws.rooms || []) },
+        });
+      } catch (e) {
+        logger.error("auth.join.customer error:", e);
+        this.sendError(ws, {
+          code: 500,
+          message: "Failed to join customer room",
+        });
+      }
+    });
+
+    // Explicit driver-only room join (validates DB role)
+    this.on("auth.join.driver", async (ws) => {
+      try {
+        const user = await User.findById(ws.userId).select("role").lean();
+        if (!user)
+          return this.sendError(ws, { code: 404, message: "User not found" });
+        if ((user.role || "customer") !== "driver") {
+          return this.sendError(ws, {
+            code: 403,
+            message: "User is not a driver (KYC/role not approved)",
+          });
+        }
+        const prevRole = ws.user?.role || "customer";
+        const oldRoom = `role:${prevRole}`;
+        const newRoom = "role:driver";
+        if (prevRole !== "driver") {
+          this.leaveRoom(ws, oldRoom);
+        }
+        this.joinRoom(ws, newRoom);
+        this.joinRoom(ws, `user:${ws.userId}`);
+        ws.user.role = "driver";
+        logger.info(`auth.join.driver -> user ${ws.userId} joined ${newRoom}`);
+        this.send(ws, {
+          event: "auth.joined",
+          data: { role: "driver", rooms: Array.from(ws.rooms || []) },
+        });
+      } catch (e) {
+        logger.error("auth.join.driver error:", e);
+        this.sendError(ws, {
+          code: 500,
+          message: "Failed to join driver room",
+        });
+      }
     });
   }
 
-  /**
-   * Initialize WebSocket server
-   * @param {http.Server} server - HTTP server instance
-   * @param {Object} options - Configuration options
-   * @param {string} options.path - WebSocket endpoint path
-   * @param {string} options.jwtSecret - JWT secret for authentication
-   * @param {number} options.pingInterval - Ping interval in milliseconds (default: 30000)
-   */
-  initialize(server, { path = '/ws', jwtSecret, pingInterval = 30000 } = {}) {
-    if (!jwtSecret) {
-      throw new Error('JWT secret is required for WebSocket authentication');
-    }
-
-    this.jwtSecret = jwtSecret;
-    this.wss = new WebSocketServer({ noServer: true });
-
-    // Handle HTTP upgrade requests
-    server.on('upgrade', (request, socket, head) => {
-      const url = new URL(request.url, `http://${request.headers.host}`);
-      
-      // Only handle WebSocket connections on the specified path
-      if (url.pathname !== path) {
-        socket.destroy();
-        return;
-      }
-
-      // Extract token from query parameters or headers
-      const token = url.searchParams.get('token') || 
-                  (request.headers.authorization?.startsWith('Bearer ') 
-                    ? request.headers.authorization.split(' ')[1] 
-                    : null);
-
-      if (!token) {
-        this.handleUpgradeError(socket, 4001, 'No authentication token provided');
-        return;
-      }
-
-      // Verify JWT token
-      const { valid, decoded, error } = verifyToken(token, this.jwtSecret);
-      
-      if (!valid || !decoded) {
-        this.handleUpgradeError(socket, 4003, error || 'Invalid or expired token');
-        return;
-      }
-
-      // Handle the WebSocket upgrade
-      this.wss.handleUpgrade(request, socket, head, (ws) => {
-        // Pass the decoded payload as the user object
-        this.wss.emit('connection', ws, request, decoded);
-      });
-    });
-
-    // Handle new WebSocket connections
-    this.wss.on('connection', (ws, req, user) => {
-      // Ensure user object exists and has an id
-      if (!user || !user.id) {
-        console.error('Invalid user object in WebSocket connection:', user);
-        ws.close(4001, 'Invalid user authentication');
-        return;
-      }
-      
-      const userId = user.id.toString();
-      
-      console.log(`New WebSocket connection from user ${userId}`);
-      
-      // Add client to the clients map
-      if (!this.clients.has(userId)) {
-        this.clients.set(userId, new Set());
-      }
-      this.clients.get(userId).add(ws);
-
-      // Add user info to the WebSocket connection
-      ws.user = user;
-      ws.userId = userId;  // Store userId for easier access
-      ws.isAlive = true;
-      ws.connectedAt = new Date();
-      ws.rooms = new Set(); // track rooms for this socket
-
-      // Minimal role-based log on connect
-      const role = ws.user?.role || 'customer';
-      const roleLabel = role === 'driver' ? 'Driver' : 'Customer';
-      logger.info(`${roleLabel} connected: ${userId}`);
-
-      // Set up ping-pong for connection health
-      const pingIntervalId = setInterval(() => {
-        if (ws.isAlive === false) {
-          logger.warn(`Terminating inactive WebSocket connection: ${userId}`);
-          return ws.terminate();
-        }
-
-        ws.isAlive = false;
-        ws.ping();
-      }, pingInterval);
-
-      // Handle incoming messages (no verbose payload logging)
-      ws.on('message', async (message) => {
-        let requestId = null;
-        
-        try {
-          const parsedMessage = JSON.parse(message);
-          const { event, data } = parsedMessage;
-          requestId = parsedMessage.requestId;
-          
-          // Minimal event log without payload
-          if (event) logger.info(`WS event received: ${event}`);
-
-          // Handle recovery request
-          if (event === 'recovery.request') {
-            if (!data) {
-              throw new Error('Request data is required');
-            }
-            
-            // Add default values if not provided
-            const recoveryRequest = {
-              requestId,
-              data: {
-                ...data,
-                preferences: data.preferences || [],
-                startTime: data.startTime || new Date(),
-                hasHelper: data.hasHelper || false,
-                helperCount: data.helperCount || 0,
-                helperRate: data.helperRate
-              }
-            };
-            
-            await this.recoveryHandler.handleRecoveryRequest(ws, recoveryRequest);
-            return;
-          }
-
-          // Handle driver assignment
-          if (event === 'driver.assignment') {
-            if (!data) {
-              throw new Error('Assignment data is required');
-            }
-            
-            await this.recoveryHandler.handleDriverAssignment(ws, {
-              requestId,
-              data: {
-                ...data,
-                assignedAt: new Date()
-              }
-            });
-            return;
-          }
-
-          // Handle accept request
-          if (event === 'accept_request') {
-            if (!data) {
-              throw new Error('Accept request data is required');
-            }
-            
-            const acceptRequest = {
-              requestId,
-              data: {
-                ...data,
-                timestamp: new Date()
-              }
-            };
-            
-            await this.recoveryHandler.handleAcceptRequest(ws, acceptRequest);
-            return;
-          }
-
-          // Handle other events...
-          const handlers = this.handlers.get(event) || [];
-          if (handlers.length === 0) {
-            // Minimal warn without payload dumps
-            logger.warn(`No handlers registered for event: ${event}`);
-            this.sendError(ws, { requestId, code: ERROR_CODES.UNHANDLED_EVENT, message: `Unhandled event: ${event}` });
-            return;
-          }
-
-          // Call all registered handlers for this event
-          for (const handler of handlers) {
-            try {
-              await handler(ws, { requestId, data });
-            } catch (error) {
-              // Minimal error log without payload
-              logger.error(`WS message error: ${error.message}`);
-              this.sendError(ws, { requestId, code: error.code || ERROR_CODES.INVALID_REQUEST, message: error.message || 'Invalid message format' });
-            }
-          }
-        } catch (error) {
-          // Minimal error log without payload
-          logger.error(`WS message error: ${error.message}`);
-          this.sendError(ws, { requestId, code: error.code || ERROR_CODES.INVALID_REQUEST, message: error.message || 'Invalid message format' });
-        }
-      });
-
-      // Handle client disconnection
-      ws.on('close', () => {
-        clearInterval(pingIntervalId);
-        
-        // Remove client from the clients map
-        if (this.clients.has(userId)) {
-          const userSockets = this.clients.get(userId);
-          userSockets.delete(ws);
-          
-          // Remove user entry if no more connections
-          if (userSockets.size === 0) {
-            this.clients.delete(userId);
-          }
-        }
-
-        // Leave all rooms this socket was part of
-        if (ws.rooms && ws.rooms.size > 0) {
-          for (const room of Array.from(ws.rooms)) {
-            this.leaveRoom(ws, room);
-          }
-        }
-
-        logger.info(`WebSocket client disconnected: ${userId}`);
-      });
-
-      // Handle ping-pong
-      ws.on('pong', () => {
-        ws.isAlive = true;
-      });
-
-      // Send welcome message
-      this.send(ws, {
-        event: WS_EVENTS.AUTHENTICATED,
-        data: {
-          userId,
-          role: ws.user?.role || 'customer',
-          timestamp: new Date().toISOString(),
-        },
-      });
-
-      // Auto-join default rooms and log only role-based join
-      const joined = this._joinDefaultRooms(ws);
-      const roleRoom = joined.find(r => r.startsWith('role:'));
-      logger.info(`${roleLabel} joined room`);
-    });
-
-    // Handle server errors
-    this.wss.on('error', (error) => {
-      logger.error('WebSocket server error:', error);
-    });
-
-    logger.info(`WebSocket server initialized on path: ${path}`);
-  }
-
-  /**
-   * Handle WebSocket upgrade errors
-   * @private
-   */
-  handleUpgradeError(socket, code, message) {
-    logger.warn(`WebSocket upgrade failed: ${message} (${code})`);
-    socket.write(
-      `HTTP/1.1 ${code} ${message}\r\n` +
-      'Connection: close\r\n' +
-      'Content-Type: application/json\r\n' +
-      '\r\n' +
-      JSON.stringify({
-        success: false,
-        error: {
-          code,
-          message,
-        },
-      })
-    );
-    socket.destroy();
-  }
-
-  /**
-   * Register an event handler
-   * @param {string} event - Event name
-   * @param {Function} handler - Event handler function
-   * @returns {Function} Unsubscribe function
-   */
+  // Register an event handler
   on(event, handler) {
     if (!this.handlers.has(event)) {
       this.handlers.set(event, new Set());
     }
     this.handlers.get(event).add(handler);
-    
-    // Return unsubscribe function
     return () => this.off(event, handler);
   }
 
-  /**
-   * Remove an event handler
-   * @param {string} event - Event name
-   * @param {Function} handler - Event handler function to remove
-   */
+  // Remove an event handler
   off(event, handler) {
     if (this.handlers.has(event)) {
       this.handlers.get(event).delete(handler);
-      
-      // Clean up empty handler sets
       if (this.handlers.get(event).size === 0) {
         this.handlers.delete(event);
       }
     }
   }
 
-  /**
-   * Emit an event to all registered handlers
-   * @param {string} event - Event name
-   * @param {WebSocket} ws - WebSocket connection
-   * @param {*} data - Event data
-   * @param {Function} [callback] - Callback function
-   * @returns {Promise<void>}
-   */
+  // Emit an event to all registered handlers
   async emit(event, ws, data, callback) {
     const handlers = this.handlers.get(event) || new Set();
-    
-    // If no handlers and it's not a system event, emit an error
-    if (handlers.size === 0 && !event.startsWith('system:')) {
+    if (handlers.size === 0 && !String(event).startsWith("system:")) {
       logger.warn(`No handlers registered for event: ${event}`);
       if (callback) {
         callback({
@@ -404,65 +206,41 @@ class WebSocketService {
       }
       return;
     }
-
-    // Call all handlers in parallel
     await Promise.all(
-      Array.from(handlers).map(handler => {
+      Array.from(handlers).map((h) => {
         try {
-          return Promise.resolve(handler(ws, data, callback));
-        } catch (error) {
-          logger.error(`Error in ${event} handler:`, error);
-          return Promise.reject(error);
+          return Promise.resolve(h(ws, data, callback));
+        } catch (e) {
+          logger.error(`Error in ${event} handler:`, e);
+          return Promise.reject(e);
         }
       })
     );
   }
 
-  /**
-   * Send a message to a WebSocket client
-   * @param {WebSocket} ws - WebSocket connection
-   * @param {Object} message - Message to send
-   */
+  // Send JSON to a socket
   send(ws, message) {
-    if (ws.readyState === 1) { // 1 = OPEN
+    if (ws && ws.readyState === 1) {
       try {
         ws.send(JSON.stringify(message));
-      } catch (error) {
-        logger.error('Error sending WebSocket message:', error);
+      } catch (e) {
+        logger.error("Error sending WebSocket message:", e);
       }
     }
   }
 
-  /**
-   * Send an error message to a WebSocket client
-   * @param {WebSocket} ws - WebSocket connection
-   * @param {Object} options - Error options
-   * @param {string} options.requestId - Request ID for correlation
-   * @param {number} options.code - Error code
-   * @param {string} options.message - Error message
-   * @param {string} [options.details] - Additional error details
-   */
-  sendError(ws, { requestId, code, message, details }) {
-    const errorResponse = {
-      event: 'error',
-      requestId,
-      error: {
-        code,
-        message,
-        ...(details && { details })
-      },
-      timestamp: new Date().toISOString()
-    };
-    
-    this.send(ws, errorResponse);
+  // Send standardized error
+  sendError(ws, { code, message, details }) {
+    this.send(ws, {
+      event: "error",
+      error: { code, message, ...(details && { details }) },
+      timestamp: new Date().toISOString(),
+    });
   }
 
-  /**
-   * Broadcast a message to all connected clients
-   * @param {Object} message - Message to broadcast
-   * @param {Function} [filter] - Optional filter function (ws => boolean)
-   */
+  // Broadcast to all clients (optionally filtered)
   broadcast(message, filter) {
+    if (!this.wss) return;
     this.wss.clients.forEach((client) => {
       if ((!filter || filter(client)) && client.readyState === 1) {
         this.send(client, message);
@@ -470,103 +248,42 @@ class WebSocketService {
     });
   }
 
-  /**
-   * Send a message to a specific user (all their connections)
-   * @param {string} userId - User ID
-   * @param {Object} message - Message to send
-   */
+  // Target helpers
   sendToUser(userId, message) {
-    const userSockets = this.clients.get(userId);
+    const userSockets = this.clients.get(String(userId));
     if (userSockets) {
       userSockets.forEach((ws) => {
-        if (ws.readyState === 1) { // 1 = OPEN
-          this.send(ws, message);
-        }
+        if (ws.readyState === 1) this.send(ws, message);
       });
     }
   }
-
-  /**
-   * Send a message to multiple users
-   * @param {string[]} userIds - Array of user IDs
-   * @param {Object} message - Message to send
-   */
   sendToUsers(userIds, message) {
-    userIds.forEach(userId => this.sendToUser(userId, message));
+    (userIds || []).forEach((id) => this.sendToUser(id, message));
   }
-
-  /**
-   * Send a message to all users with a specific role
-   * @param {string} role - User role
-   * @param {Object} message - Message to send
-   */
   sendToRole(role, message) {
+    if (!this.wss) return;
     this.wss.clients.forEach((client) => {
-      if (client.readyState === 1 && client.user?.role === role) {
+      if (client.readyState === 1 && client.user?.role === role)
         this.send(client, message);
-      }
     });
   }
-
-  /**
-   * Get all connected user IDs
-   * @returns {string[]} Array of user IDs
-   */
   getConnectedUsers() {
     return Array.from(this.clients.keys());
   }
-
-  /**
-   * Check if a user is connected
-   * @param {string} userId - User ID to check
-   * @returns {boolean} True if the user is connected
-   */
   isUserConnected(userId) {
-    return this.clients.has(userId) && this.clients.get(userId).size > 0;
+    return (
+      this.clients.has(String(userId)) &&
+      this.clients.get(String(userId)).size > 0
+    );
   }
 
-  /**
-   * Close the WebSocket server
-   * @returns {Promise<void>}
-   */
-  close() {
-    return new Promise((resolve, reject) => {
-      if (!this.wss) {
-        return resolve();
-      }
-
-      // Close all client connections
-      this.wss.clients.forEach((client) => {
-        client.close(1001, 'Server is shutting down');
-      });
-
-      // Close the server
-      this.wss.close((error) => {
-        if (error) {
-          logger.error('Error closing WebSocket server:', error);
-          return reject(error);
-        }
-        logger.info('WebSocket server closed');
-        this.wss = null;
-        this.clients.clear();
-        this.handlers.clear();
-        this.rooms.clear();
-        resolve();
-      });
-    });
-  }
-
-  // Create or join a room
+  // Rooms
   joinRoom(ws, roomName) {
-    if (!this.rooms.has(roomName)) {
-      this.rooms.set(roomName, new Set());
-    }
+    if (!this.rooms.has(roomName)) this.rooms.set(roomName, new Set());
     const room = this.rooms.get(roomName);
     room.add(ws);
     ws.rooms?.add(roomName);
   }
-
-  // Leave a room
   leaveRoom(ws, roomName) {
     const room = this.rooms.get(roomName);
     if (!room) return;
@@ -574,27 +291,276 @@ class WebSocketService {
     ws.rooms?.delete(roomName);
     if (room.size === 0) this.rooms.delete(roomName);
   }
-
-  // Send to a specific room
   sendToRoom(roomName, message) {
     const room = this.rooms.get(roomName);
     if (!room) return;
     room.forEach((client) => {
-      if (client.readyState === 1) {
+      if (client.readyState === 1) this.send(client, message);
+    });
+  }
+  sendToRoomUsers(roomName, userIds = [], message) {
+    const room = this.rooms.get(roomName);
+    if (!room || !Array.isArray(userIds) || userIds.length === 0) return;
+    const allowed = new Set(userIds.map(String));
+    room.forEach((client) => {
+      if (client.readyState === 1 && allowed.has(String(client.userId))) {
         this.send(client, message);
       }
     });
   }
-
-  // Internal: join default role/user rooms and return list
   _joinDefaultRooms(ws) {
     const rooms = [];
     const userRoom = `user:${ws.userId}`;
-    const roleRoom = `role:${ws.user?.role || 'unknown'}`;
+    // Re-validate role from DB to avoid defaulting to customer mistakenly
+    rooms.push(userRoom);
     this.joinRoom(ws, userRoom);
-    this.joinRoom(ws, roleRoom);
-    rooms.push(userRoom, roleRoom);
     return rooms;
+  }
+
+  // Build normalized room name for a service/subservice
+  _serviceRoomName(serviceType, subService) {
+    const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '_');
+    const st = norm(serviceType);
+    const sub = norm(subService);
+    if (!st) return null;
+    return sub ? `svc:${st}:${sub}` : `svc:${st}`;
+  }
+
+  // Join service/subservice rooms for a socket
+  joinServiceRooms(ws, services = []) {
+    for (const s of services) {
+      const rn = this._serviceRoomName(s?.serviceType, s?.subService);
+      if (rn) this.joinRoom(ws, rn);
+    }
+  }
+
+  // Initialize server and handle auth/upgrade
+  initialize(server, { path = "/ws", jwtSecret, pingInterval = 30000 } = {}) {
+    if (!jwtSecret)
+      throw new Error("JWT secret is required for WebSocket authentication");
+    this.jwtSecret = jwtSecret;
+    this.wss = new WebSocketServer({ noServer: true });
+
+    // HTTP upgrade -> WS
+    server.on("upgrade", (request, socket, head) => {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      if (url.pathname !== path) {
+        socket.destroy();
+        return;
+      }
+      const token =
+        url.searchParams.get("token") ||
+        (request.headers.authorization?.startsWith("Bearer ")
+          ? request.headers.authorization.split(" ")[1]
+          : null);
+      if (!token)
+        return this.handleUpgradeError(
+          socket,
+          4001,
+          "No authentication token provided"
+        );
+      const { valid, decoded, error } = verifyToken(token, this.jwtSecret);
+      if (!valid || !decoded)
+        return this.handleUpgradeError(
+          socket,
+          4003,
+          error || "Invalid or expired token"
+        );
+      this.wss.handleUpgrade(request, socket, head, (ws) => {
+        this.wss.emit("connection", ws, request, decoded);
+      });
+    });
+
+    // New connection
+    this.wss.on("connection", (ws, req, user) => {
+      if (!user || !user.id) {
+        logger.error("Invalid user object in WebSocket connection:", user);
+        ws.close(4001, "Invalid user authentication");
+        return;
+      }
+      const userId = String(user.id);
+      if (!this.clients.has(userId)) this.clients.set(userId, new Set());
+      this.clients.get(userId).add(ws);
+      ws.user = user;
+      ws.userId = userId;
+      ws.isAlive = true;
+      ws.connectedAt = new Date();
+      ws.rooms = new Set();
+      const role = ws.user?.role || "customer";
+      const roleLabel = role === "driver" ? "Driver" : "Customer";
+      logger.info(`${roleLabel} connected: ${userId}`);
+
+      const pingIntervalId = setInterval(() => {
+        if (ws.isAlive === false) {
+          logger.warn(`Terminating inactive WebSocket connection: ${userId}`);
+          return ws.terminate();
+        }
+        ws.isAlive = false;
+        ws.ping();
+      }, pingInterval);
+
+      ws.on("message", async (message) => {
+        try {
+          // Normalize to string and trim
+          let raw = typeof message === "string" ? message : (message?.toString?.() || "");
+          raw = raw.trim();
+          // Empty or non-JSON -> error
+          if (!raw || (!raw.startsWith("{") && !raw.startsWith("["))) {
+            return this.sendError(ws, {
+              code: ERROR_CODES.INVALID_REQUEST,
+              message: "Invalid or empty message payload",
+              details: { hint: "Send a JSON object with { event, data }" },
+            });
+          }
+
+          let parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (e) {
+            return this.sendError(ws, {
+              code: ERROR_CODES.INVALID_REQUEST,
+              message: e?.message || "Invalid JSON payload",
+            });
+          }
+
+          const { event, data } = parsed || {};
+          if (!event || typeof event !== "string") {
+            return this.sendError(ws, {
+              code: ERROR_CODES.INVALID_REQUEST,
+              message: "Missing or invalid 'event' field",
+            });
+          }
+
+          logger.info(`WS event received: ${event}`);
+          const handlers = this.handlers.get(event) || new Set();
+          if (
+            handlers.size === 0 &&
+            event !== "recovery.request" &&
+            event !== "driver.assignment" &&
+            event !== "accept_request"
+          ) {
+            logger.warn(`No handlers registered for event: ${event}`);
+            return this.sendError(ws, {
+              code: ERROR_CODES.UNHANDLED_EVENT,
+              message: `Unhandled event: ${event}`,
+            });
+          }
+
+          // Dispatch to handlers (pass only data)
+          for (const handler of Array.from(handlers)) {
+            try {
+              await handler(ws, { data });
+            } catch (err) {
+              logger.error(`WS handler error for ${event}: ${err?.message}`);
+              this.sendError(ws, {
+                code: err?.code || ERROR_CODES.INVALID_REQUEST,
+                message: err?.message || "Handler error",
+              });
+            }
+          }
+        } catch (err) {
+          // Final safety net
+          logger.error(`WS message fatal error: ${err?.message}`);
+          this.sendError(ws, {
+            code: ERROR_CODES.INVALID_REQUEST,
+            message: err?.message || "Invalid message",
+          });
+        }
+      });
+
+      ws.on("close", () => {
+        clearInterval(pingIntervalId);
+        const set = this.clients.get(userId);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) this.clients.delete(userId);
+        }
+        if (ws.rooms && ws.rooms.size > 0) {
+          for (const room of Array.from(ws.rooms)) this.leaveRoom(ws, room);
+        }
+        logger.info(`WebSocket client disconnected: ${userId}`);
+      });
+
+      ws.on("pong", () => {
+        ws.isAlive = true;
+      });
+
+      this.send(ws, {
+        event: WS_EVENTS.AUTHENTICATED,
+        data: (ws.user?.role || "customer") === "driver"
+          ? { driverId: userId }
+          : { userId },
+      });
+      // After AUTH, resolve and join proper role room from DB, not just token
+      (async () => {
+        try {
+          const dbUser = await User.findById(userId).select('role services vehicleDetails driverSettings').lean();
+          const dbRole = dbUser?.role || 'customer';
+          this.joinRoom(ws, `role:${dbRole}`);
+          ws.user.role = dbRole;
+          // Optionally auto-join service rooms for drivers based on their capabilities
+          if (dbRole === 'driver') {
+            // If you store explicit services list on user, map them; else join broad rooms
+            const services = [];
+            // Example: join car recovery broad room by default
+            // You can enrich this with actual driver service registry
+            services.push({ serviceType: 'car recovery' });
+            this.joinServiceRooms(ws, services);
+          }
+          logger.info(`Joined rooms: ${Array.from(ws.rooms || []).join(', ')}`);
+          // Emit authenticated with dynamic role from DB and appropriate id field
+          this.send(ws, {
+            event: WS_EVENTS.AUTHENTICATED,
+            data: dbRole === 'driver' ? { driverId: userId, role: 'driver' } : { userId, role: 'customer' },
+          });
+        } catch (e) {
+          logger.warn('Room join failed:', e?.message);
+        }
+      })();
+    });
+
+    this.wss.on("error", (error) => {
+      logger.error("WebSocket server error:", error);
+    });
+    logger.info(`WebSocket server initialized on path: ${path}`);
+  }
+
+  handleUpgradeError(socket, code, message) {
+    try {
+      socket.write(
+        `HTTP/1.1 ${code} ${message}\r\n` +
+          "Connection: close\r\n" +
+          "Content-Type: application/json\r\n" +
+          "\r\n" +
+          JSON.stringify({ success: false, error: { code, message } })
+      );
+    } catch {}
+    try {
+      socket.destroy();
+    } catch {}
+  }
+
+  close() {
+    return new Promise((resolve, reject) => {
+      if (!this.wss) return resolve();
+      this.wss.clients.forEach((client) => {
+        try {
+          client.close(1001, "Server is shutting down");
+        } catch {}
+      });
+      this.wss.close((error) => {
+        if (error) {
+          logger.error("Error closing WebSocket server:", error);
+          return reject(error);
+        }
+        logger.info("WebSocket server closed");
+        this.wss = null;
+        this.clients.clear();
+        this.handlers.clear();
+        this.rooms.clear();
+        resolve();
+      });
+    });
   }
 }
 

@@ -19,21 +19,21 @@ const getDriverSocketId = (driverId) => {
 
 // Helper function to get Socket.IO instance
 const getSocketIO = (req) => {
-  return req.app.get('io');
+  return req.app.get("io");
 };
 
 // Helper function to get fare adjustment settings from admin configuration
 const getFareAdjustmentSettings = async (serviceType) => {
   try {
-    const pricingConfig = await PricingConfig.findOne({ 
-      serviceType, 
-      isActive: true 
+    const pricingConfig = await PricingConfig.findOne({
+      serviceType,
+      isActive: true,
     });
-    
+
     if (pricingConfig && pricingConfig.fareAdjustmentSettings) {
       return pricingConfig.fareAdjustmentSettings;
     }
-    
+
     // Default settings if no config found
     return {
       allowedAdjustmentPercentage: 3,
@@ -42,7 +42,7 @@ const getFareAdjustmentSettings = async (serviceType) => {
       enableDriverFareAdjustment: true,
     };
   } catch (error) {
-    console.error('Error fetching fare adjustment settings:', error);
+    console.error("Error fetching fare adjustment settings:", error);
     // Return default settings on error
     return {
       allowedAdjustmentPercentage: 3,
@@ -77,7 +77,12 @@ const getZone = (lat, lon) => {
 };
 
 // Calculate fare based on service type and vehicle category
-const calculateFareByServiceType = (serviceType, vehicleType, distance, routeType) => {
+const calculateFareByServiceType = (
+  serviceType,
+  vehicleType,
+  distance,
+  routeType
+) => {
   let baseFare = 0;
   let perKmRate = 7; // Default rate
 
@@ -186,7 +191,7 @@ const calculateFareByServiceType = (serviceType, vehicleType, distance, routeTyp
       perKmRate = 7;
   }
 
-  let totalFare = baseFare + (distance * perKmRate);
+  let totalFare = baseFare + distance * perKmRate;
 
   // Apply route type multiplier
   if (routeType === "two_way") {
@@ -197,10 +202,10 @@ const calculateFareByServiceType = (serviceType, vehicleType, distance, routeTyp
 };
 
 const createBooking = asyncHandler(async (req, res) => {
-  console.log('=== CREATE BOOKING REQUEST RECEIVED ===');
-  console.log('User ID:', req.user._id);
-  console.log('Request body:', JSON.stringify(req.body, null, 2));
-  
+  console.log("=== CREATE BOOKING REQUEST RECEIVED ===");
+  console.log("User ID:", req.user._id);
+  console.log("Request body:", JSON.stringify(req.body, null, 2));
+
   const {
     pickupLocation,
     dropoffLocation,
@@ -223,9 +228,14 @@ const createBooking = asyncHandler(async (req, res) => {
     itemDetails = [],
     serviceOptions = {},
     extras = [],
-    paymentMethod = "cash"
+    paymentMethod = "cash",
+    // NEW: allow admin to create on behalf of a customer
+    customerId,
   } = req.body;
   const userId = req.user._id;
+  const actingAsAdmin =
+    req.user.role === "admin" || req.user.role === "superadmin";
+  const bookingUserId = actingAsAdmin && customerId ? customerId : userId;
 
   // Validation
   if (
@@ -245,9 +255,14 @@ const createBooking = asyncHandler(async (req, res) => {
     });
   }
 
-  if (!["car cab", "bike", "car recovery", "shifting & movers"].includes(serviceType)) {
+  if (
+    !["car cab", "bike", "car recovery", "shifting & movers"].includes(
+      serviceType
+    )
+  ) {
     return res.status(400).json({
-      message: "Invalid service type. Supported services: car cab, bike, car recovery, shifting & movers",
+      message:
+        "Invalid service type. Supported services: car cab, bike, car recovery, shifting & movers",
       token: req.cookies.token,
     });
   }
@@ -255,19 +270,30 @@ const createBooking = asyncHandler(async (req, res) => {
   // Validate pinned driver if specified
   if (driverPreference === "pinned" && !pinnedDriverId) {
     return res.status(400).json({
-      message: "Pinned driver ID is required when selecting pinned driver preference",
+      message:
+        "Pinned driver ID is required when selecting pinned driver preference",
       token: req.cookies.token,
     });
   }
 
   // Validate pink captain options if specified
   if (driverPreference === "pink_captain") {
-    const validPinkOptions = ['femalePassengersOnly', 'familyRides', 'safeZoneRides', 'familyWithGuardianMale', 'maleWithoutFemale', 'noMaleCompanion'];
-    const hasValidOption = validPinkOptions.some(option => pinkCaptainOptions[option] === true);
-    
+    const validPinkOptions = [
+      "femalePassengersOnly",
+      "familyRides",
+      "safeZoneRides",
+      "familyWithGuardianMale",
+      "maleWithoutFemale",
+      "noMaleCompanion",
+    ];
+    const hasValidOption = validPinkOptions.some(
+      (option) => pinkCaptainOptions[option] === true
+    );
+
     if (!hasValidOption) {
       return res.status(400).json({
-        message: "At least one pink captain option must be selected (femalePassengersOnly, familyRides, safeZoneRides, familyWithGuardianMale, maleWithoutFemale, or noMaleCompanion)",
+        message:
+          "At least one pink captain option must be selected (femalePassengersOnly, familyRides, safeZoneRides, familyWithGuardianMale, maleWithoutFemale, or noMaleCompanion)",
         token: req.cookies.token,
       });
     }
@@ -275,19 +301,43 @@ const createBooking = asyncHandler(async (req, res) => {
 
   // Validate furniture details for shifting & movers
   if (serviceType === "shifting & movers") {
-    const furnitureKeys = ['sofas', 'beds', 'tables', 'chairs', 'wardrobes', 'refrigerator', 'washingMachine', 'boxes', 'diningTable', 'bookshelf', 'piano', 'treadmill', 'officeDesk', 'artwork', 'tvStand', 'dresser', 'mattress', 'mirror'];
-    const hasFurnitureItems = furnitureKeys.some(key => furnitureDetails[key] && furnitureDetails[key] > 0) || 
-                             (furnitureDetails.other && furnitureDetails.other.trim() !== '');
-    
+    const furnitureKeys = [
+      "sofas",
+      "beds",
+      "tables",
+      "chairs",
+      "wardrobes",
+      "refrigerator",
+      "washingMachine",
+      "boxes",
+      "diningTable",
+      "bookshelf",
+      "piano",
+      "treadmill",
+      "officeDesk",
+      "artwork",
+      "tvStand",
+      "dresser",
+      "mattress",
+      "mirror",
+    ];
+    const hasFurnitureItems =
+      furnitureKeys.some(
+        (key) => furnitureDetails[key] && furnitureDetails[key] > 0
+      ) ||
+      (furnitureDetails.other && furnitureDetails.other.trim() !== "");
+
     if (!hasFurnitureItems) {
       return res.status(400).json({
-        message: "Furniture details are required for shifting & movers service. Please specify at least one item.",
+        message:
+          "Furniture details are required for shifting & movers service. Please specify at least one item.",
         token: req.cookies.token,
       });
     }
   }
 
-  const user = await User.findById(userId);
+  // Validate the target customer (admin can create on behalf of a customer)
+  const user = await User.findById(bookingUserId);
   if (!user || user.kycLevel < 1 || user.kycStatus !== "approved") {
     return res.status(403).json({
       message: "KYC Level 1 must be approved to create a booking",
@@ -297,8 +347,14 @@ const createBooking = asyncHandler(async (req, res) => {
 
   // Use distance from frontend (convert meters to kilometers for internal calculations)
   const distanceInKm = distanceInMeters / 1000;
-  const pickupZone = getZone(pickupLocation.coordinates[1], pickupLocation.coordinates[0]);
-  const dropoffZone = getZone(dropoffLocation.coordinates[1], dropoffLocation.coordinates[0]);
+  const pickupZone = getZone(
+    pickupLocation.coordinates[1],
+    pickupLocation.coordinates[0]
+  );
+  const dropoffZone = getZone(
+    dropoffLocation.coordinates[1],
+    dropoffLocation.coordinates[0]
+  );
 
   // Enhanced fare calculation based on service type
   let fareCalculation = {};
@@ -306,60 +362,72 @@ const createBooking = asyncHandler(async (req, res) => {
 
   try {
     if (serviceType === "shifting & movers") {
-      const pricingConfig = await PricingConfig.findOne({ 
-        serviceType: "shifting_movers", 
-        isActive: true 
+      const pricingConfig = await PricingConfig.findOne({
+        serviceType: "shifting_movers",
+        isActive: true,
       });
-      
+
       if (pricingConfig) {
         const bookingData = {
-          serviceType: 'shifting_movers',
+          serviceType: "shifting_movers",
           distance: distanceInKm,
           duration: 0, // You may need to calculate this based on distance
           vehicleType,
           pricingConfig: pricingConfig.shiftingMoversPricing,
           furnitureDetails,
-          ...serviceDetails
+          ...serviceDetails,
         };
         fareCalculation = await calculateFare(bookingData);
         totalCalculatedFare = fareCalculation.total;
       } else {
         // Fallback to old calculation
-        totalCalculatedFare = calculateFareByServiceType(serviceType, vehicleType, distanceInKm, routeType);
+        totalCalculatedFare = calculateFareByServiceType(
+          serviceType,
+          vehicleType,
+          distanceInKm,
+          routeType
+        );
       }
     } else if (serviceType === "car recovery") {
-      const pricingConfig = await PricingConfig.findOne({ 
-        serviceType: "car_recovery", 
-        isActive: true 
+      const pricingConfig = await PricingConfig.findOne({
+        serviceType: "car_recovery",
+        isActive: true,
       });
-      
+
       if (pricingConfig) {
         const bookingData = {
-          serviceType: 'car_recovery',
+          serviceType: "car_recovery",
           vehicleType,
           distance: distanceInKm,
           duration: 0, // You may need to calculate this based on distance
           pricingConfig: pricingConfig.carRecoveryPricing,
-          ...serviceDetails
+          ...serviceDetails,
         };
         fareCalculation = await calculateFare(bookingData);
         totalCalculatedFare = fareCalculation.total;
       } else {
         // Fallback to old calculation
-        totalCalculatedFare = calculateFareByServiceType(serviceType, vehicleType, distanceInKm, routeType);
+        totalCalculatedFare = calculateFareByServiceType(
+          serviceType,
+          vehicleType,
+          distanceInKm,
+          routeType
+        );
       }
-    } else if (["workshop", "tyre shop", "key unlocker"].includes(serviceType)) {
-      const pricingConfig = await PricingConfig.findOne({ 
-        serviceType: "appointment_based", 
-        isActive: true 
+    } else if (
+      ["workshop", "tyre shop", "key unlocker"].includes(serviceType)
+    ) {
+      const pricingConfig = await PricingConfig.findOne({
+        serviceType: "appointment_based",
+        isActive: true,
       });
-      
+
       if (pricingConfig) {
         const bookingData = {
-          serviceType: 'appointment_service',
+          serviceType: "appointment_service",
           serviceSubType: serviceType,
           pricingConfig: pricingConfig.appointmentServicePricing,
-          ...serviceDetails
+          ...serviceDetails,
         };
         fareCalculation = await calculateFare(bookingData);
         totalCalculatedFare = fareCalculation.total;
@@ -369,16 +437,28 @@ const createBooking = asyncHandler(async (req, res) => {
       }
     } else {
       // For car cab and bike, use existing calculation
-      totalCalculatedFare = calculateFareByServiceType(serviceType, vehicleType, distanceInKm, routeType);
+      totalCalculatedFare = calculateFareByServiceType(
+        serviceType,
+        vehicleType,
+        distanceInKm,
+        routeType
+      );
     }
   } catch (error) {
-    console.error('Fare calculation error:', error);
+    console.error("Fare calculation error:", error);
     // Fallback to old calculation method
-    totalCalculatedFare = offeredFare || calculateFareByServiceType(serviceType, vehicleType, distanceInKm, routeType);
+    totalCalculatedFare =
+      offeredFare ||
+      calculateFareByServiceType(
+        serviceType,
+        vehicleType,
+        distanceInKm,
+        routeType
+      );
   }
 
   const booking = new Booking({
-    user: userId,
+    user: bookingUserId,
     pickupLocation: {
       type: "Point",
       coordinates: pickupLocation.coordinates,
@@ -411,7 +491,7 @@ const createBooking = asyncHandler(async (req, res) => {
     driverFilters: {
       vehicleModel: driverFilters.vehicleModel,
       specificDriverId: driverFilters.specificDriverId,
-      searchRadius: driverFilters.searchRadius || 10 // Default 10km radius
+      searchRadius: driverFilters.searchRadius || 10, // Default 10km radius
     },
     fareCalculation: {
       baseFare: fareCalculation.baseFare || totalCalculatedFare,
@@ -420,89 +500,142 @@ const createBooking = asyncHandler(async (req, res) => {
       locationFare: fareCalculation.locationFare || 0,
       itemFare: fareCalculation.itemFare || 0,
       platformCharges: fareCalculation.platformCharges || 0,
-      totalCalculatedFare
+      totalCalculatedFare,
     },
     itemDetails,
     serviceOptions,
     // Service-specific details
     serviceDetails: {
-      shiftingMovers: serviceType === "shifting & movers" ? {
-        selectedServices: {
-          loadingUnloading: serviceDetails.shiftingMovers?.selectedServices?.loadingUnloading || false,
-          packing: serviceDetails.shiftingMovers?.selectedServices?.packing || false,
-          fixing: serviceDetails.shiftingMovers?.selectedServices?.fixing || false,
-          helpers: serviceDetails.shiftingMovers?.selectedServices?.helpers || false,
-          wheelchairHelper: serviceDetails.shiftingMovers?.selectedServices?.wheelchairHelper || false
-        },
-        pickupFloorDetails: {
-          floor: serviceDetails.shiftingMovers?.pickupFloorDetails?.floor || 0,
-          hasLift: serviceDetails.shiftingMovers?.pickupFloorDetails?.hasLift !== undefined ? serviceDetails.shiftingMovers.pickupFloorDetails.hasLift : true,
-          accessType: serviceDetails.shiftingMovers?.pickupFloorDetails?.accessType || "ground"
-        },
-        dropoffFloorDetails: {
-          floor: serviceDetails.shiftingMovers?.dropoffFloorDetails?.floor || 0,
-          hasLift: serviceDetails.shiftingMovers?.dropoffFloorDetails?.hasLift !== undefined ? serviceDetails.shiftingMovers.dropoffFloorDetails.hasLift : true,
-          accessType: serviceDetails.shiftingMovers?.dropoffFloorDetails?.accessType || "ground"
-        },
-        extras: Array.isArray(extras) ? extras.filter(item => item.name && item.count > 0) : []
-      } : undefined,
-      carRecovery: serviceType === "car recovery" ? {
-        issueDescription: serviceDetails.carRecovery?.issueDescription || "",
-        urgencyLevel: serviceDetails.carRecovery?.urgencyLevel || "medium",
-        needHelper: serviceDetails.carRecovery?.needHelper || false,
-        wheelchairHelper: serviceDetails.carRecovery?.wheelchairHelper || false
-      } : undefined
+      shiftingMovers:
+        serviceType === "shifting & movers"
+          ? {
+              selectedServices: {
+                loadingUnloading:
+                  serviceDetails.shiftingMovers?.selectedServices
+                    ?.loadingUnloading || false,
+                packing:
+                  serviceDetails.shiftingMovers?.selectedServices?.packing ||
+                  false,
+                fixing:
+                  serviceDetails.shiftingMovers?.selectedServices?.fixing ||
+                  false,
+                helpers:
+                  serviceDetails.shiftingMovers?.selectedServices?.helpers ||
+                  false,
+                wheelchairHelper:
+                  serviceDetails.shiftingMovers?.selectedServices
+                    ?.wheelchairHelper || false,
+              },
+              pickupFloorDetails: {
+                floor:
+                  serviceDetails.shiftingMovers?.pickupFloorDetails?.floor || 0,
+                hasLift:
+                  serviceDetails.shiftingMovers?.pickupFloorDetails?.hasLift !==
+                  undefined
+                    ? serviceDetails.shiftingMovers.pickupFloorDetails.hasLift
+                    : true,
+                accessType:
+                  serviceDetails.shiftingMovers?.pickupFloorDetails
+                    ?.accessType || "ground",
+              },
+              dropoffFloorDetails: {
+                floor:
+                  serviceDetails.shiftingMovers?.dropoffFloorDetails?.floor ||
+                  0,
+                hasLift:
+                  serviceDetails.shiftingMovers?.dropoffFloorDetails
+                    ?.hasLift !== undefined
+                    ? serviceDetails.shiftingMovers.dropoffFloorDetails.hasLift
+                    : true,
+                accessType:
+                  serviceDetails.shiftingMovers?.dropoffFloorDetails
+                    ?.accessType || "ground",
+              },
+              extras: Array.isArray(extras)
+                ? extras.filter((item) => item.name && item.count > 0)
+                : [],
+            }
+          : undefined,
+      carRecovery:
+        serviceType === "car recovery"
+          ? {
+              issueDescription:
+                serviceDetails.carRecovery?.issueDescription || "",
+              urgencyLevel:
+                serviceDetails.carRecovery?.urgencyLevel || "medium",
+              needHelper: serviceDetails.carRecovery?.needHelper || false,
+              wheelchairHelper:
+                serviceDetails.carRecovery?.wheelchairHelper || false,
+            }
+          : undefined,
     },
     // Appointment details for appointment-based services
-    appointmentDetails: ["workshop", "tyre shop", "key unlocker"].includes(serviceType) ? {
-      isAppointmentBased: true,
-      appointmentTime: appointmentDetails.appointmentTime,
-      serviceProviderLocation: appointmentDetails.serviceProviderLocation,
-      gpsCheckIn: {
-        isRequired: true,
-        isCompleted: false
-      },
-      confirmationSurvey: {
-        customerSurvey: {
-          isCompleted: false
-        },
-        providerSurvey: {
-          isCompleted: false
-        },
-        finalStatus: "pending"
-      }
-    } : undefined
+    appointmentDetails: ["workshop", "tyre shop", "key unlocker"].includes(
+      serviceType
+    )
+      ? {
+          isAppointmentBased: true,
+          appointmentTime: appointmentDetails.appointmentTime,
+          serviceProviderLocation: appointmentDetails.serviceProviderLocation,
+          gpsCheckIn: {
+            isRequired: true,
+            isCompleted: false,
+          },
+          confirmationSurvey: {
+            customerSurvey: {
+              isCompleted: false,
+            },
+            providerSurvey: {
+              isCompleted: false,
+            },
+            finalStatus: "pending",
+          },
+        }
+      : undefined,
   });
 
   await booking.save();
-  console.log('=== BOOKING SAVED SUCCESSFULLY ===');
-  console.log('Booking ID:', booking._id);
-  console.log('User:', booking.user);
-  console.log('Service Type:', booking.serviceType);
-  console.log('Fare:', booking.fare);
+  console.log("=== BOOKING SAVED SUCCESSFULLY ===");
+  console.log("Booking ID:", booking._id);
+  console.log("User:", booking.user);
+  console.log("Service Type:", booking.serviceType);
+  console.log("Fare:", booking.fare);
 
   // Populate user information for the response
-  await booking.populate('user', 'username firstName lastName email phoneNumber gender kycLevel kycStatus role isVerified selfieImage');
+  await booking.populate(
+    "user",
+    "username firstName lastName email phoneNumber gender kycLevel kycStatus role isVerified selfieImage"
+  );
 
   // Get Socket.IO instance for real-time notifications
-  const io = req.app.get('io');
+  const io = req.app.get("io");
   if (io) {
     // Import the findNearbyDrivers function
-    const { findNearbyDrivers } = await import('../utils/socketHandlers.js');
-    
+    const { findNearbyDrivers } = await import("../utils/socketHandlers.js");
+
     // Find compatible drivers for this booking
     const compatibleDrivers = await findNearbyDrivers(booking, io);
-    
+
     // Emit to user that booking request was created
-    io.to(`user_${userId}`).emit('booking_request_created', {
+    io.to(`user_${bookingUserId}`).emit("booking_request_created", {
       requestId: booking._id,
-      message: 'Booking request created successfully',
-      driversFound: compatibleDrivers.length
+      message: "Booking request created successfully",
+      driversFound: compatibleDrivers.length,
     });
-    
+
+    // If admin created on behalf of a customer, also notify admin's user room
+    if (actingAsAdmin && String(userId) !== String(bookingUserId)) {
+      io.to(`user_${userId}`).emit("booking_request_created", {
+        requestId: booking._id,
+        message: "Booking request created for customer",
+        customerId: bookingUserId,
+        driversFound: compatibleDrivers.length,
+      });
+    }
+
     // Emit to only compatible drivers instead of broadcasting to all
-    compatibleDrivers.forEach(driver => {
-      io.to(`driver_${driver._id}`).emit('new_booking_request', {
+    compatibleDrivers.forEach((driver) => {
+      io.to(`driver_${driver._id}`).emit("new_booking_request", {
         requestId: booking._id,
         fare: booking.fare,
         raisedFare: booking.raisedFare,
@@ -527,20 +660,20 @@ const createBooking = asyncHandler(async (req, res) => {
           kycStatus: booking.user.kycStatus,
           role: booking.user.role,
           isVerified: booking.user.isVerified,
-          profileImage: booking.user.selfieImage
+          profileImage: booking.user.selfieImage,
         },
         from: {
           address: booking.pickupLocation.address,
           coordinates: booking.pickupLocation.coordinates,
-          zone: booking.pickupLocation.zone
+          zone: booking.pickupLocation.zone,
         },
         to: {
           address: booking.dropoffLocation.address,
           coordinates: booking.dropoffLocation.coordinates,
-          zone: booking.dropoffLocation.zone
+          zone: booking.dropoffLocation.zone,
         },
         createdAt: booking.createdAt,
-        driverDistance: driver.distance
+        driverDistance: driver.distance,
       });
     });
   }
@@ -583,17 +716,17 @@ const createBooking = asyncHandler(async (req, res) => {
       kycStatus: booking.user.kycStatus,
       role: booking.user.role,
       isVerified: booking.user.isVerified,
-      profileImage: booking.user.selfieImage
+      profileImage: booking.user.selfieImage,
     },
     from: {
       address: booking.pickupLocation.address,
       coordinates: booking.pickupLocation.coordinates,
-      zone: booking.pickupLocation.zone
+      zone: booking.pickupLocation.zone,
     },
     to: {
       address: booking.dropoffLocation.address,
       coordinates: booking.dropoffLocation.coordinates,
-      zone: booking.dropoffLocation.zone
+      zone: booking.dropoffLocation.zone,
     },
     createdAt: booking.createdAt,
     updatedAt: booking.updatedAt,
@@ -602,13 +735,13 @@ const createBooking = asyncHandler(async (req, res) => {
 });
 
 const getNearbyDrivers = asyncHandler(async (req, res) => {
-  const { 
-    lat, 
-    lon, 
-    serviceType, 
-    vehicleModel, 
-    specificDriverId, 
-    searchRadius = 10 
+  const {
+    lat,
+    lon,
+    serviceType,
+    vehicleModel,
+    specificDriverId,
+    searchRadius = 10,
   } = req.query;
   const userId = req.user._id;
 
@@ -642,15 +775,17 @@ const getNearbyDrivers = asyncHandler(async (req, res) => {
   // Build vehicle match criteria
   let vehicleMatch = { serviceType, status: "approved" };
   if (vehicleModel) {
-    vehicleMatch.model = new RegExp(vehicleModel, 'i'); // Case-insensitive search
+    vehicleMatch.model = new RegExp(vehicleModel, "i"); // Case-insensitive search
   }
 
   const drivers = await User.find(driverQuery)
-    .select("firstName lastName phoneNumber rating sponsorBy pendingVehicleData")
+    .select(
+      "firstName lastName phoneNumber rating sponsorBy pendingVehicleData"
+    )
     .populate({
-    path: "pendingVehicleData",
-    match: vehicleMatch,
-  });
+      path: "pendingVehicleData",
+      match: vehicleMatch,
+    });
 
   const nearbyDrivers = await Promise.all(
     drivers
@@ -766,7 +901,10 @@ const acceptBooking = asyncHandler(async (req, res) => {
     });
   }
 
-  if (booking.serviceCategory && booking.serviceCategory !== vehicle.serviceCategory) {
+  if (
+    booking.serviceCategory &&
+    booking.serviceCategory !== vehicle.serviceCategory
+  ) {
     return res.status(400).json({
       message: "Vehicle service category does not match booking requirements",
       token: req.cookies.token,
@@ -807,23 +945,23 @@ const acceptBooking = asyncHandler(async (req, res) => {
   await booking.save();
 
   // Populate booking with driver and vehicle details
-  await booking.populate('user driver vehicle');
+  await booking.populate("user driver vehicle");
 
   // Get Socket.IO instance for real-time notifications
-  const io = req.app.get('io');
+  const io = req.app.get("io");
   if (io) {
     // Import the findNearbyDrivers function
-    const { findNearbyDrivers } = await import('../utils/socketHandlers.js');
-    
+    const { findNearbyDrivers } = await import("../utils/socketHandlers.js");
+
     // Find compatible drivers for this booking
     const compatibleDrivers = await findNearbyDrivers(booking, io);
-    
+
     // Emit booking request acceptance event
-    io.emit('accept_booking_request', {
+    io.emit("accept_booking_request", {
       requestId: bookingId,
       driverId,
       vehicleId: vehicle._id,
-      booking: booking.toObject()
+      booking: booking.toObject(),
     });
   }
 
@@ -883,12 +1021,12 @@ const updateBookingStatus = asyncHandler(async (req, res) => {
   }
 
   booking.status = status;
-  
+
   // Add completion timestamp if status is completed
-  if (status === 'completed') {
+  if (status === "completed") {
     booking.completedAt = new Date();
   }
-  
+
   await booking.save();
 
   const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
@@ -1028,10 +1166,11 @@ const raiseFare = asyncHandler(async (req, res) => {
 
   // Get admin-configured fare adjustment settings
   const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
-  
+
   if (!fareSettings.enablePendingBookingFareIncrease) {
     return res.status(403).json({
-      message: "Fare increase for pending bookings is currently disabled by admin",
+      message:
+        "Fare increase for pending bookings is currently disabled by admin",
       token: req.cookies.token,
     });
   }
@@ -1040,7 +1179,7 @@ const raiseFare = asyncHandler(async (req, res) => {
   const adjustmentPercentage = fareSettings.allowedAdjustmentPercentage;
   const maxAllowedFare = originalFare * (1 + adjustmentPercentage / 100); // Dynamic percentage increase limit
   const currentFare = booking.raisedFare || booking.offeredFare;
-  
+
   if (newFare <= currentFare) {
     return res.status(400).json({
       message: "New fare must be higher than current fare",
@@ -1050,7 +1189,9 @@ const raiseFare = asyncHandler(async (req, res) => {
 
   if (newFare > maxAllowedFare) {
     return res.status(400).json({
-      message: `New fare cannot be higher than ${maxAllowedFare.toFixed(2)} AED (${adjustmentPercentage}% increase limit from original fare)`,
+      message: `New fare cannot be higher than ${maxAllowedFare.toFixed(
+        2
+      )} AED (${adjustmentPercentage}% increase limit from original fare)`,
       token: req.cookies.token,
     });
   }
@@ -1063,30 +1204,31 @@ const raiseFare = asyncHandler(async (req, res) => {
 
   // Populate user information for the response
   await booking.populate({
-    path: 'user',
-    select: 'username firstName lastName email phoneNumber gender kycLevel kycStatus role isVerified selfieImage'
+    path: "user",
+    select:
+      "username firstName lastName email phoneNumber gender kycLevel kycStatus role isVerified selfieImage",
   });
 
   // Get Socket.IO instance for real-time notifications
-  const io = req.app.get('io');
+  const io = req.app.get("io");
   if (io) {
     // Import the findNearbyDrivers function
-    const { findNearbyDrivers } = await import('../utils/socketHandlers.js');
-    
+    const { findNearbyDrivers } = await import("../utils/socketHandlers.js");
+
     // Find compatible drivers for this booking
     const compatibleDrivers = await findNearbyDrivers(booking, io);
-    
+
     // Notify user of fare update
-    io.to(`user_${booking.user._id}`).emit('fare_raised', {
+    io.to(`user_${booking.user._id}`).emit("fare_raised", {
       requestId: bookingId,
       previousFare: previousFare,
       newFare: newFare,
-      message: 'Fare increased for your booking request'
+      message: "Fare increased for your booking request",
     });
-    
+
     // Emit fare increase to only compatible drivers instead of broadcasting to all
-    compatibleDrivers.forEach(driver => {
-      io.to(`driver_${driver._id}`).emit('fare_increased', {
+    compatibleDrivers.forEach((driver) => {
+      io.to(`driver_${driver._id}`).emit("fare_increased", {
         requestId: bookingId,
         previousFare: previousFare,
         newFare: newFare,
@@ -1105,17 +1247,17 @@ const raiseFare = asyncHandler(async (req, res) => {
           kycStatus: booking.user.kycStatus,
           role: booking.user.role,
           isVerified: booking.user.isVerified,
-          profileImage: booking.user.selfieImage
+          profileImage: booking.user.selfieImage,
         },
         from: {
           address: booking.pickupLocation.address,
           coordinates: booking.pickupLocation.coordinates,
-          zone: booking.pickupLocation.zone
+          zone: booking.pickupLocation.zone,
         },
         to: {
           address: booking.dropoffLocation.address,
           coordinates: booking.dropoffLocation.coordinates,
-          zone: booking.dropoffLocation.zone
+          zone: booking.dropoffLocation.zone,
         },
         distance: booking.distance,
         distanceInMeters: booking.distanceInMeters,
@@ -1124,7 +1266,7 @@ const raiseFare = asyncHandler(async (req, res) => {
         pinkCaptainOptions: booking.pinkCaptainOptions,
         furnitureDetails: booking.furnitureDetails,
         timestamp: new Date().toISOString(),
-        driverDistance: driver.distance
+        driverDistance: driver.distance,
       });
     });
   }
@@ -1150,17 +1292,17 @@ const raiseFare = asyncHandler(async (req, res) => {
       kycStatus: booking.user.kycStatus,
       role: booking.user.role,
       isVerified: booking.user.isVerified,
-      profileImage: booking.user.selfieImage
+      profileImage: booking.user.selfieImage,
     },
     from: {
       address: booking.pickupLocation.address,
       coordinates: booking.pickupLocation.coordinates,
-      zone: booking.pickupLocation.zone
+      zone: booking.pickupLocation.zone,
     },
     to: {
       address: booking.dropoffLocation.address,
       coordinates: booking.dropoffLocation.coordinates,
-      zone: booking.dropoffLocation.zone
+      zone: booking.dropoffLocation.zone,
     },
     distance: booking.distance,
     distanceInMeters: booking.distanceInMeters,
@@ -1212,7 +1354,7 @@ const lowerFare = asyncHandler(async (req, res) => {
 
   // Get admin-configured fare adjustment settings
   const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
-  
+
   if (!fareSettings.enableUserFareAdjustment) {
     return res.status(403).json({
       message: "Fare adjustment is currently disabled by admin",
@@ -1224,10 +1366,12 @@ const lowerFare = asyncHandler(async (req, res) => {
   const adjustmentPercentage = fareSettings.allowedAdjustmentPercentage;
   const minAllowedFare = originalFare * (1 - adjustmentPercentage / 100); // Dynamic percentage decrease limit
   const currentFare = booking.raisedFare || booking.offeredFare;
-  
+
   if (newFare < minAllowedFare) {
     return res.status(400).json({
-      message: `New fare cannot be lower than ${minAllowedFare.toFixed(2)} AED (${adjustmentPercentage}% decrease limit from original fare)`,
+      message: `New fare cannot be lower than ${minAllowedFare.toFixed(
+        2
+      )} AED (${adjustmentPercentage}% decrease limit from original fare)`,
       token: req.cookies.token,
     });
   }
@@ -1247,30 +1391,31 @@ const lowerFare = asyncHandler(async (req, res) => {
 
   // Populate user information for the response
   await booking.populate({
-    path: 'user',
-    select: 'username firstName lastName email phoneNumber gender kycLevel kycStatus role isVerified selfieImage'
+    path: "user",
+    select:
+      "username firstName lastName email phoneNumber gender kycLevel kycStatus role isVerified selfieImage",
   });
 
   // Get Socket.IO instance for real-time notifications
-  const io = req.app.get('io');
+  const io = req.app.get("io");
   if (io) {
     // Import the findNearbyDrivers function
-    const { findNearbyDrivers } = await import('../utils/socketHandlers.js');
-    
+    const { findNearbyDrivers } = await import("../utils/socketHandlers.js");
+
     // Find compatible drivers for this booking
     const compatibleDrivers = await findNearbyDrivers(booking, io);
-    
+
     // Notify user of fare update
-    io.to(`user_${booking.user._id}`).emit('fare_lowered', {
+    io.to(`user_${booking.user._id}`).emit("fare_lowered", {
       requestId: bookingId,
       previousFare: previousFare,
       newFare: newFare,
-      message: 'Fare decreased for your booking request'
+      message: "Fare decreased for your booking request",
     });
-    
+
     // Emit fare decrease to only compatible drivers
-    compatibleDrivers.forEach(driver => {
-      io.to(`driver_${driver._id}`).emit('fare_decreased', {
+    compatibleDrivers.forEach((driver) => {
+      io.to(`driver_${driver._id}`).emit("fare_decreased", {
         requestId: bookingId,
         previousFare: previousFare,
         newFare: newFare,
@@ -1289,17 +1434,17 @@ const lowerFare = asyncHandler(async (req, res) => {
           kycStatus: booking.user.kycStatus,
           role: booking.user.role,
           isVerified: booking.user.isVerified,
-          profileImage: booking.user.selfieImage
+          profileImage: booking.user.selfieImage,
         },
         from: {
           address: booking.pickupLocation.address,
           coordinates: booking.pickupLocation.coordinates,
-          zone: booking.pickupLocation.zone
+          zone: booking.pickupLocation.zone,
         },
         to: {
           address: booking.dropoffLocation.address,
           coordinates: booking.dropoffLocation.coordinates,
-          zone: booking.dropoffLocation.zone
+          zone: booking.dropoffLocation.zone,
         },
         distance: booking.distance,
         distanceInMeters: booking.distanceInMeters,
@@ -1308,7 +1453,7 @@ const lowerFare = asyncHandler(async (req, res) => {
         pinkCaptainOptions: booking.pinkCaptainOptions,
         furnitureDetails: booking.furnitureDetails,
         timestamp: new Date().toISOString(),
-        driverDistance: driver.distance
+        driverDistance: driver.distance,
       });
     });
   }
@@ -1334,17 +1479,17 @@ const lowerFare = asyncHandler(async (req, res) => {
       kycStatus: booking.user.kycStatus,
       role: booking.user.role,
       isVerified: booking.user.isVerified,
-      profileImage: booking.user.selfieImage
+      profileImage: booking.user.selfieImage,
     },
     from: {
       address: booking.pickupLocation.address,
       coordinates: booking.pickupLocation.coordinates,
-      zone: booking.pickupLocation.zone
+      zone: booking.pickupLocation.zone,
     },
     to: {
       address: booking.dropoffLocation.address,
       coordinates: booking.dropoffLocation.coordinates,
-      zone: booking.dropoffLocation.zone
+      zone: booking.dropoffLocation.zone,
     },
     distance: booking.distance,
     distanceInMeters: booking.distanceInMeters,
@@ -1366,7 +1511,7 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
   const userId = req.user._id;
 
   // Validate required fields
-  if (!response || !['accepted', 'rejected'].includes(response)) {
+  if (!response || !["accepted", "rejected"].includes(response)) {
     return res.status(400).json({
       success: false,
       message: "Response must be either 'accepted' or 'rejected'",
@@ -1382,14 +1527,17 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
 
   // Find the booking
   const booking = await Booking.findById(bookingId)
-    .populate('user', 'name email phone')
-    .populate('driverOffers.offeredBy', 'firstName lastName email phoneNumber profileImage')
+    .populate("user", "name email phone")
+    .populate(
+      "driverOffers.offeredBy",
+      "firstName lastName email phoneNumber profileImage"
+    )
     .populate({
-      path: 'driverOffers.offeredBy',
+      path: "driverOffers.offeredBy",
       populate: {
-        path: 'pendingVehicleData',
-        model: 'Vehicle'
-      }
+        path: "pendingVehicleData",
+        model: "Vehicle",
+      },
     });
 
   if (!booking) {
@@ -1408,7 +1556,7 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
   }
 
   // Check if booking is in pending status
-  if (booking.status !== 'pending') {
+  if (booking.status !== "pending") {
     return res.status(400).json({
       success: false,
       message: "Can only respond to fare offers for pending bookings",
@@ -1417,7 +1565,9 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
 
   // Find the specific driver offer
   const driverOffer = booking.driverOffers.find(
-    offer => offer.offeredBy._id.toString() === driverId.toString() && offer.status === 'pending'
+    (offer) =>
+      offer.offeredBy._id.toString() === driverId.toString() &&
+      offer.status === "pending"
   );
 
   if (!driverOffer) {
@@ -1427,7 +1577,7 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
     });
   }
 
-  const io = req.app.get('io');
+  const io = req.app.get("io");
 
   // Update driver offer status
   driverOffer.userResponse = response;
@@ -1436,8 +1586,9 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
 
   // Update fare negotiation history
   const historyEntry = booking.fareNegotiationHistory.find(
-    entry => entry.offeredBy.toString() === driverId.toString() && 
-             entry.status === 'pending'
+    (entry) =>
+      entry.offeredBy.toString() === driverId.toString() &&
+      entry.status === "pending"
   );
   if (historyEntry) {
     historyEntry.userResponse = response;
@@ -1445,18 +1596,21 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
     historyEntry.respondedAt = new Date();
   }
 
-  if (response === 'accepted') {
+  if (response === "accepted") {
     // Accept the booking with driver's offered fare
-    booking.status = 'accepted';
+    booking.status = "accepted";
     booking.driver = driverId;
     booking.acceptedAt = new Date();
     booking.fare = driverOffer.amount; // Update fare to driver's offer
 
     // Mark all other pending offers as rejected
-    booking.driverOffers.forEach(offer => {
-      if (offer.offeredBy._id.toString() !== driverId.toString() && offer.status === 'pending') {
-        offer.status = 'rejected';
-        offer.userResponse = 'rejected';
+    booking.driverOffers.forEach((offer) => {
+      if (
+        offer.offeredBy._id.toString() !== driverId.toString() &&
+        offer.status === "pending"
+      ) {
+        offer.status = "rejected";
+        offer.userResponse = "rejected";
         offer.respondedAt = new Date();
       }
     });
@@ -1464,7 +1618,7 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
     await booking.save();
 
     // Notify accepted driver
-    io.to(`driver_${driverId}`).emit('fare_offer_accepted', {
+    io.to(`driver_${driverId}`).emit("fare_offer_accepted", {
       bookingId: booking._id,
       message: `Your fare offer of ${driverOffer.amount} AED has been accepted`,
       booking: {
@@ -1475,30 +1629,33 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
         user: {
           _id: booking.user._id,
           name: booking.user.name,
-          phone: booking.user.phone
+          phone: booking.user.phone,
         },
         pickupLocation: booking.pickupLocation,
         dropoffLocation: booking.dropoffLocation,
         distance: booking.distance,
         serviceType: booking.serviceType,
         vehicleType: booking.vehicleType,
-        serviceCategory: booking.serviceCategory
-      }
+        serviceCategory: booking.serviceCategory,
+      },
     });
 
     // Notify all other drivers that their offers were rejected
-    booking.driverOffers.forEach(offer => {
-      if (offer.offeredBy._id.toString() !== driverId.toString() && offer.status === 'rejected') {
-        io.to(`driver_${offer.offeredBy._id}`).emit('fare_offer_rejected', {
+    booking.driverOffers.forEach((offer) => {
+      if (
+        offer.offeredBy._id.toString() !== driverId.toString() &&
+        offer.status === "rejected"
+      ) {
+        io.to(`driver_${offer.offeredBy._id}`).emit("fare_offer_rejected", {
           bookingId: booking._id,
           message: `User accepted another driver's offer. Your offer of ${offer.amount} AED was not selected`,
-          reason: 'user_accepted_other_offer'
+          reason: "user_accepted_other_offer",
         });
       }
     });
 
     // Notify user of successful booking acceptance
-    io.to(`user_${userId}`).emit('booking_confirmed', {
+    io.to(`user_${userId}`).emit("booking_confirmed", {
       bookingId: booking._id,
       message: `Booking confirmed with driver ${driverOffer.driverName} at ${booking.fare} AED`,
       booking: {
@@ -1513,47 +1670,47 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
           profileImage: driverOffer.offeredBy.profileImage,
           vehicle: driverOffer.vehicleInfo,
           rating: driverOffer.driverRating,
-          estimatedArrival: driverOffer.estimatedArrival
-        }
-      }
+          estimatedArrival: driverOffer.estimatedArrival,
+        },
+      },
     });
-    
+
     // Auto-start the ride after acceptance
     setTimeout(async () => {
       try {
         const updatedBooking = await Booking.findById(booking._id);
-        if (updatedBooking && updatedBooking.status === 'accepted') {
-          updatedBooking.status = 'in_progress';
+        if (updatedBooking && updatedBooking.status === "accepted") {
+          updatedBooking.status = "in_progress";
           updatedBooking.startedAt = new Date();
           await updatedBooking.save();
-          
+
           // Notify both user and driver that ride has started
-          io.to(`user_${userId}`).emit('ride_started', {
+          io.to(`user_${userId}`).emit("ride_started", {
             bookingId: updatedBooking._id,
-            message: 'Your ride has started!',
-            status: 'in_progress',
+            message: "Your ride has started!",
+            status: "in_progress",
             startedAt: updatedBooking.startedAt,
             driver: {
               id: driverId,
               name: driverOffer.driverName,
-              phone: driverOffer.offeredBy.phoneNumber
-            }
+              phone: driverOffer.offeredBy.phoneNumber,
+            },
           });
-          
-          io.to(`driver_${driverId}`).emit('ride_started', {
+
+          io.to(`driver_${driverId}`).emit("ride_started", {
             bookingId: updatedBooking._id,
-            message: 'Ride has started!',
-            status: 'in_progress',
+            message: "Ride has started!",
+            status: "in_progress",
             startedAt: updatedBooking.startedAt,
             user: {
               id: userId,
               name: booking.user.name,
-              phone: booking.user.phone
-            }
+              phone: booking.user.phone,
+            },
           });
         }
       } catch (error) {
-        console.error('Error auto-starting ride:', error);
+        console.error("Error auto-starting ride:", error);
       }
     }, 3000); // Start ride 3 seconds after acceptance
 
@@ -1572,32 +1729,34 @@ const respondToDriverFareOffer = asyncHandler(async (req, res) => {
           profileImage: driverOffer.offeredBy.profileImage,
           vehicle: driverOffer.vehicleInfo,
           rating: driverOffer.driverRating,
-          estimatedArrival: driverOffer.estimatedArrival
-        }
-      }
+          estimatedArrival: driverOffer.estimatedArrival,
+        },
+      },
     });
   } else {
     // Reject the fare offer
     await booking.save();
 
     // Notify driver of rejection
-    io.to(`driver_${driverId}`).emit('fare_offer_rejected', {
+    io.to(`driver_${driverId}`).emit("fare_offer_rejected", {
       bookingId: booking._id,
       message: `Your fare offer of ${driverOffer.amount} AED has been rejected`,
       booking: {
         _id: booking._id,
-        status: booking.status
-      }
+        status: booking.status,
+      },
     });
 
     // Count remaining pending offers
-    const remainingOffers = booking.driverOffers.filter(offer => offer.status === 'pending').length;
+    const remainingOffers = booking.driverOffers.filter(
+      (offer) => offer.status === "pending"
+    ).length;
 
     res.status(200).json({
       success: true,
       message: "Fare offer rejected",
       driverOffer: driverOffer,
-      remainingOffers: remainingOffers
+      remainingOffers: remainingOffers,
     });
   }
 });
@@ -1609,28 +1768,31 @@ const getBookingDetails = asyncHandler(async (req, res) => {
 
   try {
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName email phone')
-      .populate('driver', 'firstName lastName email phone');
+      .populate("user", "firstName lastName email phone")
+      .populate("driver", "firstName lastName email phone");
 
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
 
     // Check if user has permission to view this booking
-    if (booking.user._id.toString() !== userId.toString() && 
-        booking.driver && booking.driver._id.toString() !== userId.toString()) {
+    if (
+      booking.user._id.toString() !== userId.toString() &&
+      booking.driver &&
+      booking.driver._id.toString() !== userId.toString()
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied: You can only view your own bookings'
+        message: "Access denied: You can only view your own bookings",
       });
     }
 
     res.status(200).json({
       success: true,
-      message: 'Booking details retrieved successfully',
+      message: "Booking details retrieved successfully",
       data: {
         booking: {
           id: booking._id,
@@ -1647,15 +1809,15 @@ const getBookingDetails = asyncHandler(async (req, res) => {
           createdAt: booking.createdAt,
           updatedAt: booking.updatedAt,
           user: booking.user,
-          driver: booking.driver
-        }
-      }
+          driver: booking.driver,
+        },
+      },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error retrieving booking details',
-      error: error.message
+      message: "Error retrieving booking details",
+      error: error.message,
     });
   }
 });
@@ -1670,7 +1832,7 @@ const updateBookingFare = asyncHandler(async (req, res) => {
     if (!newFare || newFare <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Valid fare amount is required'
+        message: "Valid fare amount is required",
       });
     }
 
@@ -1678,7 +1840,7 @@ const updateBookingFare = asyncHandler(async (req, res) => {
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
 
@@ -1686,50 +1848,50 @@ const updateBookingFare = asyncHandler(async (req, res) => {
     if (booking.user.toString() !== userId.toString()) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied: You can only update your own bookings'
+        message: "Access denied: You can only update your own bookings",
       });
     }
 
     // Check if booking can be updated
-    if (booking.status !== 'pending') {
+    if (booking.status !== "pending") {
       return res.status(400).json({
         success: false,
-        message: 'Can only update fare for pending bookings'
+        message: "Can only update fare for pending bookings",
       });
     }
 
     const previousFare = booking.fare;
-    
+
     // Update fare and add to negotiation history
     booking.fare = newFare;
     booking.raisedFare = newFare;
     booking.fareNegotiationHistory.push({
-      actor: 'user',
+      actor: "user",
       actorId: userId,
       previousFare: previousFare,
       newFare: newFare,
       timestamp: new Date(),
-      method: 'REST_API'
+      method: "REST_API",
     });
 
     await booking.save();
 
     res.status(200).json({
       success: true,
-      message: 'Fare updated successfully',
+      message: "Fare updated successfully",
       data: {
         bookingId: booking._id,
         previousFare: previousFare,
         newFare: newFare,
         raisedFare: booking.raisedFare,
-        fareNegotiationHistory: booking.fareNegotiationHistory
-      }
+        fareNegotiationHistory: booking.fareNegotiationHistory,
+      },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error updating booking fare',
-      error: error.message
+      message: "Error updating booking fare",
+      error: error.message,
     });
   }
 });
@@ -1741,50 +1903,53 @@ const getBookingFareHistory = asyncHandler(async (req, res) => {
 
   try {
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName email')
-      .populate('driver', 'firstName lastName email');
+      .populate("user", "firstName lastName email")
+      .populate("driver", "firstName lastName email");
 
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
 
     // Check if user has permission to view this booking
-    if (booking.user._id.toString() !== userId.toString() && 
-        booking.driver && booking.driver._id.toString() !== userId.toString()) {
+    if (
+      booking.user._id.toString() !== userId.toString() &&
+      booking.driver &&
+      booking.driver._id.toString() !== userId.toString()
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied: You can only view your own bookings'
+        message: "Access denied: You can only view your own bookings",
       });
     }
 
     res.status(200).json({
       success: true,
-      message: 'Fare negotiation history retrieved successfully',
+      message: "Fare negotiation history retrieved successfully",
       data: {
         bookingId: booking._id,
         currentFare: booking.fare,
         offeredFare: booking.offeredFare,
         raisedFare: booking.raisedFare,
         driverOffers: booking.driverOffers,
-        fareNegotiationHistory: booking.fareNegotiationHistory.map(entry => ({
+        fareNegotiationHistory: booking.fareNegotiationHistory.map((entry) => ({
           actor: entry.actor,
           actorId: entry.actorId,
           previousFare: entry.previousFare,
           newFare: entry.newFare,
           timestamp: entry.timestamp,
-          method: entry.method || 'SOCKET_IO'
+          method: entry.method || "SOCKET_IO",
         })),
-        totalNegotiations: booking.fareNegotiationHistory.length
-      }
+        totalNegotiations: booking.fareNegotiationHistory.length,
+      },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error retrieving fare history',
-      error: error.message
+      message: "Error retrieving fare history",
+      error: error.message,
     });
   }
 });
@@ -1795,63 +1960,64 @@ const getBookingFareHistory = asyncHandler(async (req, res) => {
 const startRide = asyncHandler(async (req, res) => {
   const { bookingId } = req.params;
   const userId = req.user._id;
-  
+
   try {
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName email phoneNumber')
-      .populate('driver', 'firstName lastName email phoneNumber');
-    
+      .populate("user", "firstName lastName email phoneNumber")
+      .populate("driver", "firstName lastName email phoneNumber");
+
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
-    
+
     // Only driver can start the ride
-    if (req.user.role !== 'driver' || booking.driver._id.toString() !== userId.toString()) {
+    if (
+      req.user.role !== "driver" ||
+      booking.driver._id.toString() !== userId.toString()
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Only the assigned driver can start the ride'
+        message: "Only the assigned driver can start the ride",
       });
     }
-    
-    if (booking.status !== 'accepted') {
+
+    if (booking.status !== "accepted") {
       return res.status(400).json({
-        success: false,
-        message: 'Booking must be accepted before starting ride'
+        message: "Booking must be accepted before starting ride",
       });
     }
-    
+
     // Update booking status
-    booking.status = 'started';
+    booking.status = "started";
     booking.startedAt = new Date();
-    
+
     // Add system message
     booking.messages.push({
       sender: userId,
-      senderType: 'driver',
-      message: 'Ride has been started',
-      messageType: 'system'
+      senderType: "driver",
+      message: "Ride has been started",
+      messageType: "system",
     });
-    
+
     await booking.save();
-    
+
     res.status(200).json({
       success: true,
-      message: 'Ride started successfully',
+      message: "Ride started successfully",
       data: {
         bookingId: booking._id,
         status: booking.status,
-        startedAt: booking.startedAt
-      }
+        startedAt: booking.startedAt,
+      },
     });
-    
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error starting ride',
-      error: error.message
+      message: "Error starting ride",
+      error: error.message,
     });
   }
 });
@@ -1861,45 +2027,54 @@ const completeRide = asyncHandler(async (req, res) => {
   const { bookingId } = req.params;
   const { finalLocation } = req.body;
   const userId = req.user._id;
-  
+
   try {
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName email phoneNumber wallet')
-      .populate('driver', 'firstName lastName email phoneNumber wallet driverPaymentTracking');
-    
+      .populate("user", "firstName lastName email phoneNumber wallet")
+      .populate(
+        "driver",
+        "firstName lastName email phoneNumber wallet driverPaymentTracking"
+      );
+
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
-    
+
     // Only driver can complete the ride
-    if (req.user.role !== 'driver' || booking.driver._id.toString() !== userId.toString()) {
+    if (
+      req.user.role !== "driver" ||
+      booking.driver._id.toString() !== userId.toString()
+    ) {
       return res.status(403).json({
         success: false,
-        message: 'Only the assigned driver can complete the ride'
+        message: "Only the assigned driver can complete the ride",
       });
     }
-    
-    if (!['started', 'in_progress'].includes(booking.status)) {
+
+    if (!["started", "in_progress"].includes(booking.status)) {
       return res.status(400).json({
-        success: false,
-        message: 'Ride must be started or in progress to complete'
+        message: "Ride must be started or in progress to complete",
       });
     }
-    
+
     // Update booking status
-    booking.status = 'completed';
+    booking.status = "completed";
     booking.completedAt = new Date();
-    
+
     // Calculate ride duration
-    const rideDuration = booking.startedAt ? 
-      Math.round((booking.completedAt - booking.startedAt) / (1000 * 60)) : 0;
-    
+    const rideDuration = booking.startedAt
+      ? Math.round((booking.completedAt - booking.startedAt) / (1000 * 60))
+      : 0;
+
     // Generate receipt number
-    const receiptNumber = `AAAO-${Date.now()}-${booking._id.toString().slice(-6).toUpperCase()}`;
-    
+    const receiptNumber = `AAAO-${Date.now()}-${booking._id
+      .toString()
+      .slice(-6)
+      .toUpperCase()}`;
+
     // Update receipt details
     booking.receipt = {
       receiptNumber,
@@ -1914,48 +2089,48 @@ const completeRide = asyncHandler(async (req, res) => {
         timeFare: 0,
         surgeMultiplier: 1,
         taxes: 0,
-        totalFare: booking.fare
-      }
+        totalFare: booking.fare,
+      },
     };
-    
+
     // Process payment and MLM distribution
     const totalAmount = booking.fare;
     const mlmCommission = Math.round(totalAmount * 0.15); // 15%
     const driverEarnings = totalAmount - mlmCommission; // 85%
-    
+
     booking.paymentDetails = {
       totalAmount,
       mlmCommission,
       driverEarnings,
-      paymentStatus: 'completed',
-      processedAt: new Date()
+      paymentStatus: "completed",
+      processedAt: new Date(),
     };
-    
+
     // Handle payment based on method
-    if (booking.paymentMethod === 'cash') {
+    if (booking.paymentMethod === "cash") {
       // For cash payments, add to driver's pending amount
       booking.paymentDetails.pendingDriverPayment = {
         amount: mlmCommission,
         dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
-        isPaid: false
+        isPaid: false,
       };
-      
+
       // Update driver's payment tracking
       const driver = await User.findById(booking.driver._id);
       driver.driverPaymentTracking.totalPendingAmount += mlmCommission;
       driver.driverPaymentTracking.unpaidRidesCount += 1;
-      
+
       // Restrict driver if 3+ unpaid rides
       if (driver.driverPaymentTracking.unpaidRidesCount >= 3) {
         driver.driverPaymentTracking.isRestricted = true;
         driver.driverPaymentTracking.restrictedAt = new Date();
       }
-      
+
       // Add to driver's wallet
       driver.wallet.balance += driverEarnings;
       driver.wallet.totalEarnings += driverEarnings;
       driver.wallet.lastUpdated = new Date();
-      
+
       await driver.save();
     } else {
       // For card/bank payments, process normally
@@ -1964,12 +2139,14 @@ const completeRide = asyncHandler(async (req, res) => {
       driver.wallet.totalEarnings += driverEarnings;
       driver.wallet.lastUpdated = new Date();
       await driver.save();
-      
+
       // Process MLM distribution and TGP/PGP for non-cash payments
       try {
         // Import the distributeRideMLM function
-        const { distributeRideMLM } = await import('../controllers/mlmController.js');
-        
+        const { distributeRideMLM } = await import(
+          "../controllers/mlmController.js"
+        );
+
         // Create a mock request/response for the MLM distribution
         const mockReq = {
           body: {
@@ -1977,45 +2154,52 @@ const completeRide = asyncHandler(async (req, res) => {
             driverId: booking.driver._id.toString(),
             rideId: booking._id.toString(),
             totalFare: booking.fare,
-            rideType: 'personal'
-          }
+            rideType: "personal",
+          },
         };
-        
+
         const mockRes = {
           status: (code) => ({
             json: (data) => {
               if (code === 200 && data.success) {
-                console.log('MLM distribution and TGP/PGP allocation completed successfully');
-                console.log('Qualification points distributed:', data.data?.qualificationPointsDistribution);
+                console.log(
+                  "MLM distribution and TGP/PGP allocation completed successfully"
+                );
+                console.log(
+                  "Qualification points distributed:",
+                  data.data?.qualificationPointsDistribution
+                );
               } else {
-                console.error('MLM distribution failed:', data.message);
+                console.error("MLM distribution failed:", data.message);
               }
               return data;
-            }
-          })
+            },
+          }),
         };
-        
+
         // Call the MLM distribution function
         await distributeRideMLM(mockReq, mockRes);
-        
       } catch (mlmError) {
-        console.error('Error processing MLM distribution and TGP/PGP:', mlmError.message);
+        console.error(
+          "Error processing MLM distribution and TGP/PGP:",
+          mlmError.message
+        );
       }
     }
-    
+
     // Add system message
     booking.messages.push({
       sender: userId,
-      senderType: 'driver',
-      message: 'Ride has been completed',
-      messageType: 'system'
+      senderType: "driver",
+      message: "Ride has been completed",
+      messageType: "system",
     });
-    
+
     await booking.save();
-    
+
     res.status(200).json({
       success: true,
-      message: 'Ride completed successfully',
+      message: "Ride completed successfully",
       data: {
         bookingId: booking._id,
         status: booking.status,
@@ -2023,17 +2207,16 @@ const completeRide = asyncHandler(async (req, res) => {
         receipt: booking.receipt,
         paymentDetails: {
           totalAmount: booking.paymentDetails.totalAmount,
-          paymentMethod: booking.paymentMethod
+          paymentMethod: booking.paymentMethod,
         },
-        rideDuration
-      }
+        rideDuration,
+      },
     });
-    
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error completing ride',
-      error: error.message
+      message: "Error completing ride",
+      error: error.message,
     });
   }
 });
@@ -2042,57 +2225,57 @@ const completeRide = asyncHandler(async (req, res) => {
 const getRideMessages = asyncHandler(async (req, res) => {
   const { bookingId } = req.params;
   const userId = req.user._id;
-  
+
   try {
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName')
-      .populate('driver', 'firstName lastName')
-      .populate('messages.sender', 'firstName lastName');
-    
+      .populate("user", "firstName lastName")
+      .populate("driver", "firstName lastName")
+      .populate("messages.sender", "firstName lastName");
+
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
-    
+
     // Check if user is part of this booking
     const isUser = booking.user._id.toString() === userId.toString();
-    const isDriver = booking.driver && booking.driver._id.toString() === userId.toString();
-    
+    const isDriver =
+      booking.driver && booking.driver._id.toString() === userId.toString();
+
     if (!isUser && !isDriver) {
       return res.status(403).json({
         success: false,
-        message: 'You are not authorized to view messages for this booking'
+        message: "You are not authorized to view messages for this booking",
       });
     }
-    
+
     res.status(200).json({
       success: true,
-      message: 'Messages retrieved successfully',
+      message: "Messages retrieved successfully",
       data: {
         bookingId: booking._id,
-        messages: booking.messages.map(msg => ({
+        messages: booking.messages.map((msg) => ({
           id: msg._id,
           sender: {
             id: msg.sender._id,
             name: `${msg.sender.firstName} ${msg.sender.lastName}`,
-            type: msg.senderType
+            type: msg.senderType,
           },
           message: msg.message,
           messageType: msg.messageType,
+          location: msg.location,
           timestamp: msg.timestamp,
-          location: msg.location
         })),
-        totalMessages: booking.messages.length
-      }
+        totalMessages: booking.messages.length,
+      },
     });
-    
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error retrieving messages',
-      error: error.message
+      message: "Error retrieving messages",
+      error: error.message,
     });
   }
 });
@@ -2102,75 +2285,74 @@ const submitRating = asyncHandler(async (req, res) => {
   const { bookingId } = req.params;
   const { stars, comment } = req.body;
   const userId = req.user._id;
-  
+
   try {
     if (!stars || stars < 1 || stars > 5) {
       return res.status(400).json({
         success: false,
-        message: 'Rating must be between 1 and 5 stars'
+        message: "Rating must be between 1 and 5 stars",
       });
     }
-    
+
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName email')
-      .populate('driver', 'firstName lastName email');
-    
+      .populate("user", "firstName lastName email")
+      .populate("driver", "firstName lastName email");
+
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
-    
-    if (booking.status !== 'completed') {
+
+    if (booking.status !== "completed") {
       return res.status(400).json({
         success: false,
-        message: 'Can only rate completed rides'
+        message: "Can only rate completed rides",
       });
     }
-    
+
     // Enforce: only the customer (booking.user) can rate the service
     const isCustomer = booking.user._id.toString() === userId.toString();
     if (!isCustomer) {
       return res.status(403).json({
         success: false,
-        message: 'Only the customer can rate this service'
+        message: "Only the customer can rate this service",
       });
     }
-    
+
     // Customer rates the driver -> store under driverRating; prevent duplicate ratings
     if (booking.rating?.driverRating?.stars) {
       return res.status(400).json({
         success: false,
-        message: 'You have already rated this service'
+        message: "You have already rated this service",
       });
     }
-    
+
     booking.rating = booking.rating || {};
     booking.rating.driverRating = {
       stars,
-      comment: comment || '',
-      ratedAt: new Date()
+      comment: comment || "",
+      ratedAt: new Date(),
     };
-    
+
     await booking.save();
-    
+
     return res.status(200).json({
       success: true,
-      message: 'Rating submitted successfully',
+      message: "Rating submitted successfully",
       data: {
         bookingId: booking._id,
-        ratedBy: 'customer',
+        ratedBy: "customer",
         stars,
-        comment: comment || ''
-      }
+        comment: comment || "",
+      },
     });
-    
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: 'Error submitting rating',
-      error: error.message
+      message: "Error submitting rating",
+      error: error.message,
     });
   }
 });
@@ -2179,40 +2361,41 @@ const submitRating = asyncHandler(async (req, res) => {
 const getRideReceipt = asyncHandler(async (req, res) => {
   const { bookingId } = req.params;
   const userId = req.user._id;
-  
+
   try {
     const booking = await Booking.findById(bookingId)
-      .populate('user', 'firstName lastName email phoneNumber')
-      .populate('driver', 'firstName lastName email phoneNumber');
-    
+      .populate("user", "firstName lastName email phoneNumber")
+      .populate("driver", "firstName lastName email phoneNumber");
+
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: 'Booking not found'
+        message: "Booking not found",
       });
     }
-    
+
     // Check if user is part of this booking
     const isUser = booking.user._id.toString() === userId.toString();
-    const isDriver = booking.driver && booking.driver._id.toString() === userId.toString();
-    
+    const isDriver =
+      booking.driver && booking.driver._id.toString() === userId.toString();
+
     if (!isUser && !isDriver) {
       return res.status(403).json({
         success: false,
-        message: 'You are not authorized to view receipt for this booking'
+        message: "You are not authorized to view receipt for this booking",
       });
     }
-    
-    if (booking.status !== 'completed' || !booking.receipt) {
+
+    if (booking.status !== "completed" || !booking.receipt) {
       return res.status(400).json({
         success: false,
-        message: 'Receipt is only available for completed rides'
+        message: "Receipt is only available for completed rides",
       });
     }
-    
+
     res.status(200).json({
       success: true,
-      message: 'Receipt retrieved successfully',
+      message: "Receipt retrieved successfully",
       data: {
         receipt: {
           receiptNumber: booking.receipt.receiptNumber,
@@ -2221,7 +2404,7 @@ const getRideReceipt = asyncHandler(async (req, res) => {
             bookingId: booking._id,
             serviceType: booking.serviceType,
             vehicleType: booking.vehicleType,
-            paymentMethod: booking.paymentMethod
+            paymentMethod: booking.paymentMethod,
           },
           rideDetails: {
             fromAddress: booking.receipt.fromAddress,
@@ -2229,27 +2412,26 @@ const getRideReceipt = asyncHandler(async (req, res) => {
             rideDistance: booking.receipt.rideDistance,
             rideDuration: booking.receipt.rideDuration,
             startedAt: booking.startedAt,
-            completedAt: booking.completedAt
+            completedAt: booking.completedAt,
           },
           fareDetails: booking.receipt.fareBreakdown,
           userDetails: {
             name: `${booking.user.firstName} ${booking.user.lastName}`,
             email: booking.user.email,
-            phone: booking.user.phoneNumber
+            phone: booking.user.phoneNumber,
           },
           driverDetails: {
             name: `${booking.driver.firstName} ${booking.driver.lastName}`,
-            phone: booking.driver.phoneNumber
-          }
-        }
-      }
+            phone: booking.driver.phoneNumber,
+          },
+        },
+      },
     });
-    
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Error retrieving receipt',
-      error: error.message
+      message: "Error retrieving receipt",
+      error: error.message,
     });
   }
 });
@@ -2261,7 +2443,12 @@ const rejectBooking = asyncHandler(async (req, res) => {
   const driverId = req.user._id;
 
   const user = await User.findById(driverId);
-  if (!user || user.role !== "driver" || user.kycLevel < 2 || user.kycStatus !== "approved") {
+  if (
+    !user ||
+    user.role !== "driver" ||
+    user.kycLevel < 2 ||
+    user.kycStatus !== "approved"
+  ) {
     return res.status(403).json({
       message: "Only approved drivers can reject bookings",
       token: req.cookies.token,
@@ -2324,7 +2511,12 @@ const modifyBookingFare = asyncHandler(async (req, res) => {
   const driverId = req.user._id;
 
   const user = await User.findById(driverId);
-  if (!user || user.role !== "driver" || user.kycLevel < 2 || user.kycStatus !== "approved") {
+  if (
+    !user ||
+    user.role !== "driver" ||
+    user.kycLevel < 2 ||
+    user.kycStatus !== "approved"
+  ) {
     return res.status(403).json({
       message: "Only approved drivers can modify fare",
       token: req.cookies.token,
@@ -2338,7 +2530,10 @@ const modifyBookingFare = asyncHandler(async (req, res) => {
     });
   }
 
-  const booking = await Booking.findById(bookingId).populate("user", "firstName lastName email phoneNumber");
+  const booking = await Booking.findById(bookingId).populate(
+    "user",
+    "firstName lastName email phoneNumber"
+  );
   if (!booking) {
     return res.status(404).json({
       message: "Booking not found",
@@ -2364,8 +2559,10 @@ const modifyBookingFare = asyncHandler(async (req, res) => {
 
   // Validate fare adjustment limits
   const originalFare = booking.fare;
-  const maxAllowedFare = originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
-  const minAllowedFare = originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
+  const maxAllowedFare =
+    originalFare * (1 + fareSettings.allowedAdjustmentPercentage / 100);
+  const minAllowedFare =
+    originalFare * (1 - fareSettings.allowedAdjustmentPercentage / 100);
 
   if (newFare > maxAllowedFare || newFare < minAllowedFare) {
     return res.status(400).json({
@@ -2442,7 +2639,8 @@ const sendMessage = asyncHandler(async (req, res) => {
 
   // Verify user authorization
   const isUser = booking.user._id.toString() === userId.toString();
-  const isDriver = booking.driver && booking.driver._id.toString() === userId.toString();
+  const isDriver =
+    booking.driver && booking.driver._id.toString() === userId.toString();
 
   if (!isUser && !isDriver) {
     return res.status(403).json({
@@ -2488,7 +2686,9 @@ const sendMessage = asyncHandler(async (req, res) => {
         id: newMessage._id,
         sender: {
           id: userId,
-          name: isUser ? `${booking.user.firstName} ${booking.user.lastName}` : `${booking.driver.firstName} ${booking.driver.lastName}`,
+          name: isUser
+            ? `${booking.user.firstName} ${booking.user.lastName}`
+            : `${booking.driver.firstName} ${booking.driver.lastName}`,
           type: isUser ? "user" : "driver",
         },
         content: newMessage.message,
@@ -2500,7 +2700,10 @@ const sendMessage = asyncHandler(async (req, res) => {
 
     // Send to the other party
     if (isUser) {
-      io.to(`driver_${booking.driver._id}`).emit("message_received", messageData);
+      io.to(`driver_${booking.driver._id}`).emit(
+        "message_received",
+        messageData
+      );
     } else {
       io.to(`user_${booking.user._id}`).emit("ride_message", messageData);
     }
@@ -2619,7 +2822,11 @@ const updateUserLocation = asyncHandler(async (req, res) => {
   const io = req.app.get("io");
   if (io && bookingId) {
     const booking = await Booking.findById(bookingId).populate("driver", "_id");
-    if (booking && booking.driver && ["accepted", "started", "in_progress"].includes(booking.status)) {
+    if (
+      booking &&
+      booking.driver &&
+      ["accepted", "started", "in_progress"].includes(booking.status)
+    ) {
       io.to(`driver_${booking.driver._id}`).emit("user_location_update", {
         bookingId: booking._id,
         userLocation: {
@@ -2790,110 +2997,124 @@ const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
     dropoffLocation,
     serviceType,
     vehicleType,
-    driverPreference = 'any',
+    driverPreference = "any",
     estimatedFare,
     paymentMethod,
-    notes
+    notes,
   } = req.body;
   const userId = req.user._id;
 
   // Validate required fields
-  if (!pickupLocation || !pickupLocation.coordinates || !Array.isArray(pickupLocation.coordinates)) {
+  if (
+    !pickupLocation ||
+    !pickupLocation.coordinates ||
+    !Array.isArray(pickupLocation.coordinates)
+  ) {
     return res.status(400).json({
-      message: 'Invalid pickup location',
+      message: "Invalid pickup location",
       token: req.cookies.token,
     });
   }
 
-  if (!dropoffLocation || !dropoffLocation.coordinates || !Array.isArray(dropoffLocation.coordinates)) {
+  if (
+    !dropoffLocation ||
+    !dropoffLocation.coordinates ||
+    !Array.isArray(dropoffLocation.coordinates)
+  ) {
     return res.status(400).json({
-      message: 'Invalid dropoff location',
+      message: "Invalid dropoff location",
       token: req.cookies.token,
     });
   }
 
   if (!serviceType || !vehicleType) {
     return res.status(400).json({
-      message: 'Service type and vehicle type are required',
+      message: "Service type and vehicle type are required",
       token: req.cookies.token,
     });
   }
 
   try {
     // Get qualified drivers using the same logic as socket handler
-    const maxRadius = driverPreference === 'pink_captain' ? 50 : 10;
-    
+    const maxRadius = driverPreference === "pink_captain" ? 50 : 10;
+
     // Find vehicles that match the service and vehicle type
     const matchingVehicles = await Vehicle.find({
       serviceType: serviceType,
       vehicleType: vehicleType,
-      isActive: true
+      isActive: true,
     });
-    
+
     if (matchingVehicles.length === 0) {
       return res.status(404).json({
-        message: 'No vehicles available for this service',
+        message: "No vehicles available for this service",
         token: req.cookies.token,
       });
     }
-    
-    const vehicleOwnerIds = matchingVehicles.map(vehicle => vehicle.userId);
-    
+
+    const vehicleOwnerIds = matchingVehicles.map((vehicle) => vehicle.userId);
+
     // Find drivers within radius using the same criteria as qualified drivers
     const driversWithDistance = [];
     let driverQuery = {
       _id: { $in: vehicleOwnerIds },
-      role: 'driver',
+      role: "driver",
       kycLevel: 2,
-      kycStatus: 'approved',
+      kycStatus: "approved",
     };
 
     // Handle Pink Captain preferences
-    if (driverPreference === 'pink_captain') {
-      driverQuery.gender = 'female';
+    if (driverPreference === "pink_captain") {
+      driverQuery.gender = "female";
     }
-    
+
     const potentialDrivers = await User.find(driverQuery);
-    
+
     for (const driver of potentialDrivers) {
       if (driver.currentLocation && driver.currentLocation.coordinates) {
         const distance = calculateDistance(
-          { lat: pickupLocation.coordinates[1], lng: pickupLocation.coordinates[0] },
-          { lat: driver.currentLocation.coordinates[1], lng: driver.currentLocation.coordinates[0] }
+          {
+            lat: pickupLocation.coordinates[1],
+            lng: pickupLocation.coordinates[0],
+          },
+          {
+            lat: driver.currentLocation.coordinates[1],
+            lng: driver.currentLocation.coordinates[0],
+          }
         );
-        
+
         if (distance <= maxRadius) {
           driversWithDistance.push({
             ...driver.toObject(),
-            distance: distance
+            distance: distance,
           });
         }
       }
     }
-    
+
     // Filter drivers based on preference
     let filteredDrivers = driversWithDistance;
-    if (driverPreference === 'pink_captain') {
-      console.log('Filtering Pink Captain drivers based on preferences...');
-      
-      filteredDrivers = driversWithDistance.filter(driver => {
+    if (driverPreference === "pink_captain") {
+      console.log("Filtering Pink Captain drivers based on preferences...");
+
+      filteredDrivers = driversWithDistance.filter((driver) => {
         const driverPrefs = driver.driverSettings?.ridePreferences;
         return driverPrefs && driverPrefs.pinkCaptainMode;
       });
-      
+
       console.log(`Filtered to ${filteredDrivers.length} Pink Captain drivers`);
     }
-    
+
     // Sort by distance
     filteredDrivers.sort((a, b) => a.distance - b.distance);
-    
+
     if (filteredDrivers.length === 0) {
       return res.status(404).json({
-        message: 'No qualified drivers available',
+        message: "No qualified drivers available",
         token: req.cookies.token,
       });
     }
-    
+
     // Create booking request object
     const bookingRequest = {
       requestId: new Date().getTime().toString(),
@@ -2901,7 +3122,7 @@ const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
       userInfo: {
         name: req.user.name,
         email: req.user.email,
-        phone: req.user.phone
+        phone: req.user.phone,
       },
       pickupLocation,
       dropoffLocation,
@@ -2912,29 +3133,29 @@ const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
       paymentMethod,
       notes,
       timestamp: new Date(),
-      status: 'pending'
+      status: "pending",
     };
-    
+
     // Get Socket.IO instance for real-time notification
-    const io = req.app.get('io');
+    const io = req.app.get("io");
     let requestsSent = 0;
-    
+
     if (io) {
       // Send booking request to qualified drivers
       for (const driver of filteredDrivers) {
         const driverSocketId = getDriverSocketId(driver._id.toString());
         if (driverSocketId) {
-          io.to(driverSocketId).emit('new_booking_request', bookingRequest);
+          io.to(driverSocketId).emit("new_booking_request", bookingRequest);
           requestsSent++;
         }
       }
     }
-    
+
     const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRY,
     });
-    res.cookie('token', token, { httpOnly: true, maxAge: 3600000 });
-    
+    res.cookie("token", token, { httpOnly: true, maxAge: 3600000 });
+
     res.status(200).json({
       success: true,
       message: `Booking request sent to ${requestsSent} qualified drivers`,
@@ -2943,11 +3164,10 @@ const sendBookingRequestToQualifiedDrivers = asyncHandler(async (req, res) => {
       qualifiedDriversCount: filteredDrivers.length,
       token,
     });
-    
   } catch (error) {
-    console.error('Error sending booking request to qualified drivers:', error);
+    console.error("Error sending booking request to qualified drivers:", error);
     return res.status(500).json({
-      message: 'Failed to send booking request',
+      message: "Failed to send booking request",
       error: error.message,
       token: req.cookies.token,
     });
@@ -2965,7 +3185,10 @@ export const fraudCheckBooking = asyncHandler(async (req, res) => {
     "user driver",
     "currentLocation role"
   );
-  if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+  if (!booking)
+    return res
+      .status(404)
+      .json({ success: false, message: "Booking not found" });
 
   const userLoc = booking.user?.currentLocation?.coordinates;
   const driverLoc = booking.driver?.currentLocation?.coordinates;
@@ -2998,7 +3221,11 @@ export const fraudCheckBooking = asyncHandler(async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Driver suspended for ${SUSPEND_MINUTES} minutes due to fraud detection`,
-      data: { suspicious: true, distanceMeters: Math.round(dMeters), suspendedUntil: until },
+      data: {
+        suspicious: true,
+        distanceMeters: Math.round(dMeters),
+        suspendedUntil: until,
+      },
     });
   }
 
@@ -3006,6 +3233,269 @@ export const fraudCheckBooking = asyncHandler(async (req, res) => {
     success: true,
     message: "No fraud detected",
     data: { suspicious: false, distanceMeters: Math.round(dMeters) },
+  });
+});
+
+// === Fare Negotiation (REST for persisted bookings; uses Mongo ObjectId) ===
+const proposeFare = asyncHandler(async (req, res) => {
+  const bookingId =
+    req.body?.id || req.body?.bookingId || req.params?.bookingId;
+  const { proposedAmount } = req.body || {};
+  const userId = req.user._id;
+
+  if (typeof proposedAmount !== "number" && typeof proposedAmount !== "string") {
+    return res
+      .status(400)
+      .json({ success: false, message: "proposedAmount is required" });
+  }
+
+  const isObjectId =
+    typeof bookingId === "string" && /^[a-f\d]{24}$/i.test(bookingId);
+  if (!isObjectId) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid id. Provide the MongoDB booking _id.",
+    });
+  }
+  const booking = await Booking.findById(bookingId);
+  if (!booking)
+    return res
+      .status(404)
+      .json({ success: false, message: "Booking not found" });
+
+  // Authorization: allow
+  // - booking user
+  // - assigned driver
+  // - any driver when booking has no assigned driver yet (status pending)
+  const isCustomer = booking.user?.toString() === userId.toString();
+  const isAssignedDriver = booking.driver?.toString() === userId.toString();
+  const roleStr = String(
+    req.user?.role || req.user?.accountType || req.user?.userType || ""
+  ).toLowerCase();
+  const userIsDriver = roleStr.includes("driver") || roleStr.includes("captain") || !!req.user?.isDriver;
+  const allowUnassignedDriver = !booking.driver && userIsDriver;
+  if (!(isCustomer || isAssignedDriver || allowUnassignedDriver)) {
+    return res.status(403).json({
+      success: false,
+      message: "Not authorized to negotiate on this booking",
+    });
+  }
+
+  const minPercent = Number(process.env.NEGOTIATE_MIN_PERCENT || 0);
+  const maxPercent = Number(process.env.NEGOTIATE_MAX_PERCENT || 20);
+  const base = booking.fareDetails?.estimatedFare || booking.fare || 0;
+  const min = Math.max(0, Math.round(base * (1 - minPercent / 100)));
+  const max = Math.round(base * (1 + maxPercent / 100));
+  const amount = Number(proposedAmount);
+  if (amount < min || amount > max) {
+    return res.status(400).json({
+      success: false,
+      message: `Proposed amount out of bounds (${min} - ${max})`,
+    });
+  }
+
+  booking.fareDetails = booking.fareDetails || {};
+  booking.fareDetails.negotiation = {
+    state: "proposed",
+    proposedAmount: amount,
+    by: userId,
+    at: new Date(),
+    bounds: { min, max },
+    proposerRole: (String(
+      req.user?.role || req.user?.accountType || req.user?.userType || ""
+    ).toLowerCase().includes("driver") || req.user?.isDriver)
+      ? "driver"
+      : "customer",
+  };
+  await booking.save();
+
+  // WS notify the counterparty (small notification)
+  try {
+    const proposerId = userId.toString();
+    const customerId = booking.user?.toString?.();
+    const driverId = booking.driver?.toString?.();
+    const recipient = proposerId === customerId ? driverId : customerId;
+    if (recipient) {
+      webSocketService.sendToUser(String(recipient), {
+        event: "price.proposed",
+        requestId: bookingId,
+        data: { bookingId, proposedAmount: amount, by: proposerId, at: new Date() },
+      });
+    }
+  } catch (e) {}
+
+  return res.json({
+    success: true,
+    message: "Fare proposed",
+    data: { bookingId, proposedAmount: amount, bounds: { min, max } },
+  });
+});
+
+const acceptFare = asyncHandler(async (req, res) => {
+  const bookingId =
+    req.body?.id || req.body?.bookingId || req.params?.bookingId;
+  const userId = req.user._id;
+
+  const isObjectId =
+    typeof bookingId === "string" && /^[a-f\d]{24}$/i.test(bookingId);
+  if (!isObjectId) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid id. Provide the MongoDB booking _id.",
+    });
+  }
+  const booking = await Booking.findById(bookingId);
+  if (!booking)
+    return res
+      .status(404)
+      .json({ success: false, message: "Booking not found" });
+
+  // Authorization: allow
+  // - booking user
+  // - assigned driver
+  // - any driver when booking has no assigned driver yet (status pending)
+  const isCustomer = booking.user?.toString() === userId.toString();
+  const isAssignedDriver = booking.driver?.toString() === userId.toString();
+  const roleStr = String(
+    req.user?.role || req.user?.accountType || req.user?.userType || ""
+  ).toLowerCase();
+  const userIsDriver = roleStr.includes("driver") || roleStr.includes("captain") || !!req.user?.isDriver;
+  const allowUnassignedDriver = !booking.driver && userIsDriver;
+  if (!(isCustomer || isAssignedDriver || allowUnassignedDriver)) {
+    return res.status(403).json({
+      success: false,
+      message: "Not authorized to accept negotiation",
+    });
+  }
+
+  // If no pending negotiation, allow accepting a numeric amount provided in body
+  if (!booking.fareDetails?.negotiation) {
+    const bodyAmount = req.body?.amount ?? req.body?.proposedAmount;
+    const parsed = Number(bodyAmount);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No pending negotiation. Provide amount in body to accept (amount/proposedAmount)",
+      });
+    }
+    booking.fareDetails = booking.fareDetails || {};
+    booking.fareDetails.negotiation = {
+      state: "accepted",
+      proposedAmount: parsed,
+      by: userId,
+      at: new Date(),
+    };
+  }
+
+  booking.fareDetails.finalFare = booking.fareDetails.negotiation.proposedAmount;
+  booking.fareDetails.negotiation.state = "accepted";
+  // Keep top-level fare in sync
+  booking.fare = booking.fareDetails.finalFare;
+  let rideJustStarted = false;
+  if (booking.driver && booking.status !== "in_progress") {
+    booking.status = "in_progress";
+    booking.serviceStartedAt = new Date();
+    rideJustStarted = true;
+  }
+  await booking.save();
+
+  // WS notify both parties
+  try {
+    const customerId = booking.user?.toString?.();
+    const driverId = booking.driver?.toString?.();
+    const payload = {
+      event: "price.accepted",
+      requestId: bookingId,
+      data: {
+        bookingId,
+        amount: booking.fareDetails.finalFare,
+        by: userId.toString(),
+        at: new Date(),
+      },
+    };
+    if (customerId) webSocketService.sendToUser(String(customerId), payload);
+    if (driverId) webSocketService.sendToUser(String(driverId), payload);
+
+    // If ride started, notify both parties explicitly
+    if (rideJustStarted) {
+      const startPayload = {
+        event: "service.started",
+        requestId: bookingId,
+        data: {
+          bookingId,
+          startedAt: booking.serviceStartedAt,
+          status: booking.status,
+          amount: booking.fare,
+        },
+      };
+      if (customerId) webSocketService.sendToUser(String(customerId), startPayload);
+      if (driverId) webSocketService.sendToUser(String(driverId), startPayload);
+    }
+  } catch (e) {}
+
+  return res.json({
+    success: true,
+    message: "Fare negotiation accepted",
+    data: { bookingId, amount: booking.fareDetails.finalFare },
+  });
+});
+
+const rejectFare = asyncHandler(async (req, res) => {
+  const bookingId =
+    req.body?.id || req.body?.bookingId || req.params?.bookingId;
+  const userId = req.user._id;
+
+  const isObjectId =
+    typeof bookingId === "string" && /^[a-f\d]{24}$/i.test(bookingId);
+  if (!isObjectId) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid id. Provide the MongoDB booking _id.",
+    });
+  }
+  const booking = await Booking.findById(bookingId);
+  if (!booking)
+    return res
+      .status(404)
+      .json({ success: false, message: "Booking not found" });
+
+  // Only booking user or assigned driver can reject
+  const isParty = [
+    booking.user?.toString(),
+    booking.driver?.toString(),
+  ].includes(userId.toString());
+  if (!isParty)
+    return res.status(403).json({
+      success: false,
+      message: "Not authorized to reject negotiation",
+    });
+
+  if (!booking.fareDetails?.negotiation) {
+    return res
+      .status(400)
+      .json({ success: false, message: "No pending negotiation" });
+  }
+
+  booking.fareDetails.negotiation.state = "rejected";
+  await booking.save();
+
+  // WS notify both parties
+  try {
+    const customerId = booking.user?.toString?.();
+    const driverId = booking.driver?.toString?.();
+    const payload = {
+      event: "price.rejected",
+      requestId: bookingId,
+      data: { bookingId, by: userId.toString(), at: new Date() },
+    };
+    if (customerId) webSocketService.sendToUser(String(customerId), payload);
+    if (driverId) webSocketService.sendToUser(String(driverId), payload);
+  } catch (e) {}
+
+  return res.json({
+    success: true,
+    message: "Fare negotiation rejected",
+    data: { bookingId },
   });
 });
 
@@ -3037,127 +3527,7 @@ export {
   updateAutoAcceptSettings,
   updateRidePreferences,
   sendBookingRequestToQualifiedDrivers,
+  proposeFare,
+  acceptFare,
+  rejectFare,
 };
-
-// === Fare Negotiation (REST) ===
-export const proposeFare = asyncHandler(async (req, res) => {
-  const { bookingId } = req.params;
-  const { proposedAmount } = req.body || {};
-  const userId = req.user._id;
-
-  if (typeof proposedAmount !== 'number') {
-    return res.status(400).json({ success: false, message: 'proposedAmount is required' });
-  }
-
-  const booking = await Booking.findById(bookingId);
-  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-  // Only booking user or assigned driver can negotiate
-  const isParty = [booking.user?.toString(), booking.driver?.toString()].includes(userId.toString());
-  if (!isParty) return res.status(403).json({ success: false, message: 'Not authorized to negotiate on this booking' });
-
-  const minPercent = Number(process.env.NEGOTIATE_MIN_PERCENT || 0);
-  const maxPercent = Number(process.env.NEGOTIATE_MAX_PERCENT || 20);
-  const base = booking.fareDetails?.estimatedFare || booking.fare || 0;
-  const min = Math.max(0, Math.round(base * (1 - minPercent / 100)));
-  const max = Math.round(base * (1 + maxPercent / 100));
-  if (proposedAmount < min || proposedAmount > max) {
-    return res.status(400).json({ success: false, message: `Proposed amount out of bounds (${min} - ${max})` });
-  }
-
-  booking.fareDetails = booking.fareDetails || {};
-  booking.fareDetails.negotiation = {
-    state: 'proposed',
-    proposedAmount,
-    by: userId,
-    at: new Date(),
-    bounds: { min, max },
-  };
-  await booking.save();
-
-  // WS notify the counterparty (small notification)
-  try {
-    const proposerId = userId.toString();
-    const customerId = booking.user?.toString?.();
-    const driverId = booking.driver?.toString?.();
-    const recipient = proposerId === customerId ? driverId : customerId;
-    if (recipient) {
-      webSocketService.sendToUser(String(recipient), {
-        event: "price.proposed",
-        requestId: bookingId,
-        data: { bookingId, proposedAmount, by: proposerId, at: new Date() },
-      });
-    }
-  } catch (e) {}
-
-  return res.json({ success: true, message: 'Fare proposed', data: { bookingId, proposedAmount, bounds: { min, max } } });
-});
-
-export const acceptFare = asyncHandler(async (req, res) => {
-  const { bookingId } = req.params;
-  const userId = req.user._id;
-
-  const booking = await Booking.findById(bookingId);
-  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-  // Only booking user or assigned driver can accept
-  const isParty = [booking.user?.toString(), booking.driver?.toString()].includes(userId.toString());
-  if (!isParty) return res.status(403).json({ success: false, message: 'Not authorized to accept negotiation' });
-
-  if (!booking.fareDetails?.negotiation) {
-    return res.status(400).json({ success: false, message: 'No pending negotiation' });
-  }
-
-  booking.fareDetails.finalFare = booking.fareDetails.negotiation.proposedAmount;
-  booking.fareDetails.negotiation.state = 'accepted';
-  await booking.save();
-
-  // WS notify both parties
-  try {
-    const customerId = booking.user?.toString?.();
-    const driverId = booking.driver?.toString?.();
-    const payload = {
-      event: "price.accepted",
-      requestId: bookingId,
-      data: { bookingId, amount: booking.fareDetails.finalFare, by: userId.toString(), at: new Date() },
-    };
-    if (customerId) webSocketService.sendToUser(String(customerId), payload);
-    if (driverId) webSocketService.sendToUser(String(driverId), payload);
-  } catch (e) {}
-
-  return res.json({ success: true, message: 'Fare negotiation accepted', data: { bookingId, amount: booking.fareDetails.finalFare } });
-});
-
-export const rejectFare = asyncHandler(async (req, res) => {
-  const { bookingId } = req.params;
-  const userId = req.user._id;
-
-  const booking = await Booking.findById(bookingId);
-  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-  // Only booking user or assigned driver can reject
-  const isParty = [booking.user?.toString(), booking.driver?.toString()].includes(userId.toString());
-  if (!isParty) return res.status(403).json({ success: false, message: 'Not authorized to reject negotiation' });
-
-  if (!booking.fareDetails?.negotiation) {
-    return res.status(400).json({ success: false, message: 'No pending negotiation' });
-  }
-
-  booking.fareDetails.negotiation.state = 'rejected';
-  await booking.save();
-
-  // WS notify both parties
-  try {
-    const customerId = booking.user?.toString?.();
-    const driverId = booking.driver?.toString?.();
-    const payload = {
-      event: "price.rejected",
-      requestId: bookingId,
-      data: { bookingId, by: userId.toString(), at: new Date() },
-    };
-    if (customerId) webSocketService.sendToUser(String(customerId), payload);
-    if (driverId) webSocketService.sendToUser(String(driverId), payload);
-  } catch (e) {}
-
-  return res.json({ success: true, message: 'Fare negotiation rejected', data: { bookingId } });
-}); 

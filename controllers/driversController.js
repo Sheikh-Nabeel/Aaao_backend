@@ -66,7 +66,7 @@ const SELECT_FLOW = [
     key: "car recovery",
     label: "Car Recovery",
     categories: [
-      {
+      { 
         key: "towing services",
         label: "Towing Services",
         imageHint: "Tow truck carrying a sedan on flatbed",
