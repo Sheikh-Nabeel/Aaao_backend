@@ -607,8 +607,19 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       };
       let fareResult;
       let estimatedFare;
+      let dynamic = { demand: 0, supply: 0, surgePercent: 0, surgeType: "none" };
 
       if (booking.serviceType === "car recovery") {
+        // Validate enums strictly when service/sub-service provided in booking
+        try {
+          validateRecoveryService(
+            booking.serviceCategory /* may carry type like 'towing' */,
+            req.body.subService
+          );
+        } catch (e) {
+          return res.status(e.code || 400).json({ success: false, error: e.message });
+        }
+
         fareResult = await computeAdminCarRecoveryFare({
           distanceKm,
           routeType,
@@ -621,8 +632,84 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           waitingMinutes: req.body.options?.waitingTime || req.body.waitingMinutes || 0,
         });
         estimatedFare = fareResult.totalFare || 0;
+
+        // Fixed pricing override per sub-service (if configured)
+        try {
+          const fixed = await resolveFixedSubServicePrice(req.body.subService);
+          if (fixed !== null) {
+            estimatedFare = fixed;
+          }
+        } catch {}
+
+        // Compute demand/supply around pickup and adjust fare (car recovery only)
+        try {
+          const ds = await (async () => {
+            // Count online drivers and recent nearby passengers
+            const radiusKm = 10;
+            const timeWindowMin = 30;
+            const now = new Date();
+            const windowStart = new Date(now.getTime() - timeWindowMin * 60 * 1000);
+            // Supply: drivers online near pickup
+            const driverQuery = {
+              role: "driver",
+              kycLevel: { $gte: 2 },
+              kycStatus: "approved",
+              isActive: true,
+              driverStatus: "online",
+              "currentLocation.coordinates": { $exists: true },
+              "vehicleDetails.serviceType": "car recovery",
+            };
+            const drivers = await User.find(driverQuery).select("currentLocation.coordinates");
+            const supply = drivers.filter((d) => {
+              const c = d.currentLocation?.coordinates;
+              if (!Array.isArray(c) || c.length < 2) return false;
+              const dist = calculateDistance(
+                { lat: pickup.lat, lng: pickup.lng },
+                { lat: c[1], lng: c[0] }
+              );
+              return dist <= radiusKm;
+            }).length;
+            // Demand: recent car recovery bookings near pickup
+            const recent = await Booking.find({
+              serviceType: "car recovery",
+              status: { $in: ["pending", "searching", "finding_driver"] },
+              createdAt: { $gte: windowStart },
+            }).select("pickupLocation.coordinates");
+            const demand = recent.filter((b) => {
+              const c = b.pickupLocation?.coordinates;
+              if (!Array.isArray(c) || c.length < 2) return false;
+              const dist = calculateDistance(
+                { lat: pickup.lat, lng: pickup.lng },
+                { lat: c[1], lng: c[0] }
+              );
+              return dist <= radiusKm;
+            }).length;
+            return { demand, supply };
+          })();
+          dynamic.demand = ds.demand;
+          dynamic.supply = ds.supply;
+          if (ds.demand > 5 && ds.supply < 2) {
+            dynamic.surgePercent = 20; // increase 20%
+            dynamic.surgeType = "increase";
+          } else if (ds.supply > 3 && ds.demand < 2) {
+            dynamic.surgePercent = -20; // decrease 20%
+            dynamic.surgeType = "decrease";
+          }
+          if (dynamic.surgePercent !== 0) {
+            const mult = 1 + dynamic.surgePercent / 100;
+            estimatedFare = Math.max(0, Math.round(estimatedFare * mult * 100) / 100);
+          }
+        } catch (e) {
+          // non-fatal
+        }
       } else {
         // Use existing comprehensive flow for cab/bike/etc.
+        try {
+          validateCabBike(booking.serviceType, booking.vehicleType);
+        } catch (e) {
+          return res.status(e.code || 400).json({ success: false, error: e.message });
+        }
+
         fareResult = await calculateFareByServiceType(
           booking.serviceType,
           booking.vehicleType,
@@ -634,6 +721,14 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           }
         );
         estimatedFare = fareResult.totalFare || fareResult;
+
+        // Optional fixed pricing override per vehicleType for car cab/bike
+        try {
+          const fixed = await resolveFixedVehiclePrice(booking.serviceType, booking.vehicleType);
+          if (fixed !== null) {
+            estimatedFare = fixed;
+          }
+        } catch {}
       }
 
       // Fare adjustment settings
@@ -662,6 +757,13 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           routeType: booking.routeType,
           paymentMethod,
         },
+        onlineDriversCount: dynamic.supply,
+        nearbyPassengersCount: dynamic.demand,
+        dynamicAdjustment: {
+          surgePercent: dynamic.surgePercent,
+          type: dynamic.surgeType,
+        },
+        validatedVehicleType: booking.vehicleType || null,
       };
 
       // Always prepare a friendly breakdown array
@@ -809,6 +911,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
   try {
     let fareResult;
     let estimatedFare;
+    let dynamic = { demand: 0, supply: 0, surgePercent: 0, surgeType: "none" };
 
     // Calculate fare based on service type
     if (serviceType === "shifting & movers") {
@@ -824,6 +927,13 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       estimatedFare = fareData?.totalCalculatedFare || fareData?.totalFare || 0;
       fareResult = fareData;
     } else if (serviceType === "car recovery") {
+      // Strict enum validation for request body
+      try {
+        validateRecoveryService(req.body.serviceCategory, req.body.subService);
+      } catch (e) {
+        return res.status(e.code || 400).json({ success: false, error: e.message });
+      }
+
       fareResult = await computeAdminCarRecoveryFare({
         distanceKm: computedDistanceMeters / 1000,
         routeType,
@@ -836,8 +946,86 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         waitingMinutes: req.body.options?.waitingTime || req.body.waitingMinutes || 0,
       });
       estimatedFare = fareResult.totalFare || 0;
+
+      // Fixed pricing override per sub-service (if configured)
+      try {
+        const fixed = await resolveFixedSubServicePrice(req.body.subService);
+        if (fixed !== null) {
+          estimatedFare = fixed;
+        }
+      } catch {}
+
+      // Compute demand/supply around pickup and adjust fare (car recovery only)
+      try {
+        const pick = (() => {
+          // Normalize to { coordinates: [lng, lat] }
+          if (Array.isArray(pickupLocation?.coordinates)) return { coordinates: pickupLocation.coordinates };
+          const plat = pickupLocation?.coordinates?.lat ?? pickupLocation?.lat;
+          const plng = pickupLocation?.coordinates?.lng ?? pickupLocation?.lng;
+          if (typeof plat === "number" && typeof plng === "number") return { coordinates: [plng, plat] };
+          return null;
+        })();
+        if (pick && Array.isArray(pick.coordinates) && pick.coordinates.length >= 2) {
+          const lat = pick.coordinates[1];
+          const lng = pick.coordinates[0];
+          const radiusKm = 10;
+          const timeWindowMin = 30;
+          const now = new Date();
+          const windowStart = new Date(now.getTime() - timeWindowMin * 60 * 1000);
+          // Supply: drivers online near pickup
+          const driverQuery = {
+            role: "driver",
+            kycLevel: { $gte: 2 },
+            kycStatus: "approved",
+            isActive: true,
+            driverStatus: "online",
+            "currentLocation.coordinates": { $exists: true },
+            "vehicleDetails.serviceType": "car recovery",
+          };
+          const drivers = await User.find(driverQuery).select("currentLocation.coordinates");
+          const supply = drivers.filter((d) => {
+            const c = d.currentLocation?.coordinates;
+            if (!Array.isArray(c) || c.length < 2) return false;
+            const dist = calculateDistance({ lat, lng }, { lat: c[1], lng: c[0] });
+            return dist <= radiusKm;
+          }).length;
+          // Demand: recent car recovery bookings near pickup
+          const recent = await Booking.find({
+            serviceType: "car recovery",
+            status: { $in: ["pending", "searching", "finding_driver"] },
+            createdAt: { $gte: windowStart },
+          }).select("pickupLocation.coordinates");
+          const demand = recent.filter((b) => {
+            const c = b.pickupLocation?.coordinates;
+            if (!Array.isArray(c) || c.length < 2) return false;
+            const dist = calculateDistance({ lat, lng }, { lat: c[1], lng: c[0] });
+            return dist <= radiusKm;
+          }).length;
+          dynamic.demand = demand;
+          dynamic.supply = supply;
+          if (demand > 5 && supply < 2) {
+            dynamic.surgePercent = 20; // increase 20%
+            dynamic.surgeType = "increase";
+          } else if (supply > 3 && demand < 2) {
+            dynamic.surgePercent = -20; // decrease 20%
+            dynamic.surgeType = "decrease";
+          }
+          if (dynamic.surgePercent !== 0) {
+            const mult = 1 + dynamic.surgePercent / 100;
+            estimatedFare = Math.max(0, Math.round(estimatedFare * mult * 100) / 100);
+          }
+        }
+      } catch (e) {
+        // non-fatal
+      }
     } else {
       // Use comprehensive fare calculation for car cab and bike only
+      try {
+        validateCabBike(serviceType, vehicleType);
+      } catch (e) {
+        return res.status(e.code || 400).json({ success: false, error: e.message });
+      }
+
       fareResult = await calculateFareByServiceType(
         serviceType,
         vehicleType,
@@ -854,6 +1042,14 @@ const getFareEstimation = asyncHandler(async (req, res) => {
 
       // Handle both old and new fare calculation formats
       estimatedFare = fareResult.totalFare || fareResult;
+
+      // Optional fixed pricing override per vehicleType for car cab/bike
+      try {
+        const fixed = await resolveFixedVehiclePrice(serviceType, vehicleType);
+        if (fixed !== null) {
+          estimatedFare = fixed;
+        }
+      } catch {}
     }
 
     // Get fare adjustment settings
@@ -884,6 +1080,12 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       },
       qualifiedDrivers: qualifiedDrivers,
       driversCount: qualifiedDrivers.length,
+      onlineDriversCount: dynamic.supply,
+      nearbyPassengersCount: dynamic.demand,
+      dynamicAdjustment: {
+        surgePercent: dynamic.surgePercent,
+        type: dynamic.surgeType,
+      },
       tripDetails: {
         distance: `${(computedDistanceMeters / 1000).toFixed(2)} km`,
         serviceType,
@@ -893,6 +1095,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         paymentMethod,
         driverPreference: req.body.driverPreference,
       },
+      validatedVehicleType: vehicleType || null,
     };
 
     // Always build a friendly breakdown
@@ -1264,6 +1467,124 @@ async function computeAdminCarRecoveryFare({
       usedSubService: preferredSub || broad,
     },
   };
+}
+
+// Enums for car cab and bike vehicle types
+const CAR_CAB_VEHICLE_TYPES = new Set(["economy", "premium", "luxury", "xl", "family"]);
+const BIKE_VEHICLE_TYPES = new Set(["economy", "premium", "vip"]);
+
+function validateCabBike(serviceType, vehicleType) {
+  const st = String(serviceType || "").trim().toLowerCase();
+  const vt = String(vehicleType || "").trim().toLowerCase();
+  if (st === "car cab") {
+    if (!CAR_CAB_VEHICLE_TYPES.has(vt)) {
+      const allowed = Array.from(CAR_CAB_VEHICLE_TYPES).join(", ");
+      const err = new Error(`Invalid car cab vehicleType '${vt}'. Allowed: ${allowed}`);
+      err.code = 400;
+      throw err;
+    }
+  } else if (st === "bike") {
+    if (!BIKE_VEHICLE_TYPES.has(vt)) {
+      const allowed = Array.from(BIKE_VEHICLE_TYPES).join(", ");
+      const err = new Error(`Invalid bike vehicleType '${vt}'. Allowed: ${allowed}`);
+      err.code = 400;
+      throw err;
+    }
+  }
+}
+
+async function resolveFixedVehiclePrice(serviceType, vehicleType) {
+  try {
+    const st = String(serviceType || "").trim().toLowerCase();
+    const vt = String(vehicleType || "").trim().toLowerCase();
+    if (!vt) return null;
+    const comp = await ComprehensivePricing.findOne({ isActive: true })
+      .select("serviceTypes")
+      .lean();
+    if (st === "car cab") {
+      const fixed = comp?.serviceTypes?.carCab?.vehicleTypes?.[vt]?.fixedPrice;
+      return typeof fixed === "number" && fixed >= 0 ? fixed : null;
+    }
+    if (st === "bike") {
+      const fixed = comp?.serviceTypes?.bike?.vehicleTypes?.[vt]?.fixedPrice;
+      return typeof fixed === "number" && fixed >= 0 ? fixed : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Allowed enums for car recovery services and sub-services
+const RECOVERY_SERVICE_TYPES = new Set([
+  "towing",
+  "winching",
+  "roadside_assistance",
+  "key_unlock",
+  "car recovery", // legacy label used elsewhere; we still validate subService separately
+]);
+
+const RECOVERY_SUB_SERVICES = new Set([
+  "flatbed_towing",
+  "wheel_lift_towing",
+  "on_road_winching",
+  "off_road_winching",
+  "battery_jump_start",
+  "fuel_delivery",
+  "luxury_car_recovery",
+  "accident_recovery",
+  "heavy_duty_recovery",
+  "basement_pull_out",
+]);
+
+// Mapping which sub-services belong to which serviceType (for car recovery)
+const SERVICE_TO_SUBSERVICES = {
+  towing: ["flatbed_towing", "wheel_lift_towing"],
+  winching: ["on_road_winching", "off_road_winching", "basement_pull_out"],
+  roadside_assistance: ["battery_jump_start", "fuel_delivery"],
+  key_unlock: [],
+};
+
+// Helper to validate service/sub-service names strictly
+function validateRecoveryService(serviceType, subService) {
+  const sType = typeof serviceType === "string" ? serviceType.trim() : "";
+  const sSub = typeof subService === "string" ? subService.trim() : "";
+  if (sType && !RECOVERY_SERVICE_TYPES.has(sType)) {
+    const allowed = Array.from(RECOVERY_SERVICE_TYPES).join(", ");
+    const err = new Error(`Invalid serviceType '${sType}'. Allowed: ${allowed}`);
+    err.code = 400;
+    throw err;
+  }
+  if (sSub && !RECOVERY_SUB_SERVICES.has(sSub)) {
+    const allowed = Array.from(RECOVERY_SUB_SERVICES).join(", ");
+    const err = new Error(`Invalid subService '${sSub}'. Allowed: ${allowed}`);
+    err.code = 400;
+    throw err;
+  }
+  if (sType && sSub) {
+    const allowedSubs = SERVICE_TO_SUBSERVICES[sType] || [];
+    if (!allowedSubs.includes(sSub)) {
+      const err = new Error(`Sub-service '${sSub}' does not belong to serviceType '${sType}'`);
+      err.code = 400;
+      throw err;
+    }
+  }
+}
+
+// Try to read a fixed price for a sub-service from ComprehensivePricing if configured
+async function resolveFixedSubServicePrice(subService) {
+  try {
+    if (!subService) return null;
+    const comp = await ComprehensivePricing.findOne({ isActive: true })
+      .select("subServicePricing")
+      .lean();
+    // Expected shape: comp.subServicePricing.car_recovery.<subService>.fixedPrice
+    const fixed = comp?.subServicePricing?.car_recovery?.[subService]?.fixedPrice;
+    if (typeof fixed === "number" && fixed >= 0) return fixed;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export {
