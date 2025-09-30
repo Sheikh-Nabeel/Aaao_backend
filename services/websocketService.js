@@ -155,20 +155,100 @@ class WebSocketService {
 
     // Explicit role/service join API (client can call after auth)
     this.on("room.join", async (ws, { data }) => {
-      const room = data?.room;
-      if (!room)
-        return this.sendError(ws, { code: 400, message: "room is required" });
-      this.joinRoom(ws, room);
-      logger.info(`room.join -> user ${ws.userId} joined room: ${room}`);
-      this.send(ws, { event: "room.joined", data: { room } });
+      try {
+        const room = data?.room;
+        if (!room || typeof room !== "string") {
+          return this.sendError(ws, { code: 400, message: "room is required" });
+        }
+
+        // Allow only: role:admin|role:customer|role:driver (must match DB role), or user:<selfId>
+        const isRoleRoom = room.startsWith("role:");
+        const isUserRoom = room.startsWith("user:");
+
+        let dbRole = ws.user?.role || null;
+        if (!dbRole) {
+          const user = await User.findById(ws.userId).select("role").lean();
+          if (!user) return this.sendError(ws, { code: 404, message: "User not found" });
+          dbRole = user.role || "customer";
+        }
+
+        if (isRoleRoom) {
+          const allowed = new Set(["role:admin", "role:customer", "role:driver"]);
+          if (!allowed.has(room)) {
+            return this.sendError(ws, { code: 403, message: "Invalid role room. Allowed: role:admin|role:customer|role:driver" });
+          }
+          const expected = `role:${dbRole}`;
+          if (room !== expected) {
+            return this.sendError(ws, { code: 403, message: `Role mismatch: cannot join ${room}` });
+          }
+          this.leaveRoom(ws, `role:admin`);
+          this.leaveRoom(ws, `role:customer`);
+          this.leaveRoom(ws, `role:driver`);
+          this.joinRoom(ws, room);
+        } else if (isUserRoom) {
+          const parts = room.split(":");
+          const targetId = parts[1] || "";
+          if (!targetId || String(targetId) !== String(ws.userId)) {
+            return this.sendError(ws, { code: 403, message: "Cannot join another user's room" });
+          }
+          this.joinRoom(ws, room);
+        } else {
+          return this.sendError(ws, { code: 400, message: "Invalid room. Only role:admin|role:customer|role:driver or user:<selfId> allowed" });
+        }
+
+        const idPayload = dbRole === "driver" ? { driverId: String(ws.userId) } : { userId: String(ws.userId) };
+        logger.info(`room.join -> user ${ws.userId} joined room: ${room}`);
+        this.send(ws, { event: "room.joined", data: { room, role: dbRole, ...idPayload } });
+      } catch (e) {
+        logger.error("room.join error:", e);
+        this.sendError(ws, { code: 500, message: "Failed to join room" });
+      }
     });
     this.on("room.leave", async (ws, { data }) => {
-      const room = data?.room;
-      if (!room)
-        return this.sendError(ws, { code: 400, message: "room is required" });
-      this.leaveRoom(ws, room);
-      logger.info(`room.leave -> user ${ws.userId} left room: ${room}`);
-      this.send(ws, { event: "room.left", data: { room } });
+      try {
+        const room = data?.room;
+        if (!room || typeof room !== "string") {
+          return this.sendError(ws, { code: 400, message: "room is required" });
+        }
+        // Only allow leaving rooms the socket is actually in, and only the validated set
+        const isRoleRoom = room.startsWith("role:");
+        const isUserRoom = room.startsWith("user:");
+        let dbRole = ws.user?.role || null;
+        if (!dbRole) {
+          const user = await User.findById(ws.userId).select("role").lean();
+          if (!user) return this.sendError(ws, { code: 404, message: "User not found" });
+          dbRole = user.role || "customer";
+        }
+        if (isRoleRoom) {
+          const allowed = new Set(["role:admin", "role:customer", "role:driver"]);
+          if (!allowed.has(room)) {
+            return this.sendError(ws, { code: 403, message: "Invalid role room" });
+          }
+          // Can leave only your current role room
+          const expected = `role:${dbRole}`;
+          if (room !== expected) {
+            return this.sendError(ws, { code: 403, message: `Cannot leave ${room} (not your active role room)` });
+          }
+        } else if (isUserRoom) {
+          const parts = room.split(":");
+          const targetId = parts[1] || "";
+          if (!targetId || String(targetId) !== String(ws.userId)) {
+            return this.sendError(ws, { code: 403, message: "Cannot leave another user's room" });
+          }
+        } else {
+          return this.sendError(ws, { code: 400, message: "Invalid room. Only role:admin|role:customer|role:driver or user:<selfId> allowed" });
+        }
+        if (!ws.rooms?.has(room)) {
+          return this.sendError(ws, { code: 404, message: "You are not a member of this room" });
+        }
+        this.leaveRoom(ws, room);
+        const idPayload = dbRole === "driver" ? { driverId: String(ws.userId) } : { userId: String(ws.userId) };
+        logger.info(`room.leave -> user ${ws.userId} left room: ${room}`);
+        this.send(ws, { event: "room.left", data: { room, role: dbRole, ...idPayload } });
+      } catch (e) {
+        logger.error("room.leave error:", e);
+        this.sendError(ws, { code: 500, message: "Failed to leave room" });
+      }
     });
 
     // Explicit customer-only room join
