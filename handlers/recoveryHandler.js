@@ -305,6 +305,13 @@ class RecoveryHandler {
     if (typeof this.handleFareReject === "function") {
       this.webSocketService.on("fare.reject", this.handleFareReject.bind(this));
     }
+
+    if (typeof this.handleBookingDetails === "function") {
+      this.webSocketService.on(
+        "booking.details",
+        this.handleBookingDetails.bind(this)
+      );
+    }
   }
 
   /**
@@ -2921,9 +2928,13 @@ class RecoveryHandler {
     }
   }
 
-  /** Multi-stop rules (lightweight) **/
+  /**
+   * multiple stops: add waypoints only after service has started
+   * Event: multi_stop.set
+   * Payload: { bookingId, driverId? | userId?, stops: [{ lat, lng } | { latitude, longitude }] }
+   */
   async handleMultiStopSet(ws, message) {
-    // Normalize message and robustly resolve bookingId
+    // Normalize input
     let msg = message || {};
     if (typeof msg === "string") {
       try {
@@ -2935,7 +2946,8 @@ class RecoveryHandler {
     const data = msg?.data || {};
     const payload = msg?.payload || {};
     const body = msg?.body || {};
-    const norm = (v) => {
+
+    const normalizeId = (v) => {
       try {
         if (!v) return null;
         if (typeof v === "string") return v.trim();
@@ -2949,74 +2961,144 @@ class RecoveryHandler {
       } catch {}
       return null;
     };
-    const id =
+
+    const bookingId =
       [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-        msg?.requestId,
-        data?.requestId,
-        payload?.requestId,
-        body?.requestId,
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
       ]
-        .map(norm)
+        .map(normalizeId)
         .find((v) => typeof v === "string" && v.length > 0) || null;
 
     try {
-      if (!id) throw new Error("bookingId is required");
-      const enabled = !!(data?.enabled ?? payload?.enabled ?? body?.enabled);
-      const stopsRaw = data?.stops ?? payload?.stops ?? body?.stops;
-      const stops = Array.isArray(stopsRaw) ? stopsRaw.filter(Boolean) : [];
+      if (!bookingId) throw new Error("bookingId is required");
 
-      // Basic validation for stops
-      const validStops = stops
-        .map((s) => {
-          const lat = s?.coordinates?.latitude ?? s?.coordinates?.lat ?? s?.lat;
-          const lng =
-            s?.coordinates?.longitude ?? s?.coordinates?.lng ?? s?.lng;
-          return {
-            address: s?.address || null,
-            coordinates:
-              typeof lat === "number" && typeof lng === "number"
-                ? { latitude: lat, longitude: lng }
-                : null,
-            note: s?.note || undefined,
-          };
-        })
-        .filter(
-          (s) =>
-            s.coordinates &&
-            typeof s.coordinates.latitude === "number" &&
-            typeof s.coordinates.longitude === "number"
+      // Actor from payload (not token)
+      const driverId = (
+        data?.driverId ||
+        payload?.driverId ||
+        body?.driverId
+      )?.toString?.();
+      const userId = (
+        data?.userId ||
+        payload?.userId ||
+        body?.userId
+      )?.toString?.();
+      const by = driverId ? "driver" : "customer";
+      if (by === "driver" && !driverId) throw new Error("driverId is required");
+      if (by === "customer" && !userId) throw new Error("userId is required");
+
+      // Validate stops array
+      const stops = data?.stops || payload?.stops || body?.stops;
+      if (!Array.isArray(stops) || stops.length === 0) {
+        throw new Error("stops (non-empty array) is required");
+      }
+      // Basic shape check for each stop
+      const newStops = [];
+      for (const s of stops) {
+        const lat = s?.lat ?? s?.latitude;
+        const lng = s?.lng ?? s?.longitude;
+        if (typeof lat !== "number" || typeof lng !== "number") {
+          throw new Error("Each stop must include numeric lat/lng");
+        }
+        newStops.push({ lat, lng, addedAt: new Date() });
+      }
+
+      // Load booking
+      const booking = await Booking.findById(bookingId).select(
+        "status user driver waypoints"
+      );
+      if (!booking) throw new Error("Booking not found");
+
+      // Enforce: only after service has started
+      if (booking.status !== "in_progress") {
+        throw new Error(
+          "Multiple stops can be added only after service has started"
         );
+      }
 
-      // Update in-memory request if present
-      const rec = this.activeRecoveries.get(id) || {};
-      rec.multiStop = { enabled, stops: validStops };
-      this.activeRecoveries.set(id, rec);
+      // Authorization
+      if (by === "customer") {
+        if (!booking.user || String(booking.user) !== String(userId)) {
+          throw new Error(
+            "Not authorized: only the booking owner can add stops"
+          );
+        }
+      } else {
+        if (!booking.driver || String(booking.driver) !== String(driverId)) {
+          throw new Error(
+            "Not authorized: only the assigned driver can add stops"
+          );
+        }
+        // Optional driver sanity (keep consistent with other handlers)
+        const drv = await User.findById(driverId).select(
+          "role kycStatus kycLevel isActive driverStatus"
+        );
+        if (!drv || drv.role !== "driver") throw new Error("Invalid driver");
+        if (!(drv.kycStatus === "approved" && Number(drv.kycLevel || 0) >= 2)) {
+          throw new Error("Driver KYC not approved");
+        }
+        if (!(drv.isActive === true && drv.driverStatus === "online")) {
+          throw new Error("Driver is not online");
+        }
+      }
 
-      // Persist to DB
+      // Persist waypoints (append)
+      const updatedWaypoints = Array.isArray(booking.waypoints)
+        ? booking.waypoints.concat(newStops)
+        : newStops;
       await Booking.findByIdAndUpdate(
-        id,
-        { $set: { multiStop: { enabled, stops: validStops } } },
+        bookingId,
+        { $set: { waypoints: updatedWaypoints } },
         { new: false }
       );
 
+      // Ack to sender
       this.emitToClient(ws, {
-        event: "multiStop.updated",
-        bookingId: id,
-        data: { enabled, stops: validStops },
+        event: "multi_stop.updated",
+        bookingId,
+        data: {
+          by,
+          driverId: driverId || null,
+          userId: userId || null,
+          stops: newStops,
+        },
       });
+
+      // Notify counterparty
+      try {
+        const counterparty = by === "driver" ? booking.user : booking.driver;
+        if (counterparty) {
+          this.webSocketService.sendToUser(String(counterparty), {
+            event: "multi_stop.updated",
+            bookingId,
+            data: {
+              by,
+              driverId: driverId || null,
+              userId: userId || null,
+              stops: newStops,
+            },
+          });
+        }
+      } catch {}
     } catch (error) {
       this.emitToClient(ws, {
         event: "error",
-        bookingId: id || null,
-        error: { code: "MULTISTOP_SET_ERROR", message: error.message },
+        bookingId: bookingId || null,
+        error: {
+          code: "MULTI_STOP_ERROR",
+          message: error.message || "Failed to update multiple stops",
+        },
       });
     }
   }
@@ -4215,6 +4297,7 @@ class RecoveryHandler {
     const data = msg?.data || {};
     const payload = msg?.payload || {};
     const body = msg?.body || {};
+
     const normalizeId = (v) => {
       try {
         if (!v) return null;
@@ -4229,6 +4312,7 @@ class RecoveryHandler {
       } catch {}
       return null;
     };
+
     const bookingId =
       [
         msg.bookingId,
@@ -4259,10 +4343,22 @@ class RecoveryHandler {
       if (!isFinite(amount) || amount <= 0)
         throw new Error("Valid amount is required");
 
-      // Actor from token (ignore client-provided 'by')
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
-      if (!actorId) throw new Error("Unauthenticated user");
-      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+      // Actor from payload (not token)
+      const driverId = (
+        data?.driverId ||
+        payload?.driverId ||
+        body?.driverId
+      )?.toString?.();
+      const userId = (
+        data?.userId ||
+        payload?.userId ||
+        body?.userId
+      )?.toString?.();
+      const by = driverId ? "driver" : "customer";
+      if (by === "driver" && !driverId)
+        throw new Error("driverId is required for driver offer");
+      if (by === "customer" && !userId)
+        throw new Error("userId is required for customer offer");
 
       // Load booking (DB-first)
       const booking = await Booking.findById(bookingId).select(
@@ -4274,14 +4370,29 @@ class RecoveryHandler {
       }
 
       // Authorization
-      if (by === "driver") {
-        if (!booking.driver || String(booking.driver) !== String(actorId)) {
-          throw new Error("Not authorized: only the assigned driver can offer");
-        }
-      } else {
-        if (!booking.user || String(booking.user) !== String(actorId)) {
+      if (by === "customer") {
+        if (!booking.user || String(booking.user) !== String(userId)) {
           throw new Error("Not authorized: only the booking owner can offer");
         }
+      }
+      if (by === "driver") {
+        const drv = await User.findById(driverId).select(
+          "role kycStatus kycLevel isActive driverStatus"
+        );
+        if (!drv || drv.role !== "driver") throw new Error("Invalid driver");
+        if (!(drv.kycStatus === "approved" && Number(drv.kycLevel || 0) >= 2)) {
+          throw new Error("Driver KYC not approved");
+        }
+        if (!(drv.isActive === true && drv.driverStatus === "online")) {
+          throw new Error("Driver is not online");
+        }
+        // Per-driver single concurrent negotiation lock
+        const lockKey = String(driverId);
+        const lockedFor = this.negotiationLocks.get(lockKey);
+        if (lockedFor && lockedFor !== String(bookingId)) {
+          throw new Error("Driver is negotiating another request");
+        }
+        this.negotiationLocks.set(lockKey, String(bookingId));
       }
 
       // Bounds from pricing config around base estimate
@@ -4314,12 +4425,25 @@ class RecoveryHandler {
       // Persist negotiation
       const now = new Date();
       const negotiation = booking.fareDetails?.negotiation || {};
-      negotiation.state = negotiation.state || "ongoing"; // ongoing | accepted | rejected
+      negotiation.state = negotiation.state || "ongoing";
       negotiation.history = Array.isArray(negotiation.history)
         ? negotiation.history
         : [];
-      negotiation.history.push({ type: "offer", by, amount, at: now });
-      negotiation.lastOffer = { by, amount, at: now };
+      negotiation.history.push({
+        type: "offer",
+        by,
+        amount,
+        at: now,
+        driverId: driverId || null,
+        userId: userId || null,
+      });
+      negotiation.lastOffer = {
+        by,
+        amount,
+        at: now,
+        driverId: driverId || null,
+        userId: userId || null,
+      };
 
       await Booking.findByIdAndUpdate(
         bookingId,
@@ -4333,6 +4457,8 @@ class RecoveryHandler {
         bookingId,
         data: {
           by,
+          driverId: driverId || null,
+          userId: userId || null,
           amount,
           at: now,
           bounds: { min: minAllowed, max: maxAllowed, allowedPct },
@@ -4348,6 +4474,8 @@ class RecoveryHandler {
             bookingId,
             data: {
               by,
+              driverId: driverId || null,
+              userId: userId || null,
               amount,
               at: now,
               bounds: { min: minAllowed, max: maxAllowed, allowedPct },
@@ -4381,6 +4509,7 @@ class RecoveryHandler {
     const data = msg?.data || {};
     const payload = msg?.payload || {};
     const body = msg?.body || {};
+
     const normalizeId = (v) => {
       try {
         if (!v) return null;
@@ -4395,6 +4524,7 @@ class RecoveryHandler {
       } catch {}
       return null;
     };
+
     const bookingId =
       [
         msg.bookingId,
@@ -4425,10 +4555,22 @@ class RecoveryHandler {
       if (!isFinite(amount) || amount <= 0)
         throw new Error("Valid amount is required");
 
-      // Actor from token
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
-      if (!actorId) throw new Error("Unauthenticated user");
-      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+      // Actor from payload (not token)
+      const driverId = (
+        data?.driverId ||
+        payload?.driverId ||
+        body?.driverId
+      )?.toString?.();
+      const userId = (
+        data?.userId ||
+        payload?.userId ||
+        body?.userId
+      )?.toString?.();
+      const by = driverId ? "driver" : "customer";
+      if (by === "driver" && !driverId)
+        throw new Error("driverId is required for driver counter");
+      if (by === "customer" && !userId)
+        throw new Error("userId is required for customer counter");
 
       // Load booking
       const booking = await Booking.findById(bookingId).select(
@@ -4438,17 +4580,29 @@ class RecoveryHandler {
       if (["cancelled", "completed"].includes(booking.status))
         throw new Error(`Cannot counter on a ${booking.status} booking`);
 
-      // Authorization
-      if (by === "driver") {
-        if (!booking.driver || String(booking.driver) !== String(actorId)) {
-          throw new Error(
-            "Not authorized: only the assigned driver can counter"
-          );
-        }
-      } else {
-        if (!booking.user || String(booking.user) !== String(actorId)) {
+      // Authorization and driver validation/lock
+      if (by === "customer") {
+        if (!booking.user || String(booking.user) !== String(userId)) {
           throw new Error("Not authorized: only the booking owner can counter");
         }
+      }
+      if (by === "driver") {
+        const drv = await User.findById(driverId).select(
+          "role kycStatus kycLevel isActive driverStatus"
+        );
+        if (!drv || drv.role !== "driver") throw new Error("Invalid driver");
+        if (!(drv.kycStatus === "approved" && Number(drv.kycLevel || 0) >= 2)) {
+          throw new Error("Driver KYC not approved");
+        }
+        if (!(drv.isActive === true && drv.driverStatus === "online")) {
+          throw new Error("Driver is not online");
+        }
+        const lockKey = String(driverId);
+        const lockedFor = this.negotiationLocks.get(lockKey);
+        if (lockedFor && lockedFor !== String(bookingId)) {
+          throw new Error("Driver is negotiating another request");
+        }
+        this.negotiationLocks.set(lockKey, String(bookingId));
       }
 
       // Bounds enforcement (same as offer)
@@ -4485,8 +4639,21 @@ class RecoveryHandler {
       negotiation.history = Array.isArray(negotiation.history)
         ? negotiation.history
         : [];
-      negotiation.history.push({ type: "counter", by, amount, at: now });
-      negotiation.lastOffer = { by, amount, at: now };
+      negotiation.history.push({
+        type: "counter",
+        by,
+        amount,
+        at: now,
+        driverId: driverId || null,
+        userId: userId || null,
+      });
+      negotiation.lastOffer = {
+        by,
+        amount,
+        at: now,
+        driverId: driverId || null,
+        userId: userId || null,
+      };
 
       await Booking.findByIdAndUpdate(
         bookingId,
@@ -4500,6 +4667,8 @@ class RecoveryHandler {
         bookingId,
         data: {
           by,
+          driverId: driverId || null,
+          userId: userId || null,
           amount,
           at: now,
           bounds: { min: minAllowed, max: maxAllowed, allowedPct },
@@ -4513,6 +4682,8 @@ class RecoveryHandler {
             bookingId,
             data: {
               by,
+              driverId: driverId || null,
+              userId: userId || null,
               amount,
               at: now,
               bounds: { min: minAllowed, max: maxAllowed, allowedPct },
@@ -4546,6 +4717,7 @@ class RecoveryHandler {
     const data = msg?.data || {};
     const payload = msg?.payload || {};
     const body = msg?.body || {};
+
     const normalizeId = (v) => {
       try {
         if (!v) return null;
@@ -4560,6 +4732,7 @@ class RecoveryHandler {
       } catch {}
       return null;
     };
+
     const bookingId =
       [
         msg.bookingId,
@@ -4581,10 +4754,22 @@ class RecoveryHandler {
     try {
       if (!bookingId) throw new Error("bookingId is required");
 
-      // Actor from token
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
-      if (!actorId) throw new Error("Unauthenticated user");
-      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+      // Actor from payload (not token)
+      const driverId = (
+        data?.driverId ||
+        payload?.driverId ||
+        body?.driverId
+      )?.toString?.();
+      const userId = (
+        data?.userId ||
+        payload?.userId ||
+        body?.userId
+      )?.toString?.();
+      const by = driverId ? "driver" : "customer";
+      if (by === "driver" && !driverId)
+        throw new Error("driverId is required for driver reject");
+      if (by === "customer" && !userId)
+        throw new Error("userId is required for customer reject");
 
       // Load booking
       const booking = await Booking.findById(bookingId).select(
@@ -4594,16 +4779,22 @@ class RecoveryHandler {
       if (["cancelled", "completed"].includes(booking.status))
         throw new Error(`Cannot reject on a ${booking.status} booking`);
 
-      // Authorization (either party can reject)
-      if (by === "driver") {
-        if (!booking.driver || String(booking.driver) !== String(actorId)) {
-          throw new Error(
-            "Not authorized: only the assigned driver can reject"
-          );
-        }
-      } else {
-        if (!booking.user || String(booking.user) !== String(actorId)) {
+      // Authorization and driver validation
+      if (by === "customer") {
+        if (!booking.user || String(booking.user) !== String(userId)) {
           throw new Error("Not authorized: only the booking owner can reject");
+        }
+      }
+      if (by === "driver") {
+        const drv = await User.findById(driverId).select(
+          "role kycStatus kycLevel isActive driverStatus"
+        );
+        if (!drv || drv.role !== "driver") throw new Error("Invalid driver");
+        if (!(drv.kycStatus === "approved" && Number(drv.kycLevel || 0) >= 2)) {
+          throw new Error("Driver KYC not approved");
+        }
+        if (!(drv.isActive === true && drv.driverStatus === "online")) {
+          throw new Error("Driver is not online");
         }
       }
 
@@ -4614,28 +4805,39 @@ class RecoveryHandler {
       negotiation.history = Array.isArray(negotiation.history)
         ? negotiation.history
         : [];
-      negotiation.history.push({ type: "reject", by, at: now });
+      negotiation.history.push({
+        type: "reject",
+        by,
+        at: now,
+        driverId: driverId || null,
+        userId: userId || null,
+      });
 
       await Booking.findByIdAndUpdate(
         bookingId,
         {
           $set: { "fareDetails.negotiation": negotiation },
-          $unset: { pendingAssignment: "" }, // clean pending assignment if any
+          $unset: { pendingAssignment: "" },
         },
         { new: false }
       );
 
       // Release negotiation lock for driver (if any)
       try {
-        if (booking.driver)
-          this.negotiationLocks.delete(String(booking.driver));
+        if (by === "driver" && driverId)
+          this.negotiationLocks.delete(String(driverId));
       } catch {}
 
       // Ack and notify
       this.emitToClient(ws, {
         event: "fare.rejected",
         bookingId,
-        data: { by, at: now },
+        data: {
+          by,
+          driverId: driverId || null,
+          userId: userId || null,
+          at: now,
+        },
       });
       try {
         const counterparty = by === "driver" ? booking.user : booking.driver;
@@ -4643,7 +4845,12 @@ class RecoveryHandler {
           this.webSocketService.sendToUser(String(counterparty), {
             event: "fare.rejected",
             bookingId,
-            data: { by, at: now },
+            data: {
+              by,
+              driverId: driverId || null,
+              userId: userId || null,
+              at: now,
+            },
           });
         }
       } catch {}
@@ -4673,6 +4880,7 @@ class RecoveryHandler {
     const data = msg?.data || {};
     const payload = msg?.payload || {};
     const body = msg?.body || {};
+
     const normalizeId = (v) => {
       try {
         if (!v) return null;
@@ -4687,6 +4895,7 @@ class RecoveryHandler {
       } catch {}
       return null;
     };
+
     const bookingId =
       [
         msg.bookingId,
@@ -4708,10 +4917,22 @@ class RecoveryHandler {
     try {
       if (!bookingId) throw new Error("bookingId is required");
 
-      // Actor from token
-      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
-      if (!actorId) throw new Error("Unauthenticated user");
-      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+      // Actor from payload (not token)
+      const driverId = (
+        data?.driverId ||
+        payload?.driverId ||
+        body?.driverId
+      )?.toString?.();
+      const userId = (
+        data?.userId ||
+        payload?.userId ||
+        body?.userId
+      )?.toString?.();
+      const by = driverId ? "driver" : "customer";
+      if (by === "driver" && !driverId)
+        throw new Error("driverId is required for driver accept");
+      if (by === "customer" && !userId)
+        throw new Error("userId is required for customer accept");
 
       // Load booking
       const booking = await Booking.findById(bookingId).select(
@@ -4721,17 +4942,31 @@ class RecoveryHandler {
       if (["cancelled", "completed"].includes(booking.status))
         throw new Error(`Cannot accept on a ${booking.status} booking`);
 
-      // Authorization
-      if (by === "driver") {
-        if (!booking.driver || String(booking.driver) !== String(actorId)) {
-          throw new Error(
-            "Not authorized: only the assigned driver can accept"
-          );
-        }
-      } else {
-        if (!booking.user || String(booking.user) !== String(actorId)) {
+      // Authorization and driver validation (driver may accept to become assigned)
+      if (by === "customer") {
+        if (!booking.user || String(booking.user) !== String(userId)) {
           throw new Error("Not authorized: only the booking owner can accept");
         }
+      }
+      if (by === "driver") {
+        const drv = await User.findById(driverId).select(
+          "role kycStatus kycLevel isActive driverStatus"
+        );
+        if (!drv || drv.role !== "driver") throw new Error("Invalid driver");
+        if (!(drv.kycStatus === "approved" && Number(drv.kycLevel || 0) >= 2)) {
+          throw new Error("Driver KYC not approved");
+        }
+        if (!(drv.isActive === true && drv.driverStatus === "online")) {
+          throw new Error("Driver is not online");
+        }
+        const activeForDriver = await Booking.findOne({
+          driver: driverId,
+          status: { $in: ["accepted", "in_progress"] },
+        }).select("_id status");
+        if (activeForDriver)
+          throw new Error(
+            "Driver already has an active job (accepted/in_progress)"
+          );
       }
 
       const negotiation = booking.fareDetails?.negotiation || {};
@@ -4742,41 +4977,57 @@ class RecoveryHandler {
         throw new Error("No valid offer to accept");
       }
 
-      // Lock final fare
+      // Lock final fare and (if driver accepts) assign + accept
       const now = new Date();
       negotiation.state = "accepted";
       negotiation.history = Array.isArray(negotiation.history)
         ? negotiation.history
         : [];
-      negotiation.history.push({ type: "accept", by, amount, at: now });
+      negotiation.history.push({
+        type: "accept",
+        by,
+        amount,
+        at: now,
+        driverId: driverId || null,
+        userId: userId || null,
+      });
+
+      const updateSet = {
+        "fareDetails.negotiation": negotiation,
+        "fareDetails.finalFare": {
+          amount: Math.round(amount * 100) / 100,
+          by,
+          lockedAt: now,
+        },
+      };
+      if (by === "driver" && driverId) {
+        updateSet["driver"] = driverId;
+        updateSet["status"] = "accepted"; // assign and accept in one step
+      }
 
       await Booking.findByIdAndUpdate(
         bookingId,
-        {
-          $set: {
-            "fareDetails.negotiation": negotiation,
-            "fareDetails.finalFare": {
-              amount: Math.round(amount * 100) / 100,
-              by,
-              lockedAt: now,
-            },
-          },
-          $unset: { pendingAssignment: "" },
-        },
+        { $set: updateSet, $unset: { pendingAssignment: "" } },
         { new: false }
       );
 
       // Release negotiation lock for driver (if any)
       try {
-        if (booking.driver)
-          this.negotiationLocks.delete(String(booking.driver));
+        if (by === "driver" && driverId)
+          this.negotiationLocks.delete(String(driverId));
       } catch {}
 
       // Emit finalized
       this.emitToClient(ws, {
         event: "fare.finalized",
         bookingId,
-        data: { amount: Math.round(amount * 100) / 100, by, lockedAt: now },
+        data: {
+          amount: Math.round(amount * 100) / 100,
+          by,
+          driverId: driverId || null,
+          userId: userId || null,
+          lockedAt: now,
+        },
       });
       try {
         const counterparty = by === "driver" ? booking.user : booking.driver;
@@ -4784,7 +5035,13 @@ class RecoveryHandler {
           this.webSocketService.sendToUser(String(counterparty), {
             event: "fare.finalized",
             bookingId,
-            data: { amount: Math.round(amount * 100) / 100, by, lockedAt: now },
+            data: {
+              amount: Math.round(amount * 100) / 100,
+              by,
+              driverId: driverId || null,
+              userId: userId || null,
+              lockedAt: now,
+            },
           });
         }
       } catch {}
@@ -4793,6 +5050,176 @@ class RecoveryHandler {
         event: "error",
         bookingId: bookingId || null,
         error: { code: "FARE_ACCEPT_ERROR", message: error.message },
+      });
+    }
+  }
+
+  /**
+   * booking.details – return complete booking details after completion
+   * Payload: { bookingId, driverId?, userId? }
+   * Auth: driverId (assigned driver), userId (booking owner), or admin (from token)
+   */
+  async handleBookingDetails(ws, message) {
+    // Normalize input
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const payload = msg?.payload || {};
+    const body = msg?.body || {};
+
+    const normalizeId = (v) => {
+      try {
+        if (!v) return null;
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
+        if (typeof v === "object") {
+          if (v.$oid) return String(v.$oid).trim();
+          if (v._id) return String(v._id).trim();
+          if (typeof v.toString === "function")
+            return String(v.toString()).trim();
+        }
+      } catch {}
+      return null;
+    };
+
+    const bookingId =
+      [
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
+      ]
+        .map(normalizeId)
+        .find((v) => typeof v === "string" && v.length > 0) || null;
+
+    const driverId = (
+      data?.driverId ||
+      payload?.driverId ||
+      body?.driverId
+    )?.toString?.();
+    const userId = (
+      data?.userId ||
+      payload?.userId ||
+      body?.userId
+    )?.toString?.();
+    const isAdmin =
+      ws?.user && (ws.user.role === "admin" || ws.user.role === "superadmin");
+
+    try {
+      if (!bookingId) throw new Error("bookingId is required");
+
+      // Load booking (DB-first)
+      const booking = await Booking.findById(bookingId)
+        .select(
+          "status user driver serviceType serviceCategory createdAt updatedAt pickupLocation dropoffLocation waypoints distance distanceInMeters fareDetails receipt paymentDetails timeline"
+        )
+        .lean();
+      if (!booking) throw new Error("Booking not found");
+
+      // Only allow after completion
+      if (booking.status !== "completed") {
+        throw new Error("Details are available after service completion only");
+      }
+
+      // Authorization: owner, assigned driver, or admin
+      if (!isAdmin) {
+        const requesterDriver =
+          driverId &&
+          booking.driver &&
+          String(booking.driver) === String(driverId);
+        const requesterUser =
+          userId && booking.user && String(booking.user) === String(userId);
+        if (!requesterDriver && !requesterUser) {
+          throw new Error("Not authorized to view this booking details");
+        }
+      }
+
+      // Minimal user/driver profile
+      let userInfo = null,
+        driverInfo = null;
+      try {
+        if (booking.user) {
+          const u = await User.findById(booking.user)
+            .select("name fullName email mobile phone")
+            .lean();
+          if (u)
+            userInfo = {
+              id: String(booking.user),
+              name: u.name || u.fullName || null,
+              email: u.email || null,
+              phone: u.mobile || u.phone || null,
+            };
+        }
+      } catch {}
+      try {
+        if (booking.driver) {
+          const d = await User.findById(booking.driver)
+            .select("name fullName email mobile phone rating")
+            .lean();
+          if (d)
+            driverInfo = {
+              id: String(booking.driver),
+              name: d.name || d.fullName || null,
+              email: d.email || null,
+              phone: d.mobile || d.phone || null,
+              rating: d.rating ?? null,
+            };
+        }
+      } catch {}
+
+      // Compose response
+      const details = {
+        bookingId: String(bookingId),
+        status: booking.status,
+        serviceType: booking.serviceType || null,
+        serviceCategory: booking.serviceCategory || null,
+        createdAt: booking.createdAt || null,
+        updatedAt: booking.updatedAt || null,
+        pickupLocation: booking.pickupLocation || null,
+        dropoffLocation: booking.dropoffLocation || null,
+        waypoints: Array.isArray(booking.waypoints) ? booking.waypoints : [],
+        distance: booking.distance ?? null,
+        distanceInMeters: booking.distanceInMeters ?? null,
+        user: userInfo,
+        driver: driverInfo,
+        fareDetails: {
+          estimatedFare: booking?.fareDetails?.estimatedFare ?? null,
+          finalFare: booking?.fareDetails?.finalFare ?? null,
+          negotiation: booking?.fareDetails?.negotiation ?? null,
+        },
+        receipt: booking?.receipt ?? null,
+        paymentDetails: booking?.paymentDetails ?? null,
+        timeline: booking?.timeline ?? null,
+      };
+
+      // Respond
+      this.emitToClient(ws, {
+        event: "booking.details",
+        bookingId,
+        data: details,
+      });
+    } catch (error) {
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId: bookingId || null,
+        error: {
+          code: "BOOKING_DETAILS_ERROR",
+          message: error.message || "Failed to fetch booking details",
+        },
       });
     }
   }

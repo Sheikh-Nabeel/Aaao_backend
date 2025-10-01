@@ -753,13 +753,12 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           })();
           dynamic.demand = ds.demand;
           dynamic.supply = ds.supply;
-          if (ds.demand > 5 && ds.supply < 2) {
-            dynamic.surgePercent = 20; // increase 20%
-            dynamic.surgeType = "increase";
-          } else if (ds.supply > 3 && ds.demand < 2) {
-            dynamic.surgePercent = -20; // decrease 20%
-            dynamic.surgeType = "decrease";
-          }
+          // Continuous surge: factor = clamp(1 + 0.15*(ratio-1), 0.85, 1.15), where ratio = demand/supply
+          const ratioA = (ds.demand || 0) / Math.max(1, ds.supply || 0);
+          const rawFactorA = 1 + 0.15 * (ratioA - 1); // linear around 1.0
+          const factorA = Math.max(0.85, Math.min(1.15, rawFactorA));
+          dynamic.surgePercent = Math.round((factorA - 1) * 100);
+          dynamic.surgeType = dynamic.surgePercent > 0 ? "increase" : dynamic.surgePercent < 0 ? "decrease" : "none";
           if (dynamic.surgePercent !== 0) {
             const mult = 1 + dynamic.surgePercent / 100;
             estimatedFare = Math.max(
@@ -1094,13 +1093,12 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           }).length;
           dynamic.demand = demand;
           dynamic.supply = supply;
-          if (demand > 5 && supply < 2) {
-            dynamic.surgePercent = 20; // increase 20%
-            dynamic.surgeType = "increase";
-          } else if (supply > 3 && demand < 2) {
-            dynamic.surgePercent = -20; // decrease 20%
-            dynamic.surgeType = "decrease";
-          }
+          // Continuous surge: factor = clamp(1 + 0.15*(ratio-1), 0.85, 1.15), where ratio = demand/supply
+          const ratioB = (demand || 0) / Math.max(1, supply || 0);
+          const rawFactorB = 1 + 0.15 * (ratioB - 1);
+          const factorB = Math.max(0.85, Math.min(1.15, rawFactorB));
+          dynamic.surgePercent = Math.round((factorB - 1) * 100);
+          dynamic.surgeType = dynamic.surgePercent > 0 ? "increase" : dynamic.surgePercent < 0 ? "decrease" : "none";
           if (dynamic.surgePercent !== 0) {
             const mult = 1 + dynamic.surgePercent / 100;
             estimatedFare = Math.max(
