@@ -168,18 +168,30 @@ class WebSocketService {
         let dbRole = ws.user?.role || null;
         if (!dbRole) {
           const user = await User.findById(ws.userId).select("role").lean();
-          if (!user) return this.sendError(ws, { code: 404, message: "User not found" });
+          if (!user)
+            return this.sendError(ws, { code: 404, message: "User not found" });
           dbRole = user.role || "customer";
         }
 
         if (isRoleRoom) {
-          const allowed = new Set(["role:admin", "role:customer", "role:driver"]);
+          const allowed = new Set([
+            "role:admin",
+            "role:customer",
+            "role:driver",
+          ]);
           if (!allowed.has(room)) {
-            return this.sendError(ws, { code: 403, message: "Invalid role room. Allowed: role:admin|role:customer|role:driver" });
+            return this.sendError(ws, {
+              code: 403,
+              message:
+                "Invalid role room. Allowed: role:admin|role:customer|role:driver",
+            });
           }
           const expected = `role:${dbRole}`;
           if (room !== expected) {
-            return this.sendError(ws, { code: 403, message: `Role mismatch: cannot join ${room}` });
+            return this.sendError(ws, {
+              code: 403,
+              message: `Role mismatch: cannot join ${room}`,
+            });
           }
           this.leaveRoom(ws, `role:admin`);
           this.leaveRoom(ws, `role:customer`);
@@ -189,16 +201,29 @@ class WebSocketService {
           const parts = room.split(":");
           const targetId = parts[1] || "";
           if (!targetId || String(targetId) !== String(ws.userId)) {
-            return this.sendError(ws, { code: 403, message: "Cannot join another user's room" });
+            return this.sendError(ws, {
+              code: 403,
+              message: "Cannot join another user's room",
+            });
           }
           this.joinRoom(ws, room);
         } else {
-          return this.sendError(ws, { code: 400, message: "Invalid room. Only role:admin|role:customer|role:driver or user:<selfId> allowed" });
+          return this.sendError(ws, {
+            code: 400,
+            message:
+              "Invalid room. Only role:admin|role:customer|role:driver or user:<selfId> allowed",
+          });
         }
 
-        const idPayload = dbRole === "driver" ? { driverId: String(ws.userId) } : { userId: String(ws.userId) };
+        const idPayload =
+          dbRole === "driver"
+            ? { driverId: String(ws.userId) }
+            : { userId: String(ws.userId) };
         logger.info(`room.join -> user ${ws.userId} joined room: ${room}`);
-        this.send(ws, { event: "room.joined", data: { room, role: dbRole, ...idPayload } });
+        this.send(ws, {
+          event: "room.joined",
+          data: { room, role: dbRole, ...idPayload },
+        });
       } catch (e) {
         logger.error("room.join error:", e);
         this.sendError(ws, { code: 500, message: "Failed to join room" });
@@ -216,35 +241,62 @@ class WebSocketService {
         let dbRole = ws.user?.role || null;
         if (!dbRole) {
           const user = await User.findById(ws.userId).select("role").lean();
-          if (!user) return this.sendError(ws, { code: 404, message: "User not found" });
+          if (!user)
+            return this.sendError(ws, { code: 404, message: "User not found" });
           dbRole = user.role || "customer";
         }
         if (isRoleRoom) {
-          const allowed = new Set(["role:admin", "role:customer", "role:driver"]);
+          const allowed = new Set([
+            "role:admin",
+            "role:customer",
+            "role:driver",
+          ]);
           if (!allowed.has(room)) {
-            return this.sendError(ws, { code: 403, message: "Invalid role room" });
+            return this.sendError(ws, {
+              code: 403,
+              message: "Invalid role room",
+            });
           }
           // Can leave only your current role room
           const expected = `role:${dbRole}`;
           if (room !== expected) {
-            return this.sendError(ws, { code: 403, message: `Cannot leave ${room} (not your active role room)` });
+            return this.sendError(ws, {
+              code: 403,
+              message: `Cannot leave ${room} (not your active role room)`,
+            });
           }
         } else if (isUserRoom) {
           const parts = room.split(":");
           const targetId = parts[1] || "";
           if (!targetId || String(targetId) !== String(ws.userId)) {
-            return this.sendError(ws, { code: 403, message: "Cannot leave another user's room" });
+            return this.sendError(ws, {
+              code: 403,
+              message: "Cannot leave another user's room",
+            });
           }
         } else {
-          return this.sendError(ws, { code: 400, message: "Invalid room. Only role:admin|role:customer|role:driver or user:<selfId> allowed" });
+          return this.sendError(ws, {
+            code: 400,
+            message:
+              "Invalid room. Only role:admin|role:customer|role:driver or user:<selfId> allowed",
+          });
         }
         if (!ws.rooms?.has(room)) {
-          return this.sendError(ws, { code: 404, message: "You are not a member of this room" });
+          return this.sendError(ws, {
+            code: 404,
+            message: "You are not a member of this room",
+          });
         }
         this.leaveRoom(ws, room);
-        const idPayload = dbRole === "driver" ? { driverId: String(ws.userId) } : { userId: String(ws.userId) };
+        const idPayload =
+          dbRole === "driver"
+            ? { driverId: String(ws.userId) }
+            : { userId: String(ws.userId) };
         logger.info(`room.leave -> user ${ws.userId} left room: ${room}`);
-        this.send(ws, { event: "room.left", data: { room, role: dbRole, ...idPayload } });
+        this.send(ws, {
+          event: "room.left",
+          data: { room, role: dbRole, ...idPayload },
+        });
       } catch (e) {
         logger.error("room.leave error:", e);
         this.sendError(ws, { code: 500, message: "Failed to leave room" });

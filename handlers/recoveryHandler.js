@@ -663,37 +663,125 @@ class RecoveryHandler {
    * Handle driver assignment
    */
   async handleDriverAssignment(ws, message) {
-    const { bookingId, data } = message || {};
+    // Normalize bookingId possibly coming inside data/payload/body (ws layer often sends only { data })
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const payload = msg?.payload || {};
+    const body = msg?.body || {};
+
+    // Resolve bookingId from multiple shapes
+    const normalizeId = (v) => {
+      try {
+        if (!v) return null;
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
+        if (typeof v === "object") {
+          if (v.$oid) return String(v.$oid).trim();
+          if (v._id) return String(v._id).trim();
+          if (typeof v.toString === "function")
+            return String(v.toString()).trim();
+        }
+      } catch {}
+      return null;
+    };
+    const bookingId =
+      [msg.bookingId, data.bookingId, payload.bookingId, body.bookingId]
+        .map(normalizeId)
+        .find((v) => typeof v === "string" && v.length > 0) || null;
 
     try {
-      if (!bookingId || !data || !data.driverId) {
+      if (!bookingId || !data?.driverId) {
         throw new Error(
           "Missing required fields: bookingId and driverId are required"
         );
       }
 
-      const recoveryRequest = this.activeRecoveries.get(bookingId);
-      if (!recoveryRequest) {
-        throw new Error("Recovery request not found");
+      // Validate driver is online and not busy
+      const driver = await User.findById(data.driverId).select(
+        "isActive driverStatus currentLocation dues.outstanding"
+      );
+      if (!driver) throw new Error("Driver not found");
+      if (!(driver.isActive === true && driver.driverStatus === "online")) {
+        throw new Error("Driver is not online/available");
       }
-
-      // Never allow auto-accept via assignment payload
-      if (data.autoAccept === true) {
-        logger.warn(
-          "Ignoring autoAccept flag on driver assignment. Acceptance must be explicit."
+      // Driver cannot have another active job
+      const activeForDriver = await Booking.findOne({
+        driver: data.driverId,
+        status: { $in: ["accepted", "in_progress"] },
+      }).select("_id status");
+      if (activeForDriver) {
+        throw new Error(
+          "Driver already has an active job (accepted/in_progress)"
         );
       }
 
-      // IMPORTANT: Do NOT set driverId/status here. Treat as a proposal only.
-      // Persist a pending assignment proposal to wait for accept/reject & negotiation.
+      // Enforce one pending booking per driver at a time
+      const lockedFor = this.negotiationLocks.get(String(data.driverId));
+      if (lockedFor && lockedFor !== bookingId) {
+        throw new Error("Driver is negotiating another request");
+      }
+      this.negotiationLocks.set(String(data.driverId), bookingId);
+
+      // Get or reconstruct in-memory recovery request
+      let recoveryRequest = this.activeRecoveries.get(bookingId);
+      if (!recoveryRequest) {
+        // DB-first fallback: reconstruct minimal context so in-memory isn't required earlier in flow
+        const booking = await Booking.findById(bookingId)
+          .select(
+            "pickupLocation user serviceType serviceCategory distance distanceInMeters status"
+          )
+          .lean();
+        if (!booking) throw new Error("Recovery request not found");
+        recoveryRequest = {
+          bookingId: bookingId,
+          userId: booking.user,
+          pickupLocation: booking.pickupLocation,
+          serviceType: booking.serviceType || "car recovery",
+          serviceCategory: booking.serviceCategory || null,
+          distance: booking.distance || 0,
+          distanceInMeters: booking.distanceInMeters || 0,
+          status: booking.status || "pending",
+          statusHistory: [],
+          discoveryFilters: {},
+          searchRadiusKm: 10,
+        };
+        this.activeRecoveries.set(bookingId, recoveryRequest);
+      }
+
+      // Create pending assignment (do NOT assign booking yet)
       recoveryRequest.pendingAssignment = {
         driverId: String(data.driverId),
         proposedAt: new Date(),
       };
-      // Keep status unchanged (e.g., 'pending' or current). Do NOT set 'driver_assigned' yet.
       this.activeRecoveries.set(bookingId, recoveryRequest);
 
-      // Notify customer: assignment requested, requires acceptance/negotiation
+      // Persist lightweight pending state to DB for durability (best-effort)
+      try {
+        await Booking.findByIdAndUpdate(
+          bookingId,
+          {
+            $set: {
+              pendingAssignment: {
+                driverId: String(data.driverId),
+                proposedAt: new Date(),
+                status: "pending_acceptance",
+              },
+            },
+          },
+          { new: false }
+        );
+      } catch (persistErr) {
+        // Non-fatal: continue with WS flow
+      }
+
+      // Notify requester with pending status
       this.emitToClient(ws, {
         event: "driver.assignment.requested",
         bookingId: bookingId,
@@ -706,7 +794,7 @@ class RecoveryHandler {
         },
       });
 
-      // Notify driver with a request to review/accept/negotiate
+      // Ask the driver to review/accept/negotiate (direct message)
       try {
         this.webSocketService.sendToUser(String(data.driverId), {
           event: "driver.assignment.request",
@@ -729,6 +817,19 @@ class RecoveryHandler {
       );
     } catch (error) {
       logger.error("Error in handleDriverAssignment:", error);
+      // Release lock if set for this driver to prevent deadlock on retries
+      try {
+        const d =
+          message?.data?.driverId ||
+          (typeof message === "object" && message?.data?.driverId);
+        if (
+          d &&
+          this.negotiationLocks.get(String(d)) ===
+            (message?.bookingId || message?.data?.bookingId)
+        ) {
+          this.negotiationLocks.delete(String(d));
+        }
+      } catch {}
       this.emitToClient(ws, {
         event: "error",
         bookingId: bookingId,
@@ -981,18 +1082,18 @@ class RecoveryHandler {
     };
     const id =
       [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-        msg?.requestId,
-        data?.requestId,
-        payload?.requestId,
-        body?.requestId,
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
       ]
         .map(normalizeId)
         .find((v) => typeof v === "string" && v.length > 0) || null;
@@ -1192,18 +1293,18 @@ class RecoveryHandler {
     };
     const id =
       [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-        msg?.requestId,
-        data?.requestId,
-        payload?.requestId,
-        body?.requestId,
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
       ]
         .map(normalizeId)
         .find((v) => typeof v === "string" && v.length > 0) || null;
@@ -1627,18 +1728,18 @@ class RecoveryHandler {
     // Robustly resolve bookingId from common shapes
     const id =
       [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-        msg?.requestId,
-        data?.requestId,
-        payload?.requestId,
-        body?.requestId,
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
       ]
         .map(normalizeId)
         .find((v) => typeof v === "string" && v.length > 0) || null;
@@ -1899,7 +2000,7 @@ class RecoveryHandler {
     const payload = msg?.payload || {};
     const body = msg?.body || {};
 
-    // Normalize candidate id values (strings, numbers, {$oid}, {_id})
+    // Normalize candidate id values
     const normalizeId = (v) => {
       try {
         if (!v) return null;
@@ -1914,22 +2015,20 @@ class RecoveryHandler {
       } catch {}
       return null;
     };
-
-    // Robustly resolve bookingId from common shapes
     const id =
       [
-        msg?.bookingId,
-        data?.bookingId,
-        payload?.bookingId,
-        body?.bookingId,
-        msg?.id,
-        data?.id,
-        payload?.id,
-        body?.id,
-        msg?.requestId,
-        data?.requestId,
-        payload?.requestId,
-        body?.requestId,
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
       ]
         .map(normalizeId)
         .find((v) => typeof v === "string" && v.length > 0) || null;
@@ -2232,10 +2331,7 @@ class RecoveryHandler {
       this.emitToClient(ws, {
         event: "error",
         bookingId: id,
-        error: {
-          code: "FARE_ESTIMATE_ERROR",
-          message: error.message || "Failed to calculate fare estimate",
-        },
+        error: { code: "FARE_ESTIMATE_ERROR", message: error.message },
       });
     }
   }
@@ -2551,7 +2647,7 @@ class RecoveryHandler {
     const body = msg?.body || {};
     const driverId =
       (data?.driverId ?? payload?.driverId ?? body?.driverId) || null;
-    const userId = (ws?.user?.id || ws?.user?._id)?.toString();
+    const userId = (ws?.user?.id || ws?.user?._id)?.toString;
 
     try {
       if (!userId) throw new Error("Unauthenticated");
@@ -2577,7 +2673,7 @@ class RecoveryHandler {
 
   async handleFavouritesList(ws, message) {
     try {
-      const userId = (ws?.user?.id || ws?.user?._id)?.toString();
+      const userId = (ws?.user?.id || ws?.user?._id)?.toString;
       if (!userId) throw new Error("Unauthenticated");
       const user = await User.findById(userId)
         .populate(
@@ -2615,7 +2711,7 @@ class RecoveryHandler {
     const body = msg?.body || {};
     const driverId =
       (data?.driverId ?? payload?.driverId ?? body?.driverId) || null;
-    const userId = (ws?.user?.id || ws?.user?._id)?.toString();
+    const userId = (ws?.user?.id || ws?.user?._id)?.toString;
 
     try {
       if (!userId) throw new Error("Unauthenticated");
@@ -3246,7 +3342,7 @@ class RecoveryHandler {
       );
       if (!booking) throw new Error("Recovery request not found");
       if (!booking.driver || String(booking.driver) !== driverId) {
-        throw new Error("Driver not authorized to cancel this booking");
+        throw new Error("Driver not assigned to this booking");
       }
       if (["in_progress", "completed", "cancelled"].includes(booking.status)) {
         throw new Error(`Cannot cancel at status ${booking.status}`);
@@ -3653,15 +3749,17 @@ class RecoveryHandler {
     try {
       if (!id) throw new Error("bookingId is required");
       const amount = Number(
-        data?.amount ?? data?.value ?? data?.fare ?? payload?.amount ?? body?.amount
+        data?.amount ??
+          data?.value ??
+          data?.fare ??
+          payload?.amount ??
+          body?.amount
       );
       if (!isFinite(amount) || amount <= 0)
         throw new Error("Valid amount is required");
-      const by = String(data?.by || data?.role || ws?.user?.role || "customer")
-        .toLowerCase()
-        .trim();
-      if (!["driver", "customer"].includes(by))
-        throw new Error("by must be 'driver' or 'customer'");
+      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
+      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+      if (!actorId) throw new Error("Unauthenticated user");
 
       // Persist final fare to DB
       const update = {
@@ -3677,7 +3775,11 @@ class RecoveryHandler {
 
       // Update in-memory recovery (if any)
       const rec = this.activeRecoveries.get(id) || {};
-      rec.finalFare = { amount: Math.round(amount * 100) / 100, by, lockedAt: new Date() };
+      rec.finalFare = {
+        amount: Math.round(amount * 100) / 100,
+        by,
+        lockedAt: new Date(),
+      };
       this.activeRecoveries.set(id, rec);
 
       // Notify both parties via room and direct user if known
@@ -3686,7 +3788,11 @@ class RecoveryHandler {
         this.emitToClient(ws, {
           event: "fare.finalized",
           bookingId: id,
-          data: { amount: rec.finalFare.amount, by, lockedAt: rec.finalFare.lockedAt },
+          data: {
+            amount: rec.finalFare.amount,
+            by,
+            lockedAt: rec.finalFare.lockedAt,
+          },
         });
       } catch {}
       try {
@@ -3698,7 +3804,11 @@ class RecoveryHandler {
         this.webSocketService.sendToUsers(targets, {
           event: "fare.finalized",
           bookingId: id,
-          data: { amount: rec.finalFare.amount, by, lockedAt: rec.finalFare.lockedAt },
+          data: {
+            amount: rec.finalFare.amount,
+            by,
+            lockedAt: rec.finalFare.lockedAt,
+          },
         });
       } catch {}
     } catch (error) {
@@ -3970,6 +4080,605 @@ class RecoveryHandler {
     // keep last 50 points per role
     if (entry[role].length > 50) entry[role] = entry[role].slice(-50);
     this.locationTracks.set(id, entry);
+  }
+
+  /**
+   * Negotiation: fare offer (driver/customer) – DB-first, token-derived actor
+   * Payload: { bookingId, data: { amount: number } }
+   */
+  async handleFareOffer(ws, message) {
+    // Normalize input
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const payload = msg?.payload || {};
+    const body = msg?.body || {};
+    const normalizeId = (v) => {
+      try {
+        if (!v) return null;
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
+        if (typeof v === "object") {
+          if (v.$oid) return String(v.$oid).trim();
+          if (v._id) return String(v._id).trim();
+          if (typeof v.toString === "function")
+            return String(v.toString()).trim();
+        }
+      } catch {}
+      return null;
+    };
+    const bookingId =
+      [
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
+      ]
+        .map(normalizeId)
+        .find((v) => typeof v === "string" && v.length > 0) || null;
+
+    try {
+      if (!bookingId) throw new Error("bookingId is required");
+      const amount = Number(
+        data?.amount ??
+          data?.value ??
+          data?.fare ??
+          payload?.amount ??
+          body?.amount
+      );
+      if (!isFinite(amount) || amount <= 0)
+        throw new Error("Valid amount is required");
+
+      // Actor from token (ignore client-provided 'by')
+      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
+      if (!actorId) throw new Error("Unauthenticated user");
+      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+
+      // Load booking (DB-first)
+      const booking = await Booking.findById(bookingId).select(
+        "fareDetails user driver status"
+      );
+      if (!booking) throw new Error("Booking not found");
+      if (["cancelled", "completed"].includes(booking.status)) {
+        throw new Error(`Cannot offer on a ${booking.status} booking`);
+      }
+
+      // Authorization
+      if (by === "driver") {
+        if (!booking.driver || String(booking.driver) !== String(actorId)) {
+          throw new Error("Not authorized: only the assigned driver can offer");
+        }
+      } else {
+        if (!booking.user || String(booking.user) !== String(actorId)) {
+          throw new Error("Not authorized: only the booking owner can offer");
+        }
+      }
+
+      // Bounds from pricing config around base estimate
+      const base =
+        Number(booking?.fareDetails?.estimatedFare || booking?.fare || 0) || 0;
+      let allowedPct = 3;
+      try {
+        const pc = await PricingConfig.findOne({
+          serviceType: "car_recovery",
+          isActive: true,
+        }).lean();
+        allowedPct = Number(
+          pc?.fareAdjustmentSettings?.allowedAdjustmentPercentage ?? 3
+        );
+      } catch {}
+      const minAllowed = base
+        ? Math.round(base * (1 - allowedPct / 100) * 100) / 100
+        : 0;
+      const maxAllowed = base
+        ? Math.round(base * (1 + allowedPct / 100) * 100) / 100
+        : Infinity;
+      if (base > 0 && (amount < minAllowed || amount > maxAllowed)) {
+        throw new Error(
+          `Offer must be within ±${allowedPct}% of base AED ${base.toFixed(
+            2
+          )} (min ${minAllowed}, max ${maxAllowed})`
+        );
+      }
+
+      // Persist negotiation
+      const now = new Date();
+      const negotiation = booking.fareDetails?.negotiation || {};
+      negotiation.state = negotiation.state || "ongoing"; // ongoing | accepted | rejected
+      negotiation.history = Array.isArray(negotiation.history)
+        ? negotiation.history
+        : [];
+      negotiation.history.push({ type: "offer", by, amount, at: now });
+      negotiation.lastOffer = { by, amount, at: now };
+
+      await Booking.findByIdAndUpdate(
+        bookingId,
+        { $set: { "fareDetails.negotiation": negotiation } },
+        { new: false }
+      );
+
+      // Ack to sender
+      this.emitToClient(ws, {
+        event: "fare.offer.ack",
+        bookingId,
+        data: {
+          by,
+          amount,
+          at: now,
+          bounds: { min: minAllowed, max: maxAllowed, allowedPct },
+        },
+      });
+
+      // Notify counterparty
+      try {
+        const counterparty = by === "driver" ? booking.user : booking.driver;
+        if (counterparty) {
+          this.webSocketService.sendToUser(String(counterparty), {
+            event: "fare.offer",
+            bookingId,
+            data: {
+              by,
+              amount,
+              at: now,
+              bounds: { min: minAllowed, max: maxAllowed, allowedPct },
+            },
+          });
+        }
+      } catch {}
+    } catch (error) {
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId: bookingId || null,
+        error: { code: "FARE_OFFER_ERROR", message: error.message },
+      });
+    }
+  }
+
+  /**
+   * Negotiation: fare counter (driver/customer)
+   * Payload: { bookingId, data: { amount: number } }
+   */
+  async handleFareCounter(ws, message) {
+    // Normalize input
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const payload = msg?.payload || {};
+    const body = msg?.body || {};
+    const normalizeId = (v) => {
+      try {
+        if (!v) return null;
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
+        if (typeof v === "object") {
+          if (v.$oid) return String(v.$oid).trim();
+          if (v._id) return String(v._id).trim();
+          if (typeof v.toString === "function")
+            return String(v.toString()).trim();
+        }
+      } catch {}
+      return null;
+    };
+    const bookingId =
+      [
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
+      ]
+        .map(normalizeId)
+        .find((v) => typeof v === "string" && v.length > 0) || null;
+
+    try {
+      if (!bookingId) throw new Error("bookingId is required");
+      const amount = Number(
+        data?.amount ??
+          data?.value ??
+          data?.fare ??
+          payload?.amount ??
+          body?.amount
+      );
+      if (!isFinite(amount) || amount <= 0)
+        throw new Error("Valid amount is required");
+
+      // Actor from token
+      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
+      if (!actorId) throw new Error("Unauthenticated user");
+      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+
+      // Load booking
+      const booking = await Booking.findById(bookingId).select(
+        "fareDetails user driver status"
+      );
+      if (!booking) throw new Error("Booking not found");
+      if (["cancelled", "completed"].includes(booking.status))
+        throw new Error(`Cannot counter on a ${booking.status} booking`);
+
+      // Authorization
+      if (by === "driver") {
+        if (!booking.driver || String(booking.driver) !== String(actorId)) {
+          throw new Error(
+            "Not authorized: only the assigned driver can counter"
+          );
+        }
+      } else {
+        if (!booking.user || String(booking.user) !== String(actorId)) {
+          throw new Error("Not authorized: only the booking owner can counter");
+        }
+      }
+
+      // Bounds enforcement (same as offer)
+      const base =
+        Number(booking?.fareDetails?.estimatedFare || booking?.fare || 0) || 0;
+      let allowedPct = 3;
+      try {
+        const pc = await PricingConfig.findOne({
+          serviceType: "car_recovery",
+          isActive: true,
+        }).lean();
+        allowedPct = Number(
+          pc?.fareAdjustmentSettings?.allowedAdjustmentPercentage ?? 3
+        );
+      } catch {}
+      const minAllowed = base
+        ? Math.round(base * (1 - allowedPct / 100) * 100) / 100
+        : 0;
+      const maxAllowed = base
+        ? Math.round(base * (1 + allowedPct / 100) * 100) / 100
+        : Infinity;
+      if (base > 0 && (amount < minAllowed || amount > maxAllowed)) {
+        throw new Error(
+          `Counter must be within ±${allowedPct}% of base AED ${base.toFixed(
+            2
+          )} (min ${minAllowed}, max ${maxAllowed})`
+        );
+      }
+
+      // Persist negotiation
+      const now = new Date();
+      const negotiation = booking.fareDetails?.negotiation || {};
+      negotiation.state = negotiation.state || "ongoing";
+      negotiation.history = Array.isArray(negotiation.history)
+        ? negotiation.history
+        : [];
+      negotiation.history.push({ type: "counter", by, amount, at: now });
+      negotiation.lastOffer = { by, amount, at: now };
+
+      await Booking.findByIdAndUpdate(
+        bookingId,
+        { $set: { "fareDetails.negotiation": negotiation } },
+        { new: false }
+      );
+
+      // Ack and notify
+      this.emitToClient(ws, {
+        event: "fare.counter.ack",
+        bookingId,
+        data: {
+          by,
+          amount,
+          at: now,
+          bounds: { min: minAllowed, max: maxAllowed, allowedPct },
+        },
+      });
+      try {
+        const counterparty = by === "driver" ? booking.user : booking.driver;
+        if (counterparty) {
+          this.webSocketService.sendToUser(String(counterparty), {
+            event: "fare.counter",
+            bookingId,
+            data: {
+              by,
+              amount,
+              at: now,
+              bounds: { min: minAllowed, max: maxAllowed, allowedPct },
+            },
+          });
+        }
+      } catch {}
+    } catch (error) {
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId: bookingId || null,
+        error: { code: "FARE_COUNTER_ERROR", message: error.message },
+      });
+    }
+  }
+
+  /**
+   * Negotiation: reject an ongoing negotiation
+   * Payload: { bookingId }
+   */
+  async handleFareReject(ws, message) {
+    // Normalize
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const payload = msg?.payload || {};
+    const body = msg?.body || {};
+    const normalizeId = (v) => {
+      try {
+        if (!v) return null;
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
+        if (typeof v === "object") {
+          if (v.$oid) return String(v.$oid).trim();
+          if (v._id) return String(v._id).trim();
+          if (typeof v.toString === "function")
+            return String(v.toString()).trim();
+        }
+      } catch {}
+      return null;
+    };
+    const bookingId =
+      [
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
+      ]
+        .map(normalizeId)
+        .find((v) => typeof v === "string" && v.length > 0) || null;
+
+    try {
+      if (!bookingId) throw new Error("bookingId is required");
+
+      // Actor from token
+      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
+      if (!actorId) throw new Error("Unauthenticated user");
+      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+
+      // Load booking
+      const booking = await Booking.findById(bookingId).select(
+        "fareDetails user driver status"
+      );
+      if (!booking) throw new Error("Booking not found");
+      if (["cancelled", "completed"].includes(booking.status))
+        throw new Error(`Cannot reject on a ${booking.status} booking`);
+
+      // Authorization (either party can reject)
+      if (by === "driver") {
+        if (!booking.driver || String(booking.driver) !== String(actorId)) {
+          throw new Error(
+            "Not authorized: only the assigned driver can reject"
+          );
+        }
+      } else {
+        if (!booking.user || String(booking.user) !== String(actorId)) {
+          throw new Error("Not authorized: only the booking owner can reject");
+        }
+      }
+
+      // Persist negotiation state
+      const now = new Date();
+      const negotiation = booking.fareDetails?.negotiation || {};
+      negotiation.state = "rejected";
+      negotiation.history = Array.isArray(negotiation.history)
+        ? negotiation.history
+        : [];
+      negotiation.history.push({ type: "reject", by, at: now });
+
+      await Booking.findByIdAndUpdate(
+        bookingId,
+        {
+          $set: { "fareDetails.negotiation": negotiation },
+          $unset: { pendingAssignment: "" }, // clean pending assignment if any
+        },
+        { new: false }
+      );
+
+      // Release negotiation lock for driver (if any)
+      try {
+        if (booking.driver)
+          this.negotiationLocks.delete(String(booking.driver));
+      } catch {}
+
+      // Ack and notify
+      this.emitToClient(ws, {
+        event: "fare.rejected",
+        bookingId,
+        data: { by, at: now },
+      });
+      try {
+        const counterparty = by === "driver" ? booking.user : booking.driver;
+        if (counterparty) {
+          this.webSocketService.sendToUser(String(counterparty), {
+            event: "fare.rejected",
+            bookingId,
+            data: { by, at: now },
+          });
+        }
+      } catch {}
+    } catch (error) {
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId: bookingId || null,
+        error: { code: "FARE_REJECT_ERROR", message: error.message },
+      });
+    }
+  }
+
+  /**
+   * Negotiation: accept the current offer and lock final fare
+   * Payload: { bookingId, data?: { amount?: number } } // if amount not provided, use negotiation.lastOffer.amount
+   */
+  async handleFareAccept(ws, message) {
+    // Normalize
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const payload = msg?.payload || {};
+    const body = msg?.body || {};
+    const normalizeId = (v) => {
+      try {
+        if (!v) return null;
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
+        if (typeof v === "object") {
+          if (v.$oid) return String(v.$oid).trim();
+          if (v._id) return String(v._id).trim();
+          if (typeof v.toString === "function")
+            return String(v.toString()).trim();
+        }
+      } catch {}
+      return null;
+    };
+    const bookingId =
+      [
+        msg.bookingId,
+        data.bookingId,
+        payload.bookingId,
+        body.bookingId,
+        msg.id,
+        data.id,
+        payload.id,
+        body.id,
+        msg.requestId,
+        data.requestId,
+        payload.requestId,
+        body.requestId,
+      ]
+        .map(normalizeId)
+        .find((v) => typeof v === "string" && v.length > 0) || null;
+
+    try {
+      if (!bookingId) throw new Error("bookingId is required");
+
+      // Actor from token
+      const actorId = (ws?.user?.id || ws?.user?._id)?.toString?.();
+      if (!actorId) throw new Error("Unauthenticated user");
+      const by = ws?.user?.role === "driver" ? "driver" : "customer";
+
+      // Load booking
+      const booking = await Booking.findById(bookingId).select(
+        "fareDetails user driver status"
+      );
+      if (!booking) throw new Error("Booking not found");
+      if (["cancelled", "completed"].includes(booking.status))
+        throw new Error(`Cannot accept on a ${booking.status} booking`);
+
+      // Authorization
+      if (by === "driver") {
+        if (!booking.driver || String(booking.driver) !== String(actorId)) {
+          throw new Error(
+            "Not authorized: only the assigned driver can accept"
+          );
+        }
+      } else {
+        if (!booking.user || String(booking.user) !== String(actorId)) {
+          throw new Error("Not authorized: only the booking owner can accept");
+        }
+      }
+
+      const negotiation = booking.fareDetails?.negotiation || {};
+      const amount =
+        Number(data?.amount ?? payload?.amount ?? body?.amount) ||
+        Number(negotiation?.lastOffer?.amount || 0);
+      if (!isFinite(amount) || amount <= 0) {
+        throw new Error("No valid offer to accept");
+      }
+
+      // Lock final fare
+      const now = new Date();
+      negotiation.state = "accepted";
+      negotiation.history = Array.isArray(negotiation.history)
+        ? negotiation.history
+        : [];
+      negotiation.history.push({ type: "accept", by, amount, at: now });
+
+      await Booking.findByIdAndUpdate(
+        bookingId,
+        {
+          $set: {
+            "fareDetails.negotiation": negotiation,
+            "fareDetails.finalFare": {
+              amount: Math.round(amount * 100) / 100,
+              by,
+              lockedAt: now,
+            },
+          },
+          $unset: { pendingAssignment: "" },
+        },
+        { new: false }
+      );
+
+      // Release negotiation lock for driver (if any)
+      try {
+        if (booking.driver)
+          this.negotiationLocks.delete(String(booking.driver));
+      } catch {}
+
+      // Emit finalized
+      this.emitToClient(ws, {
+        event: "fare.finalized",
+        bookingId,
+        data: { amount: Math.round(amount * 100) / 100, by, lockedAt: now },
+      });
+      try {
+        const counterparty = by === "driver" ? booking.user : booking.driver;
+        if (counterparty) {
+          this.webSocketService.sendToUser(String(counterparty), {
+            event: "fare.finalized",
+            bookingId,
+            data: { amount: Math.round(amount * 100) / 100, by, lockedAt: now },
+          });
+        }
+      } catch {}
+    } catch (error) {
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId: bookingId || null,
+        error: { code: "FARE_ACCEPT_ERROR", message: error.message },
+      });
+    }
   }
 
   // Helper: Haversine distance in KM between two { lat, lng }
