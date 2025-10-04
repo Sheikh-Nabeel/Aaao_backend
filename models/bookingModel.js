@@ -1,6 +1,12 @@
 import mongoose from "mongoose";
 
 const bookingSchema = new mongoose.Schema({
+  // Idempotent create support: unique per create request (client-provided or backend-generated)
+  idempotencyKey: {
+    type: String,
+    required: false,
+    index: true,
+  },
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
@@ -978,6 +984,8 @@ bookingSchema.index({ cancelledAt: 1 });
 bookingSchema.index({ resendAttempts: 1 });
 bookingSchema.index({ lastResendAt: 1 });
 bookingSchema.index({ "userFareIncreases.increasedAt": 1 });
+// Unique sparse index for idempotency (allows many nulls, but unique when set)
+bookingSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 
 bookingSchema.pre("save", function (next) {
   this.updatedAt = Date.now();

@@ -35,28 +35,8 @@ class WebSocketService {
    * Initialize event handlers
    */
   initializeEventHandlers() {
-    // Register recovery handler events
-    this.recoveryHandler.initializeEventHandlers();
-
-    // Register car recovery specific events
-    this.on("carRecovery:getDrivers", async (ws, message) => {
-      await this.recoveryHandler.handleGetDrivers(ws, message);
-    });
-
-    // Register driver arrival event
-    this.on("driver.arrival", async (ws, message) => {
-      await this.recoveryHandler.handleDriverArrival(ws, message);
-    });
-
-    // Register waiting time updates
-    this.on("waiting.time.update", async (ws, message) => {
-      await this.recoveryHandler.handleWaitingTimeUpdate(ws, message);
-    });
-
-    // Register service start event
-    this.on("service.start", async (ws, message) => {
-      await this.recoveryHandler.handleServiceStart(ws, message);
-    });
+    // RecoveryHandler already self-registers all its WS events in its constructor.
+    // Do NOT re-register them here to avoid duplicate handler invocations.
 
     // Prevent 'Unhandled event: authenticated' if clients echo server's AUTHENTICATED message
     this.on("authenticated", async () => {
@@ -160,7 +140,6 @@ class WebSocketService {
         if (!room || typeof room !== "string") {
           return this.sendError(ws, { code: 400, message: "room is required" });
         }
-
         // Allow only: role:admin|role:customer|role:driver (must match DB role), or user:<selfId>
         const isRoleRoom = room.startsWith("role:");
         const isUserRoom = room.startsWith("user:");
