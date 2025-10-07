@@ -329,81 +329,12 @@ class RecoveryHandler {
         );
       }
 
-      // Normalize helper
+      // Normalize helper (still used for room naming, not for validation)
       const norm = (s) =>
         String(s || "")
           .trim()
           .toLowerCase()
           .replace(/\s+/g, "_");
-
-      // Service/subservice synonyms -> canonical enums
-      const serviceSynonyms = new Map([
-        ["towing", SERVICE_TYPES.TOWING],
-        ["flatbed", SERVICE_TYPES.TOWING],
-        ["flatbed_towing", SERVICE_TYPES.TOWING],
-        ["wheel_lift", SERVICE_TYPES.TOWING],
-        ["wheel-lift", SERVICE_TYPES.TOWING],
-        ["winching", SERVICE_TYPES.WINCHING],
-        ["on-road_winch", SERVICE_TYPES.WINCHING],
-        ["on-road_winching", SERVICE_TYPES.WINCHING],
-        ["off-road_winch", SERVICE_TYPES.WINCHING],
-        ["off-road_winching", SERVICE_TYPES.WINCHING],
-        ["roadside", SERVICE_TYPES.ROADSIDE_ASSISTANCE],
-        ["roadside_assistance", SERVICE_TYPES.ROADSIDE_ASSISTANCE],
-        ["battery", SERVICE_TYPES.ROADSIDE_ASSISTANCE],
-        ["battery_jump_start", SERVICE_TYPES.ROADSIDE_ASSISTANCE],
-        ["fuel", SERVICE_TYPES.ROADSIDE_ASSISTANCE],
-        ["fuel_delivery", SERVICE_TYPES.ROADSIDE_ASSISTANCE],
-        ["key_unlock", SERVICE_TYPES.KEY_UNLOCK],
-        ["key-unlock", SERVICE_TYPES.KEY_UNLOCK],
-        ["key", SERVICE_TYPES.KEY_UNLOCK],
-      ]);
-
-      const subSynonyms = new Map([
-        ["flatbed_towing", SERVICE_SUB_TYPES.FLATBED_TOWING],
-        ["flatbed", SERVICE_SUB_TYPES.FLATBED_TOWING],
-        ["wheel_lift_towing", SERVICE_SUB_TYPES.WHEEL_LIFT_TOWING],
-        ["wheel_lift", SERVICE_SUB_TYPES.WHEEL_LIFT_TOWING],
-        ["on_road_winching", SERVICE_SUB_TYPES.ON_ROAD_WINCHING],
-        ["on-road_winching", SERVICE_SUB_TYPES.ON_ROAD_WINCHING],
-        ["off_road_winching", SERVICE_SUB_TYPES.OFF_ROAD_WINCHING],
-        ["off-road_winching", SERVICE_SUB_TYPES.OFF_ROAD_WINCHING],
-        ["battery_jump_start", SERVICE_SUB_TYPES.BATTERY_JUMP_START],
-        ["battery", SERVICE_SUB_TYPES.BATTERY_JUMP_START],
-        ["fuel_delivery", SERVICE_SUB_TYPES.FUEL_DELIVERY],
-      ]);
-
-      // Canonicalize service and sub-service
-      const canonicalService = serviceSynonyms.get(norm(data.serviceType));
-      if (!canonicalService) {
-        const allowed = Array.from(new Set([...serviceSynonyms.values()])).join(
-          ", "
-        );
-        throw new Error(
-          `Invalid serviceType. Allowed (synonyms map to): ${allowed}`
-        );
-      }
-
-      let canonicalSub = null;
-      if (data.subService) {
-        canonicalSub = subSynonyms.get(norm(data.subService));
-        if (!canonicalSub) {
-          const allowedSubs = Object.values(SERVICE_SUB_TYPES).join(", ");
-          throw new Error(`Invalid subService. Allowed: ${allowedSubs}`);
-        }
-        const allowedForService =
-          SERVICE_CONFIG[canonicalService]?.availableSubTypes || [];
-        if (!allowedForService.includes(canonicalSub)) {
-          const allowedList = allowedForService.join(", ");
-          throw new Error(
-            `subService '${canonicalSub}' is not valid for service '${canonicalService}'. Allowed: ${allowedList}`
-          );
-        }
-      }
-
-      // Overwrite normalized values back into data
-      data.serviceType = canonicalService;
-      if (canonicalSub) data.subService = canonicalSub;
 
       // Identify creator
       const creatorId =
@@ -482,7 +413,7 @@ class RecoveryHandler {
         Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 10))
       );
 
-      // Map to booking enums
+      // Map to booking enums (no validation; just categorize)
       const mapCategory = (t) => {
         const v = String(t || "")
           .toLowerCase()
@@ -523,8 +454,7 @@ class RecoveryHandler {
         null;
       const idempotencyKey =
         clientKey ||
-        crypto
-          .createHash("sha256")
+        createHash("sha256")
           .update(
             [
               String(creatorId || "anonymous"),
@@ -780,7 +710,7 @@ class RecoveryHandler {
         });
       }
 
-      // Optional alerts
+      // Optional alerts (kept)
       try {
         const alertPayload = {
           title: "Free Stay Time Ended – Select Action",
@@ -4310,6 +4240,7 @@ class RecoveryHandler {
    * Payload: { bookingId, data: { amount: number } }
    */
   async handleFareOffer(ws, message) {
+    // Normalize
     let msg = message || {};
     if (typeof msg === "string") {
       try {
@@ -4320,86 +4251,302 @@ class RecoveryHandler {
     }
     const data = msg?.data || {};
     const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
-    const driverId = String(data?.driverId || "").trim();
-    const amount = Number(data?.amount);
+    const currency = data?.currency || "AED";
+    const role = String(ws?.user?.role || "").toLowerCase();
+    const isDriver = role === "driver";
+    const isCustomer =
+      role === "user" || role === "customer" || role === "client";
+
+    // Common helpers
+    const isFiniteNumber = (v) => typeof v === "number" && Number.isFinite(v);
+    const toNum = (v) => (typeof v === "string" ? Number(v) : v);
+    const pickFirstNumber = (...cands) => {
+      for (const c of cands) {
+        const n = toNum(c);
+        if (isFiniteNumber(n)) return n;
+      }
+      return null;
+    };
 
     try {
-      if (!bookingId || !driverId || !Number.isFinite(amount)) {
-        throw new Error("bookingId, driverId and numeric amount are required");
+      if (!bookingId) throw new Error("bookingId is required");
+      const amount = Number(data?.amount);
+      if (!isFiniteNumber(amount) || amount <= 0) {
+        throw new Error("positive numeric amount is required");
       }
 
+      // Load booking basics for both flows
       const booking = await Booking.findById(bookingId).select(
-        "status fareDetails pickupLocation dropoffLocation user"
+        "status fareDetails pickupLocation dropoffLocation user fare offeredFare driver"
       );
       if (!booking) throw new Error("Booking not found");
       if (["cancelled", "completed"].includes(booking.status)) {
         throw new Error(`Cannot offer fare on a ${booking.status} booking`);
       }
 
-      // Compute allowed window using the base client estimate or last estimated fare
-      const baseEstimate =
-        Number(
-          booking?.fareDetails?.estimatedFare ||
-            booking?.fare ||
-            data?.baseEstimate
-        ) || 0;
+      // Window anchor resolution (robust)
+      const baseEstimate = pickFirstNumber(
+        booking?.fareDetails?.finalFare?.amount,
+        booking?.fareDetails?.estimatedFare?.amount,
+        isFiniteNumber(booking?.fareDetails?.estimatedFare)
+          ? booking?.fareDetails?.estimatedFare
+          : null,
+        booking?.fareDetails?.negotiation?.proposed?.amount,
+        booking?.offeredFare,
+        booking?.fare,
+        data?.baseEstimate,
+        data?.estimatedFare,
+        data?.estimated?.amount
+      );
+      const anchor = isFiniteNumber(baseEstimate) ? baseEstimate : amount;
 
-      const window = await this._getAllowedFareWindow(baseEstimate);
-      if (amount < window.minFare || amount > window.maxFare) {
+      // Compute window
+      const window =
+        typeof this._getAllowedFareWindow === "function"
+          ? await this._getAllowedFareWindow(anchor)
+          : (() => {
+              const pct = 3;
+              const min = Math.max(
+                0,
+                Math.round(anchor * (1 - pct / 100) * 100) / 100
+              );
+              const max = Math.round(anchor * (1 + pct / 100) * 100) / 100;
+              return { allowedPct: pct, minFare: min, maxFare: max };
+            })();
+
+      // Validate amount within window
+      if (!(amount >= window.minFare && amount <= window.maxFare)) {
         throw new Error(
-          `Offered amount must be between ${window.minFare} and ${window.maxFare} AED`
+          `Offered amount must be between ${window.minFare} and ${window.maxFare} ${currency}`
         );
       }
 
-      // Update negotiation in DB (state: proposed)
+      // Branch by actor
+      const now = new Date();
+
+      if (isCustomer) {
+        // Customer must target a specific driver
+        const driverId = String(data?.driverId || "").trim();
+        if (!driverId)
+          throw new Error("driverId is required for customer offer");
+
+        // Persist negotiation (proposed by customer)
+        await Booking.findByIdAndUpdate(
+          bookingId,
+          {
+            $set: {
+              "fareDetails.negotiation.state": "proposed",
+              "fareDetails.negotiation.updatedAt": now,
+              "fareDetails.negotiation.proposed": {
+                by: "customer",
+                amount,
+                currency,
+                at: now,
+                bounds: {
+                  min: window.minFare,
+                  max: window.maxFare,
+                  allowedPct: window.allowedPct,
+                },
+              },
+              "fareDetails.negotiation.history": [
+                ...(booking?.fareDetails?.negotiation?.history || []),
+                {
+                  action: "offer",
+                  by: "customer",
+                  amount,
+                  currency,
+                  at: now,
+                  bounds: {
+                    min: window.minFare,
+                    max: window.maxFare,
+                    allowedPct: window.allowedPct,
+                  },
+                },
+              ],
+            },
+          },
+          { new: false }
+        );
+
+        // Notify driver
+        this.webSocketService.sendToUser(String(driverId), {
+          event: "fare.offer",
+          bookingId,
+          data: {
+            amount,
+            currency,
+            pickupLocation: booking.pickupLocation,
+            dropoffLocation: booking.dropoffLocation,
+            minFare: window.minFare,
+            maxFare: window.maxFare,
+          },
+        });
+
+        // Ack to customer
+        this.emitToClient(ws, {
+          event: "fare.offer.ack",
+          bookingId,
+          data: {
+            amount,
+            currency,
+            minFare: window.minFare,
+            maxFare: window.maxFare,
+          },
+        });
+        return;
+      }
+
+      if (isDriver) {
+        // Resolve driverId from ws identity; optional payload driverId ignored
+        const driverId = String(ws?.user?.id || ws?.user?._id || "").trim();
+        if (!driverId) throw new Error("driver identity required");
+
+        // Validate driver profile
+        const driver = await User.findById(driverId).select(
+          "role kycStatus kycLevel isActive driverStatus"
+        );
+        if (!driver || driver.role !== "driver")
+          throw new Error("Invalid driver");
+        if (
+          !(
+            driver.kycStatus === "approved" && Number(driver.kycLevel || 0) >= 2
+          )
+        ) {
+          throw new Error("Driver KYC not approved");
+        }
+        if (!(driver.isActive === true && driver.driverStatus === "online")) {
+          throw new Error("Driver is not online");
+        }
+
+        // Persist negotiation (proposed by driver)
+        await Booking.findByIdAndUpdate(
+          bookingId,
+          {
+            $set: {
+              "fareDetails.negotiation.state": "proposed",
+              "fareDetails.negotiation.updatedAt": now,
+              "fareDetails.negotiation.proposed": {
+                by: "driver",
+                amount,
+                currency,
+                at: now,
+                driverId,
+                bounds: {
+                  min: window.minFare,
+                  max: window.maxFare,
+                  allowedPct: window.allowedPct,
+                },
+              },
+              "fareDetails.negotiation.history": [
+                ...(booking?.fareDetails?.negotiation?.history || []),
+                {
+                  action: "offer",
+                  by: "driver",
+                  amount,
+                  currency,
+                  at: now,
+                  driverId,
+                  bounds: {
+                    min: window.minFare,
+                    max: window.maxFare,
+                    allowedPct: window.allowedPct,
+                  },
+                },
+              ],
+            },
+          },
+          { new: false }
+        );
+
+        // Notify customer
+        if (booking.user) {
+          this.webSocketService.sendToUser(String(booking.user), {
+            event: "fare.offer",
+            bookingId,
+            data: {
+              amount,
+              currency,
+              pickupLocation: booking.pickupLocation,
+              dropoffLocation: booking.dropoffLocation,
+              minFare: window.minFare,
+              maxFare: window.maxFare,
+              by: "driver",
+              driverId,
+            },
+          });
+        }
+
+        // Ack to driver
+        this.emitToClient(ws, {
+          event: "fare.offer.ack",
+          bookingId,
+          data: {
+            amount,
+            currency,
+            minFare: window.minFare,
+            maxFare: window.maxFare,
+          },
+        });
+        return;
+      }
+
+      // Fallback: treat as customer if role unknown (maintains backward compat)
+      const fallbackDriverId = String(data?.driverId || "").trim();
+      if (!fallbackDriverId) throw new Error("driverId is required");
       await Booking.findByIdAndUpdate(
         bookingId,
         {
           $set: {
             "fareDetails.negotiation.state": "proposed",
-            "fareDetails.negotiation.updatedAt": new Date(),
+            "fareDetails.negotiation.updatedAt": now,
             "fareDetails.negotiation.proposed": {
               by: "customer",
               amount,
-              currency: data?.currency || "AED",
-              at: new Date(),
+              currency,
+              at: now,
+              bounds: {
+                min: window.minFare,
+                max: window.maxFare,
+                allowedPct: window.allowedPct,
+              },
             },
-            // Optionally store lastOffered for history/analytics
             "fareDetails.negotiation.history": [
               ...(booking?.fareDetails?.negotiation?.history || []),
               {
                 action: "offer",
                 by: "customer",
                 amount,
-                at: new Date(),
+                currency,
+                at: now,
+                bounds: {
+                  min: window.minFare,
+                  max: window.maxFare,
+                  allowedPct: window.allowedPct,
+                },
               },
             ],
           },
         },
         { new: false }
       );
-
-      // Notify driver with destination and window
-      this.webSocketService.sendToUser(String(driverId), {
+      this.webSocketService.sendToUser(String(fallbackDriverId), {
         event: "fare.offer",
         bookingId,
         data: {
           amount,
-          currency: data?.currency || "AED",
+          currency,
           pickupLocation: booking.pickupLocation,
           dropoffLocation: booking.dropoffLocation,
           minFare: window.minFare,
           maxFare: window.maxFare,
         },
       });
-
-      // Ack to customer
       this.emitToClient(ws, {
         event: "fare.offer.ack",
         bookingId,
         data: {
           amount,
-          currency: data?.currency || "AED",
+          currency,
           minFare: window.minFare,
           maxFare: window.maxFare,
         },
@@ -4683,11 +4830,9 @@ class RecoveryHandler {
       // Resolve driverId depending on actor
       let driverId = data?.driverId ? String(data.driverId) : null;
       if (isDriver) {
-        // trust WS identity first
         driverId = String(ws?.user?.id || ws?.user?._id || driverId || "");
         if (!driverId) throw new Error("driverId is required for driver");
       } else if (isCustomer) {
-        // for customer, derive from booking if not provided
         if (!driverId) {
           driverId = booking?.driver
             ? String(booking.driver)
