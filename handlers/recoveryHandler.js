@@ -11,7 +11,7 @@ import FareCalculator from "../utils/fareCalculator.js";
 import Booking from "../models/bookingModel.js";
 import User from "../models/userModel.js";
 import { v4 as uuidv4 } from "uuid";
-import crypto from "crypto";
+import { createHash } from "crypto";
 
 // Service sub-types
 const SERVICE_SUB_TYPES = {
