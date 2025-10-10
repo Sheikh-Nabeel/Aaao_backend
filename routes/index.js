@@ -17,6 +17,7 @@ import driverStatusRoutes from ".//driverStatusRoutes.js"; // Added driver statu
 import qualifiedDriversRoutes from ".//qualifiedDriversRoutes.js"; // Added qualified drivers routes
 import offerRoutes from ".//offerRoutes.js"; // Added qualified drivers routes
 import supportTicketRoutes from ".//supportTicketRoutes.js"; // Added support ticket routes
+import analyticsRoutes from "./analyticsRoutes.js"; // Added analytics routes
 import errorHandler from "../middlewares/errorMiddleware.js";
 
 export function initRoutes(app) {
@@ -40,6 +41,7 @@ export function initRoutes(app) {
   app.use("/api/nearby-drivers", qualifiedDriversRoutes); // Added nearby drivers routes
   app.use("/api/offers", offerRoutes); // Correct
   app.use("/api/support", supportTicketRoutes); // Added support ticket routes
+  app.use("/api/analytics", analyticsRoutes); // Added analytics routes
 
   app.use(errorHandler);
 }
