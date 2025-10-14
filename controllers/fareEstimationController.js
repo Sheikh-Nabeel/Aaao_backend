@@ -304,33 +304,39 @@ const calculateFareByServiceType = async (
 
   if (
     comprehensiveConfig &&
-    (serviceType === "car cab" || serviceType === "bike")
+    (serviceType === "car cab" ||
+      serviceType === "bike" ||
+      serviceType === "car recovery" ||
+      serviceType === "shifting & movers")
   ) {
-    // Use comprehensive fare calculation
+    // Normalize serviceType to calculator keys
+    const normalizedServiceType = (() => {
+      const s = String(serviceType || "")
+        .toLowerCase()
+        .replace(/\s+/g, "_");
+      if (s === "shifting_&_movers") return "shifting_movers";
+      return s;
+    })();
+
     const bookingData = {
-      serviceType: serviceType.replace(" ", "_"),
+      serviceType: normalizedServiceType, // e.g., car_cab, bike, car_recovery, shifting_movers
       vehicleType,
       distance: distanceInKm,
       routeType,
       demandRatio: additionalData.demandRatio || 1,
       waitingMinutes: additionalData.waitingMinutes || 0,
       estimatedDuration: additionalData.estimatedDuration || 0,
+      serviceDetails: additionalData.serviceDetails || {},
+      itemDetails: additionalData.itemDetails || [],
+      serviceOptions: additionalData.serviceOptions || {},
     };
 
     const fareResult = await calculateComprehensiveFare(bookingData);
     return fareResult;
   }
 
-  // Fallback to old calculation for other services or if comprehensive config not found
+  // Optional legacy fallbacks (remove once comprehensive covers everything)
   switch (serviceType) {
-    case "car cab":
-    case "bike":
-      // Basic taxi/bike fare calculation
-      const baseFare = serviceType === "bike" ? 5 : 10;
-      const perKmRate = serviceType === "bike" ? 2 : 3;
-      const multiplier = routeType === "round_trip" ? 1.8 : 1;
-      return (baseFare + distanceInKm * perKmRate) * multiplier;
-
     case "shifting & movers":
       return calculateShiftingMoversFare({
         vehicleType,
@@ -341,22 +347,11 @@ const calculateFareByServiceType = async (
         serviceOptions: {},
       });
 
-    case "car recovery":
-    case "car_recovery":
-      return await computeAdminCarRecoveryFare({
-        distanceKm: distanceInKm,
-        routeType,
-        startTime: additionalData.startTime,
-        pickupLocation: additionalData.pickupLocation,
-        vehicleType,
-        serviceCategory: additionalData.serviceCategory || serviceType,
-        subService: additionalData.subService,
-        helper: additionalData.helper || additionalData.options?.helper,
-        waitingMinutes: additionalData.waitingMinutes,
-      });
-
     default:
-      return 20; // Default minimum fare
+      // Explicitly avoid hardcoded numbers. If comprehensive not active and no legacy supported, fail loudly.
+      throw new Error(
+        `Pricing not configured for serviceType '${serviceType}'. Please activate ComprehensivePricing.`
+      );
   }
 };
 
@@ -681,19 +676,39 @@ const getFareEstimation = asyncHandler(async (req, res) => {
             .json({ success: false, error: e.message });
         }
 
-        fareResult = await computeAdminCarRecoveryFare({
-          distanceKm,
+        // Map recovery sub-service/category to comprehensive vehicleType
+        const mapRecoveryVehicleType = (subService, category) => {
+          const raw = String(subService || category || "").toLowerCase();
+          if (raw.includes("flatbed")) return "flatbed";
+          if (raw.includes("wheel")) return "wheelLift";
+          if (raw.includes("jump")) return "jumpstart";
+          if (raw.includes("fuel")) return "fuelDelivery";
+          if (raw.includes("tire")) return "tirePunctureRepair";
+          if (raw.includes("battery")) return "batteryReplacement";
+          if (raw.includes("key") || raw.includes("unlock"))
+            return "keyUnlocker";
+          return null;
+        };
+
+        const recoveryVehicleType =
+          mapRecoveryVehicleType(
+            req.body.subService,
+            booking.serviceCategory
+          ) ||
+          booking.vehicleType ||
+          null;
+
+        fareResult = await calculateComprehensiveFare({
+          serviceType: "car recovery",
+          vehicleType: recoveryVehicleType,
+          distance: distanceKm,
           routeType,
-          startTime: new Date(),
-          pickupLocation: pickup,
-          vehicleType: booking.vehicleType,
-          serviceCategory: booking.serviceCategory,
-          subService: req.body.subService,
-          helper: req.body.helper || req.body.options?.helper,
-          waitingMinutes:
-            req.body.options?.waitingTime || req.body.waitingMinutes || 0,
+          estimatedDuration: durationMinutes,
+          waitingMinutes: Number(
+            req.body?.options?.waitingTime || req.body.waitingMinutes || 0
+          ),
         });
-        estimatedFare = fareResult.totalFare || 0;
+        estimatedFare = Number(fareResult?.totalFare || 0);
 
         // Fixed pricing override per sub-service (if configured)
         try {
@@ -758,7 +773,12 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           const rawFactorA = 1 + 0.15 * (ratioA - 1); // linear around 1.0
           const factorA = Math.max(0.85, Math.min(1.15, rawFactorA));
           dynamic.surgePercent = Math.round((factorA - 1) * 100);
-          dynamic.surgeType = dynamic.surgePercent > 0 ? "increase" : dynamic.surgePercent < 0 ? "decrease" : "none";
+          dynamic.surgeType =
+            dynamic.surgePercent > 0
+              ? "increase"
+              : dynamic.surgePercent < 0
+              ? "decrease"
+              : "none";
           if (dynamic.surgePercent !== 0) {
             const mult = 1 + dynamic.surgePercent / 100;
             estimatedFare = Math.max(
@@ -1098,7 +1118,12 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           const rawFactorB = 1 + 0.15 * (ratioB - 1);
           const factorB = Math.max(0.85, Math.min(1.15, rawFactorB));
           dynamic.surgePercent = Math.round((factorB - 1) * 100);
-          dynamic.surgeType = dynamic.surgePercent > 0 ? "increase" : dynamic.surgePercent < 0 ? "decrease" : "none";
+          dynamic.surgeType =
+            dynamic.surgePercent > 0
+              ? "increase"
+              : dynamic.surgePercent < 0
+              ? "decrease"
+              : "none";
           if (dynamic.surgePercent !== 0) {
             const mult = 1 + dynamic.surgePercent / 100;
             estimatedFare = Math.max(

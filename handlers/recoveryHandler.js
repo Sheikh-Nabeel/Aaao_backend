@@ -14,90 +14,39 @@ import { v4 as uuidv4 } from "uuid";
 import { createHash } from "crypto";
 import redis from "../services/redisClient.js";
 
-// Service sub-types
-const SERVICE_SUB_TYPES = {
-  // Towing
-  FLATBED_TOWING: "flatbed_towing",
-  WHEEL_LIFT_TOWING: "wheel_lift_towing",
+import { calculateComprehensiveFare } from "../utils/comprehensiveFareCalculator.js";
 
-  // Winching
-  ON_ROAD_WINCHING: "on_road_winching",
-  OFF_ROAD_WINCHING: "off_road_winching",
+// Dynamic pricing helpers (waiting/cancellation) from ComprehensivePricing
+async function _getActiveComprehensiveConfig() {
+  return await ComprehensivePricing.findOne({ isActive: true }).lean();
+}
 
-  // Roadside Assistance
-  BATTERY_JUMP_START: "battery_jump_start",
-  FUEL_DELIVERY: "fuel_delivery",
+function _resolveCRWaitingCharges(comp) {
+  const cr = comp?.serviceTypes?.carRecovery?.waitingCharges;
+  const top = comp?.waitingCharges;
+  return {
+    freeMinutes: Number(cr?.freeMinutes ?? top?.freeMinutes ?? 5),
+    perMinuteRate: Number(cr?.perMinuteRate ?? top?.perMinuteRate ?? 2),
+    maximumCharge: Number(cr?.maximumCharge ?? top?.maximumCharge ?? 20),
+  };
+}
 
-  // Specialized Recovery
-  LUXURY_CAR_RECOVERY: "luxury_car_recovery",
-  ACCIDENT_RECOVERY: "accident_recovery",
-  HEAVY_DUTY_RECOVERY: "heavy_duty_recovery",
-  BASEMENT_PULL_OUT: "basement_pull_out",
-};
-
-// Service configuration with base prices and rules
-const SERVICE_CONFIG = {
-  [SERVICE_TYPES.TOWING]: {
-    basePrice: 50, // AED for first 6km
-    perKmPrice: 7.5,
-    minDistance: 6, // km
-    minPrice: 50,
-    availableSubTypes: [
-      SERVICE_SUB_TYPES.FLATBED_TOWING,
-      SERVICE_SUB_TYPES.WHEEL_LIFT_TOWING,
-    ],
-  },
-  [SERVICE_TYPES.WINCHING]: {
-    basePrice: 100, // AED for first 5km
-    perKmPrice: 10,
-    minDistance: 5, // km
-    minPrice: 100,
-    availableSubTypes: [
-      SERVICE_SUB_TYPES.ON_ROAD_WINCHING,
-      SERVICE_SUB_TYPES.OFF_ROAD_WINCHING,
-    ],
-  },
-  [SERVICE_TYPES.ROADSIDE_ASSISTANCE]: {
-    basePrice: 35, // Flat fee for standard assistance
-    perKmPrice: 0,
-    minDistance: 0,
-    minPrice: 35,
-    availableSubTypes: [
-      SERVICE_SUB_TYPES.BATTERY_JUMP_START,
-      SERVICE_SUB_TYPES.FUEL_DELIVERY,
-    ],
-  },
-  [SERVICE_TYPES.KEY_UNLOCK]: {
-    basePrice: 45, // Flat fee for key unlock
-    perKmPrice: 0,
-    minDistance: 0,
-    minPrice: 45,
-    availableSubTypes: [],
-  },
-};
-
-// Pink captain configuration
-const PINK_CAPTAIN_CONFIG = {
-  premiumMultiplier: 1.1, // 10% premium for pink captain
-  allowedServices: [
-    SERVICE_TYPES.ROADSIDE_ASSISTANCE,
-    SERVICE_TYPES.KEY_UNLOCK,
-  ],
-};
-
-// Constants for cancellation fees (in AED)
-const CANCELLATION_FEES = {
-  before25Percent: 2, // AED 2 if cancelled before driver reaches 25% of the distance
-  after50Percent: 5, // AED 5 if cancelled after driver has gone more than 50% of the distance
-  afterArrival: 10, // AED 10 if cancelled after driver arrives at pickup location
-};
-
-// Constants for waiting charges (in AED)
-const WAITING_CHARGES = {
-  freeMinutes: 5, // 5 minutes free waiting time
-  perMinuteCharge: 2, // AED 2 per minute after free period
-  maxCharge: 20, // Maximum waiting charge of AED 20
-};
+function _resolveCRCancellationCharges(comp) {
+  const cr = comp?.serviceTypes?.carRecovery?.cancellationCharges;
+  const top = comp?.cancellationCharges;
+  return {
+    before25Percent: Number(
+      cr?.before25Percent ??
+        top?.before25Percent ??
+        cr?.beforeArrival ??
+        top?.beforeArrival ??
+        2
+    ),
+    after25Percent: Number(cr?.after25Percent ?? top?.after25Percent ?? 0),
+    after50Percent: Number(cr?.after50Percent ?? top?.after50Percent ?? 5),
+    afterArrival: Number(cr?.afterArrival ?? top?.afterArrival ?? 10),
+  };
+}
 
 class RecoveryHandler {
   constructor(webSocketService, fareCalculator = new FareCalculator()) {
@@ -231,6 +180,11 @@ class RecoveryHandler {
 
     this.webSocketService.on(
       "driver.location.get",
+      this.handleGetDriverLocationRealtime.bind(this)
+    );
+
+    this.webSocketService.on(
+      "driver.location.request",
       this.handleGetDriverLocationRealtime.bind(this)
     );
 
@@ -444,13 +398,46 @@ class RecoveryHandler {
       const bookingServiceType = "car recovery";
       const bookingServiceCategory = mapCategory(data.serviceType);
 
-      // Estimated fare (from client or 0)
-      const estimatedFare =
-        typeof data?.estimatedFare === "number"
-          ? data.estimatedFare
-          : typeof data?.estimated?.amount === "number"
-          ? data.estimated.amount
-          : 0;
+      // Estimated fare (dynamic via comprehensive pricing)
+      const mapRecoveryVehicleType = (subService, serviceType) => {
+        const v = String(subService || serviceType || "")
+          .toLowerCase()
+          .trim();
+        if (v.includes("flatbed")) return "flatbed";
+        if (v.includes("wheel") || v.includes("wheel_lift")) return "wheelLift";
+        if (v.includes("jump")) return "jumpstart";
+        if (v.includes("fuel")) return "fuelDelivery";
+        if (v.includes("tire")) return "tirePunctureRepair";
+        if (v.includes("battery")) return "batteryReplacement";
+        if (v.includes("key") || v.includes("unlock")) return "keyUnlocker";
+        return null;
+      };
+
+      const recoveryVehicleType = mapRecoveryVehicleType(
+        data?.subService,
+        data?.serviceType
+      );
+
+      let computedFareBreakdown;
+      try {
+        computedFareBreakdown = await calculateComprehensiveFare({
+          serviceType: bookingServiceType, // "car recovery"
+          vehicleType: recoveryVehicleType,
+          distance: distanceKm, // km
+          routeType: "one_way",
+          estimatedDuration: Number(data?.estimatedDuration || 0),
+          waitingMinutes: Number(data?.options?.waitingTime || 0),
+        });
+      } catch {
+        computedFareBreakdown = {
+          totalFare: 0,
+          currency: "AED",
+          breakdown: [],
+        };
+      }
+
+      const estimatedFare = Number(computedFareBreakdown?.totalFare || 0);
+      const currencyFromConfig = computedFareBreakdown?.currency || "AED";
 
       // Build idempotency key
       const clientKey =
@@ -504,7 +491,8 @@ class RecoveryHandler {
         fareDetails: {
           estimatedDistance: distanceKm,
           estimatedFare: estimatedFare,
-          currency: "AED",
+          currency: currencyFromConfig,
+          breakdown: computedFareBreakdown?.breakdown || [],
         },
       };
 
@@ -1114,6 +1102,7 @@ class RecoveryHandler {
       } catch {}
       return null;
     };
+
     const id =
       [
         msg.bookingId,
@@ -1124,27 +1113,19 @@ class RecoveryHandler {
         data.id,
         payload.id,
         body.id,
-        msg.requestId,
-        data.requestId,
-        payload.requestId,
-        body.requestId,
       ]
         .map(normalizeId)
         .find((v) => typeof v === "string" && v.length > 0) || null;
 
     try {
-      if (!id) throw new Error("Missing required field: bookingId");
-
+      if (!id) throw new Error("bookingId is required");
       const driverId = normalizeId(
-        data?.driverId ||
-          payload?.driverId ||
-          body?.driverId ||
-          ws?.user?.id ||
-          ws?.user?._id
+        data?.driverId || payload?.driverId || body?.driverId
       );
-      if (!driverId) throw new Error("Driver ID missing or unauthenticated");
+      if (!driverId) throw new Error("driverId is required");
 
-      const loc = data?.location || payload?.location || body?.location || {};
+      // Driver location (optional)
+      const loc = data?.location || data?.coordinates || {};
       const lat = loc.latitude ?? loc.lat;
       const lng = loc.longitude ?? loc.lng;
 
@@ -1180,16 +1161,23 @@ class RecoveryHandler {
       };
       await Booking.findByIdAndUpdate(id, update, { new: false });
 
+      // Load admin-configured waiting charges BEFORE constructing payload
+      let waitCfg;
+      try {
+        const comp = await _getActiveComprehensiveConfig();
+        waitCfg = _resolveCRWaitingCharges(comp);
+      } catch {}
+
       // Emit success event
       this.emitToClient(ws, {
         event: "driver.arrived",
         bookingId: id,
         data: {
           arrivalTime: arrivalAt.toISOString(),
-          freeWaitTime: WAITING_CHARGES.freeMinutes,
+          freeWaitTime: waitCfg?.freeMinutes ?? 5,
           waitingCharges: {
-            perMinute: WAITING_CHARGES.perMinuteCharge,
-            maxCharge: WAITING_CHARGES.maxCharge,
+            perMinute: waitCfg?.perMinuteRate ?? 2,
+            maxCharge: waitCfg?.maximumCharge ?? 20,
           },
           driverId,
           location:
@@ -1490,8 +1478,11 @@ class RecoveryHandler {
    */
   calculateTotalCharges(recoveryRequest) {
     // Base fare
-    const serviceConfig = SERVICE_CONFIG[recoveryRequest.serviceType];
-    let total = serviceConfig?.basePrice || 0;
+    let total = Number(computedFareBreakdown?.totalFare || 0);
+    // If you truly have manual extras, add them explicitly:
+    if (recoveryRequest?.extras?.manualAdjustment) {
+      total += Number(recoveryRequest.extras.manualAdjustment || 0);
+    }
 
     // Add waiting charges if any
     if (recoveryRequest.waitingCharge) {
@@ -1753,49 +1744,48 @@ class RecoveryHandler {
    */
   async calculateWaitingCharge(waitingTime, recoveryRequest) {
     try {
-      const comp = await ComprehensivePricing.findOne({
-        isActive: true,
-      }).lean();
-      // Policy defaults for car recovery
-      const policy = comp?.waitingPolicies?.car_recovery || {
-        freeMinutes: 5,
-        ratePerMin: 2,
-        cap: 20,
-      };
+      const comp = await _getActiveComprehensiveConfig();
+      const w = _resolveCRWaitingCharges(comp);
+
+      const rate = Number(w.perMinuteRate || 0);
+      const cap = Number(w.maximumCharge || 0);
+
       // Base free minutes
-      let freeMinutes = Number(policy.freeMinutes || 0);
-      // Round-trip extra free stay (if known)
+      let free = Number(w.freeMinutes || 0);
+
+      // Round-trip extra free stay (0.5 min per km, admin-capped; default 30)
       const isRoundTrip =
         String(recoveryRequest?.routeType || "").toLowerCase() === "two_way" ||
         String(recoveryRequest?.routeType || "").toLowerCase() === "round_trip";
       if (isRoundTrip) {
-        const capExtra = Number(comp?.roundTripFreeStay?.maxMinutes ?? 30);
+        const capExtra = Number(
+          comp?.roundTrip?.freeStayMinutes?.maximumMinutes ??
+            comp?.roundTripFreeStay?.maxMinutes ??
+            30
+        );
         const distanceKm = Number(recoveryRequest?.distance || 0);
-        freeMinutes += Math.min(capExtra, 0.5 * distanceKm);
+        free += Math.min(capExtra, 0.5 * distanceKm);
         recoveryRequest.freeStay = recoveryRequest.freeStay || {
-          totalMinutes: freeMinutes,
+          totalMinutes: free,
         };
-        recoveryRequest.freeStay.totalMinutes = freeMinutes;
+        recoveryRequest.freeStay.totalMinutes = free;
       }
-      // Failsafe: require explicit overtime active
+
+      // Business rule: charge only if overtime explicitly active
       const overtimeActive = !!(recoveryRequest?.overtime?.active === true);
       if (!overtimeActive) return 0;
-      const billable = Math.max(
-        0,
-        Math.ceil(Number(waitingTime || 0) - freeMinutes)
-      );
-      const charge = Math.min(
-        Number(policy.cap || 0),
-        billable * Number(policy.ratePerMin || 0)
-      );
+
+      const billable = Math.max(0, Math.ceil(Number(waitingTime || 0) - free));
+      const charge = Math.min(cap, billable * rate);
       return charge;
-    } catch (_) {
-      // Fallback hardcoded policy if config missing
+    } catch {
+      // Fallback if config missing
       const free = 5;
       const rate = 2;
       const cap = 20;
       const overtimeActive = !!(recoveryRequest?.overtime?.active === true);
       if (!overtimeActive) return 0;
+
       const isRoundTrip =
         String(recoveryRequest?.routeType || "").toLowerCase() === "two_way" ||
         String(recoveryRequest?.routeType || "").toLowerCase() === "round_trip";
@@ -1808,6 +1798,7 @@ class RecoveryHandler {
         };
         recoveryRequest.freeStay.totalMinutes = freeMinutes;
       }
+
       const billable = Math.max(
         0,
         Math.ceil(Number(waitingTime || 0) - freeMinutes)
@@ -1907,11 +1898,20 @@ class RecoveryHandler {
       if (!isCreator && !isAssignedDriver && !isAdmin)
         throw new Error("Not authorized to cancel this request");
 
-      // Minimal stage + fee logic per your request
+      // Stage + dynamic fee via admin config
       const stage = ["in_progress", "driver_arrived"].includes(booking.status)
         ? "afterArrival"
         : "before25Percent";
-      const fee = 0; // simplified
+
+      let fee = 0;
+      try {
+        const comp = await _getActiveComprehensiveConfig();
+        const cancelCfg = _resolveCRCancellationCharges(comp);
+        if (stage === "afterArrival") fee = cancelCfg.afterArrival;
+        else if (stage === "after50Percent") fee = cancelCfg.after50Percent;
+        else if (stage === "after25Percent") fee = cancelCfg.after25Percent;
+        else fee = cancelCfg.before25Percent;
+      } catch {}
       const cancelledBy = isAdmin
         ? "admin"
         : isAssignedDriver
@@ -5525,7 +5525,7 @@ class RecoveryHandler {
         } catch {}
       }
 
-      // Fallback to DB mapping if Redis miss
+      // Fallback to DB mapping if Redis miss (only to discover driverId)
       if (!driverId && bookingId) {
         const b = await Booking.findById(bookingId)
           .select("user driver")
@@ -5551,9 +5551,49 @@ class RecoveryHandler {
       if (!isDriver && !isOwner)
         throw new Error("Not authorized to view driver location");
 
-      // Fetch latest from Redis
-      const raw = await redis.get(`driver:loc:${driverId}`);
-      if (!raw) {
+      // Helper: fetch redis location
+      const fetchRedisLocation = async () => {
+        try {
+          const r = await redis.get(`driver:loc:${driverId}`);
+          if (!r) return null;
+          const p = JSON.parse(r);
+          return p && typeof p.lat === "number" && typeof p.lng === "number"
+            ? p
+            : null;
+        } catch {
+          return null;
+        }
+      };
+
+      // Helper: freshness window (15 seconds)
+      const isFresh = (iso) => {
+        const t = iso ? new Date(iso).getTime() : 0;
+        return t > 0 && Date.now() - t < 15 * 1000;
+      };
+
+      // Try initial read
+      let parsed = await fetchRedisLocation();
+
+      // If missing/stale, request a live update and retry a few times
+      if (!parsed || !isFresh(parsed.at)) {
+        try {
+          this.webSocketService.sendToUser(String(driverId), {
+            event: "driver.location.request",
+            bookingId: bookingId || null,
+            data: { reason: "realtime_request" },
+          });
+        } catch {}
+
+        const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+        for (let i = 0; i < 5; i++) {
+          await sleep(300);
+          parsed = await fetchRedisLocation();
+          if (parsed && isFresh(parsed.at)) break;
+        }
+      }
+
+      // If still missing/stale, return stale_or_missing
+      if (!parsed || !isFresh(parsed.at)) {
         this.emitToClient(ws, {
           event: "driver.location",
           bookingId: bookingId || null,
@@ -5565,8 +5605,8 @@ class RecoveryHandler {
         });
         return;
       }
-      const parsed = JSON.parse(raw);
 
+      // Fresh Redis location -> return to caller
       this.emitToClient(ws, {
         event: "driver.location",
         bookingId: bookingId || parsed.bookingId || null,
@@ -5578,6 +5618,35 @@ class RecoveryHandler {
           driverId,
         },
       });
+
+      // Auto-persist to DB (location.set) and emit ack
+      try {
+        const when = parsed.at ? new Date(parsed.at) : new Date();
+        await User.findByIdAndUpdate(
+          driverId,
+          {
+            $set: {
+              currentLocation: {
+                type: "Point",
+                coordinates: [parsed.lng, parsed.lat],
+              },
+              lastActiveAt: when,
+            },
+          },
+          { new: false }
+        );
+
+        // Optional acknowledgement event
+        this.emitToClient(ws, {
+          event: "driver.location.set",
+          bookingId: bookingId || parsed.bookingId || null,
+          data: {
+            stored: true,
+            at: when.toISOString(),
+            driverId,
+          },
+        });
+      } catch {}
     } catch (error) {
       logger.error("Error in handleGetDriverLocationRealtime:", error);
       this.emitToClient(ws, {

@@ -36,7 +36,9 @@ const userSchema = new mongoose.Schema(
     },
     phoneNumber: {
       type: String,
-      required: [true, "Phone number is required"],
+      required: function () {
+        return !(this.role === "admin" || this.role === "superadmin");
+      },
       unique: true,
       trim: true,
       minlength: [
@@ -127,19 +129,19 @@ const userSchema = new mongoose.Schema(
       type: [String],
       default: [],
       enum: [
-        'mlm',
-        'home',
-        'dispatch',
-        'drivermanagement',
-        'customermanagement',
-        'proposalmanagement',
-        'overview',
-        'paymentoverview',
-        'chatdetail',
-        'kycverification',
-        'reportanalytics',
-        'reviewandrating',
-        'adminmanagement',
+        "mlm",
+        "home",
+        "dispatch",
+        "drivermanagement",
+        "customermanagement",
+        "proposalmanagement",
+        "overview",
+        "paymentoverview",
+        "chatdetail",
+        "kycverification",
+        "reportanalytics",
+        "reviewandrating",
+        "adminmanagement",
       ],
     },
     services: [
@@ -552,35 +554,39 @@ userSchema.methods.getQualificationPointsStats = function () {
   const calculateDaysUntilReset = (lastResetDate) => {
     const currentDate = new Date();
     const lastReset = new Date(lastResetDate);
-    
+
     // Get the next reset date (1st day of next month after last reset)
     const nextResetDate = new Date(lastReset);
     nextResetDate.setMonth(nextResetDate.getMonth() + 1);
     nextResetDate.setDate(1); // First day of next month
     nextResetDate.setHours(0, 0, 0, 0); // Start of the day
-    
+
     // Calculate days left
     const msPerDay = 1000 * 60 * 60 * 24;
     const daysLeft = Math.ceil((nextResetDate - currentDate) / msPerDay);
-    
+
     return daysLeft > 0 ? daysLeft : 0; // Ensure non-negative
   };
-  
-  const pgpDaysUntilReset = calculateDaysUntilReset(this.qualificationPoints.pgp.lastResetDate);
-  const tgpDaysUntilReset = calculateDaysUntilReset(this.qualificationPoints.tgp.lastResetDate);
-  
+
+  const pgpDaysUntilReset = calculateDaysUntilReset(
+    this.qualificationPoints.pgp.lastResetDate
+  );
+  const tgpDaysUntilReset = calculateDaysUntilReset(
+    this.qualificationPoints.tgp.lastResetDate
+  );
+
   return {
     pgp: {
       monthly: this.qualificationPoints.pgp.monthly,
       accumulated: this.qualificationPoints.pgp.accumulated,
       lastResetDate: this.qualificationPoints.pgp.lastResetDate,
-      daysUntilReset: pgpDaysUntilReset
+      daysUntilReset: pgpDaysUntilReset,
     },
     tgp: {
       monthly: this.qualificationPoints.tgp.monthly,
       accumulated: this.qualificationPoints.tgp.accumulated,
       lastResetDate: this.qualificationPoints.tgp.lastResetDate,
-      daysUntilReset: tgpDaysUntilReset
+      daysUntilReset: tgpDaysUntilReset,
     },
     total: {
       monthly:
@@ -589,7 +595,7 @@ userSchema.methods.getQualificationPointsStats = function () {
       accumulated:
         this.qualificationPoints.pgp.accumulated +
         this.qualificationPoints.tgp.accumulated,
-      daysUntilReset: Math.min(pgpDaysUntilReset, tgpDaysUntilReset) // Use the minimum days left
+      daysUntilReset: Math.min(pgpDaysUntilReset, tgpDaysUntilReset), // Use the minimum days left
     },
   };
 };
@@ -619,81 +625,120 @@ userSchema.methods.checkMLMQualification = function () {
 };
 
 // Helper method to calculate TGP distribution from individual legs
-userSchema.methods.calculateIndividualLegTgpDistribution = async function() {
-  const User = mongoose.model('User');
-  
+userSchema.methods.calculateIndividualLegTgpDistribution = async function () {
+  const User = mongoose.model("User");
+
   // Get user's direct referrals (level 1 members - legs A, B, C)
-  const directReferrals = await User.find({ _id: { $in: this.directReferrals } })
-    .select('qualificationPoints directReferrals level2Referrals level3Referrals level4Referrals nextLevels');
-  
+  const directReferrals = await User.find({
+    _id: { $in: this.directReferrals },
+  }).select(
+    "qualificationPoints directReferrals level2Referrals level3Referrals level4Referrals nextLevels"
+  );
+
   if (directReferrals.length < 3) {
     return {
       hasMinimumLegs: false,
       legDistribution: [],
-      userTotalTgp: this.qualificationPoints.tgp.accumulated
+      userTotalTgp: this.qualificationPoints.tgp.accumulated,
     };
   }
-  
+
   // Calculate TGP from each leg (direct referral + their downlines)
   const legDistribution = [];
-  
+
   for (const directReferral of directReferrals) {
     let legTgp = directReferral.qualificationPoints.tgp.accumulated;
-    
+
     // Add TGP from all downlines of this direct referral
     const allDownlineIds = [
       ...directReferral.directReferrals,
       ...directReferral.level2Referrals,
       ...directReferral.level3Referrals,
       ...directReferral.level4Referrals,
-      ...(directReferral.nextLevels ? directReferral.nextLevels.flat() : [])
+      ...(directReferral.nextLevels ? directReferral.nextLevels.flat() : []),
     ];
-    
+
     if (allDownlineIds.length > 0) {
-      const downlineMembers = await User.find({ _id: { $in: allDownlineIds } })
-        .select('qualificationPoints');
-      
+      const downlineMembers = await User.find({
+        _id: { $in: allDownlineIds },
+      }).select("qualificationPoints");
+
       for (const downlineMember of downlineMembers) {
         legTgp += downlineMember.qualificationPoints.tgp.accumulated;
       }
     }
-    
+
     const userTotalTgp = this.qualificationPoints.tgp.accumulated;
     const legPercentage = userTotalTgp > 0 ? (legTgp / userTotalTgp) * 100 : 0;
-    
+
     legDistribution.push({
       legId: directReferral._id,
       tgpPoints: legTgp,
-      percentage: legPercentage
+      percentage: legPercentage,
     });
   }
-  
+
   // Sort legs by TGP (highest to lowest)
   legDistribution.sort((a, b) => b.tgpPoints - a.tgpPoints);
-  
+
   return {
     hasMinimumLegs: directReferrals.length >= 3,
     legDistribution,
-    userTotalTgp: this.qualificationPoints.tgp.accumulated
+    userTotalTgp: this.qualificationPoints.tgp.accumulated,
   };
 };
 
 // CRR Rank Management Methods
-userSchema.methods.updateCRRRank = async function(crrRanks) {
+userSchema.methods.updateCRRRank = async function (crrRanks) {
   // If crrRanks is not provided, get them from MLM model
   if (!crrRanks) {
-    const MLM = mongoose.model('MLM');
+    const MLM = mongoose.model("MLM");
     const mlm = await MLM.findOne();
     if (mlm && mlm.crrRanks) {
       crrRanks = mlm.crrRanks;
     } else {
       // Default CRR ranks if MLM is not available
       crrRanks = {
-        Challenger: { requirements: { pgp: 2500, tgp: 50000, legPercentages: { legA: 25, legB: 20 } }, reward: 1000 },
-        Warrior: { requirements: { pgp: 5000, tgp: 100000, legPercentages: { legA: 30, legB: 25 } }, reward: 5000 },
-        Tycoon: { requirements: { pgp: 10000, tgp: 200000, legPercentages: { legA: 30, legB: 40 } }, reward: 20000 },
-        CHAMPION: { requirements: { pgp: 25000, tgp: 500000, legPercentages: { legA: 35, legB: 30 } }, reward: 50000 },
-        BOSS: { requirements: { pgp: 50000, tgp: 1000000, legPercentages: { legA: 40, legB: 35 } }, reward: 200000 }
+        Challenger: {
+          requirements: {
+            pgp: 2500,
+            tgp: 50000,
+            legPercentages: { legA: 25, legB: 20 },
+          },
+          reward: 1000,
+        },
+        Warrior: {
+          requirements: {
+            pgp: 5000,
+            tgp: 100000,
+            legPercentages: { legA: 30, legB: 25 },
+          },
+          reward: 5000,
+        },
+        Tycoon: {
+          requirements: {
+            pgp: 10000,
+            tgp: 200000,
+            legPercentages: { legA: 30, legB: 40 },
+          },
+          reward: 20000,
+        },
+        CHAMPION: {
+          requirements: {
+            pgp: 25000,
+            tgp: 500000,
+            legPercentages: { legA: 35, legB: 30 },
+          },
+          reward: 50000,
+        },
+        BOSS: {
+          requirements: {
+            pgp: 50000,
+            tgp: 1000000,
+            legPercentages: { legA: 40, legB: 35 },
+          },
+          reward: 200000,
+        },
       };
     }
   }
@@ -701,57 +746,57 @@ userSchema.methods.updateCRRRank = async function(crrRanks) {
   const stats = this.getQualificationPointsStats();
   const tgpPoints = stats.tgp.accumulated;
   const pgpPoints = stats.pgp.accumulated;
-  
+
   // Calculate individual leg TGP distribution
   const legData = await this.calculateIndividualLegTgpDistribution();
-  
+
   // Determine new rank based on PGP, TGP, and individual leg percentage requirements (progressive system)
-  let newRank = 'None';
+  let newRank = "None";
   let rewardAmount = 0;
-  
+
   // Helper function to check if user meets all requirements for a rank
   const meetsRankRequirements = (rank) => {
     const requirements = crrRanks[rank].requirements;
     const pgpMet = pgpPoints >= requirements.pgp;
     const tgpMet = tgpPoints >= requirements.tgp;
-    
+
     // Check individual leg percentage requirements
     let legRequirementsMet = false;
     if (legData.hasMinimumLegs && legData.legDistribution.length >= 3) {
       const legA = legData.legDistribution[0]; // Highest TGP leg
       const legB = legData.legDistribution[1]; // Second highest TGP leg
       const legC = legData.legDistribution[2]; // Third highest TGP leg
-      
+
       const legAMet = legA.percentage >= requirements.legPercentages.legA;
       const legBMet = legB.percentage >= requirements.legPercentages.legB;
       const legCMet = legC.percentage >= requirements.legPercentages.legC;
-      
+
       legRequirementsMet = legAMet && legBMet && legCMet;
     }
-    
+
     return pgpMet && tgpMet && legRequirementsMet;
   };
-  
+
   // Check ranks in order - user must achieve each rank sequentially
-  if (meetsRankRequirements('BOSS')) {
-    newRank = 'BOSS';
+  if (meetsRankRequirements("BOSS")) {
+    newRank = "BOSS";
     rewardAmount = crrRanks.BOSS.reward;
-  } else if (meetsRankRequirements('CHAMPION')) {
-    newRank = 'CHAMPION';
+  } else if (meetsRankRequirements("CHAMPION")) {
+    newRank = "CHAMPION";
     rewardAmount = crrRanks.CHAMPION.reward;
-  } else if (meetsRankRequirements('Tycoon')) {
-    newRank = 'Tycoon';
+  } else if (meetsRankRequirements("Tycoon")) {
+    newRank = "Tycoon";
     rewardAmount = crrRanks.Tycoon.reward;
-  } else if (meetsRankRequirements('Warrior')) {
-    newRank = 'Warrior';
+  } else if (meetsRankRequirements("Warrior")) {
+    newRank = "Warrior";
     rewardAmount = crrRanks.Warrior.reward;
-  } else if (meetsRankRequirements('Challenger')) {
-    newRank = 'Challenger';
+  } else if (meetsRankRequirements("Challenger")) {
+    newRank = "Challenger";
     rewardAmount = crrRanks.Challenger.reward;
   }
-  
+
   // Update rank if it has changed and user has achieved a rank
-  if (this.crrRank.current !== newRank && newRank !== 'None') {
+  if (this.crrRank.current !== newRank && newRank !== "None") {
     // Add to history
     this.crrRank.history.push({
       rank: newRank,
@@ -759,86 +804,136 @@ userSchema.methods.updateCRRRank = async function(crrRanks) {
       pgpPoints: pgpPoints,
       tgpPoints: tgpPoints,
       rewardAmount: rewardAmount,
-      rewardClaimed: false
+      rewardClaimed: false,
     });
-    
+
     this.crrRank.current = newRank;
     this.crrRank.rewardAmount = rewardAmount;
     this.crrRank.rewardClaimed = false;
     this.crrRank.lastUpdated = new Date();
-    
+
     return this.save();
   }
 
   return Promise.resolve(this);
 };
 
-userSchema.methods.getCRRRankProgress = function(crrRanks) {
+userSchema.methods.getCRRRankProgress = function (crrRanks) {
   const stats = this.getQualificationPointsStats();
   const tgpPoints = stats.tgp.accumulated;
   const pgpPoints = stats.pgp.accumulated;
   const currentRank = this.crrRank.current;
-  
+
   // If crrRanks is not provided, use default values
   if (!crrRanks) {
     crrRanks = {
-      Challenger: { requirements: { pgp: 2500, tgp: 50000 }, reward: 1000, icon: "🥇" },
-      Warrior: { requirements: { pgp: 5000, tgp: 100000 }, reward: 5000, icon: "🥈" },
-      Tycoon: { requirements: { pgp: 10000, tgp: 200000 }, reward: 20000, icon: "🥉" },
-      CHAMPION: { requirements: { pgp: 25000, tgp: 500000 }, reward: 50000, icon: "🏅" },
-      BOSS: { requirements: { pgp: 50000, tgp: 1000000 }, reward: 200000, icon: "🎖" }
+      Challenger: {
+        requirements: { pgp: 2500, tgp: 50000 },
+        reward: 1000,
+        icon: "🥇",
+      },
+      Warrior: {
+        requirements: { pgp: 5000, tgp: 100000 },
+        reward: 5000,
+        icon: "🥈",
+      },
+      Tycoon: {
+        requirements: { pgp: 10000, tgp: 200000 },
+        reward: 20000,
+        icon: "🥉",
+      },
+      CHAMPION: {
+        requirements: { pgp: 25000, tgp: 500000 },
+        reward: 50000,
+        icon: "🏅",
+      },
+      BOSS: {
+        requirements: { pgp: 50000, tgp: 1000000 },
+        reward: 200000,
+        icon: "🎖",
+      },
     };
   }
-  
+
   let nextRank = null;
   let pgpProgress = 0;
   let tgpProgress = 0;
   let overallProgress = 0;
   let pgpToNext = 0;
   let tgpToNext = 0;
-  
+
   // Determine next rank and progress based on current rank
-  if (currentRank === 'None') {
+  if (currentRank === "None") {
     // User has no rank yet - working towards Challenger
-    nextRank = 'Challenger';
-    pgpProgress = Math.min(100, (pgpPoints / crrRanks.Challenger.requirements.pgp) * 100);
-    tgpProgress = Math.min(100, (tgpPoints / crrRanks.Challenger.requirements.tgp) * 100);
+    nextRank = "Challenger";
+    pgpProgress = Math.min(
+      100,
+      (pgpPoints / crrRanks.Challenger.requirements.pgp) * 100
+    );
+    tgpProgress = Math.min(
+      100,
+      (tgpPoints / crrRanks.Challenger.requirements.tgp) * 100
+    );
     pgpToNext = Math.max(0, crrRanks.Challenger.requirements.pgp - pgpPoints);
     tgpToNext = Math.max(0, crrRanks.Challenger.requirements.tgp - tgpPoints);
-  } else if (currentRank === 'Challenger') {
-    nextRank = 'Warrior';
-    pgpProgress = Math.min(100, (pgpPoints / crrRanks.Warrior.requirements.pgp) * 100);
-    tgpProgress = Math.min(100, (tgpPoints / crrRanks.Warrior.requirements.tgp) * 100);
+  } else if (currentRank === "Challenger") {
+    nextRank = "Warrior";
+    pgpProgress = Math.min(
+      100,
+      (pgpPoints / crrRanks.Warrior.requirements.pgp) * 100
+    );
+    tgpProgress = Math.min(
+      100,
+      (tgpPoints / crrRanks.Warrior.requirements.tgp) * 100
+    );
     pgpToNext = Math.max(0, crrRanks.Warrior.requirements.pgp - pgpPoints);
     tgpToNext = Math.max(0, crrRanks.Warrior.requirements.tgp - tgpPoints);
-  } else if (currentRank === 'Warrior') {
-    nextRank = 'Tycoon';
-    pgpProgress = Math.min(100, (pgpPoints / crrRanks.Tycoon.requirements.pgp) * 100);
-    tgpProgress = Math.min(100, (tgpPoints / crrRanks.Tycoon.requirements.tgp) * 100);
+  } else if (currentRank === "Warrior") {
+    nextRank = "Tycoon";
+    pgpProgress = Math.min(
+      100,
+      (pgpPoints / crrRanks.Tycoon.requirements.pgp) * 100
+    );
+    tgpProgress = Math.min(
+      100,
+      (tgpPoints / crrRanks.Tycoon.requirements.tgp) * 100
+    );
     pgpToNext = Math.max(0, crrRanks.Tycoon.requirements.pgp - pgpPoints);
     tgpToNext = Math.max(0, crrRanks.Tycoon.requirements.tgp - tgpPoints);
-  } else if (currentRank === 'Tycoon') {
-    nextRank = 'CHAMPION';
-    pgpProgress = Math.min(100, (pgpPoints / crrRanks.CHAMPION.requirements.pgp) * 100);
-    tgpProgress = Math.min(100, (tgpPoints / crrRanks.CHAMPION.requirements.tgp) * 100);
+  } else if (currentRank === "Tycoon") {
+    nextRank = "CHAMPION";
+    pgpProgress = Math.min(
+      100,
+      (pgpPoints / crrRanks.CHAMPION.requirements.pgp) * 100
+    );
+    tgpProgress = Math.min(
+      100,
+      (tgpPoints / crrRanks.CHAMPION.requirements.tgp) * 100
+    );
     pgpToNext = Math.max(0, crrRanks.CHAMPION.requirements.pgp - pgpPoints);
     tgpToNext = Math.max(0, crrRanks.CHAMPION.requirements.tgp - tgpPoints);
-  } else if (currentRank === 'CHAMPION') {
-    nextRank = 'BOSS';
-    pgpProgress = Math.min(100, (pgpPoints / crrRanks.BOSS.requirements.pgp) * 100);
-    tgpProgress = Math.min(100, (tgpPoints / crrRanks.BOSS.requirements.tgp) * 100);
+  } else if (currentRank === "CHAMPION") {
+    nextRank = "BOSS";
+    pgpProgress = Math.min(
+      100,
+      (pgpPoints / crrRanks.BOSS.requirements.pgp) * 100
+    );
+    tgpProgress = Math.min(
+      100,
+      (tgpPoints / crrRanks.BOSS.requirements.tgp) * 100
+    );
     pgpToNext = Math.max(0, crrRanks.BOSS.requirements.pgp - pgpPoints);
     tgpToNext = Math.max(0, crrRanks.BOSS.requirements.tgp - tgpPoints);
-  } else if (currentRank === 'BOSS') {
+  } else if (currentRank === "BOSS") {
     nextRank = null;
     pgpProgress = 100;
     tgpProgress = 100;
     pgpToNext = 0;
     tgpToNext = 0;
   }
-  
+
   overallProgress = (pgpProgress + tgpProgress) / 2;
-  
+
   return {
     currentRank,
     nextRank,
@@ -847,18 +942,23 @@ userSchema.methods.getCRRRankProgress = function(crrRanks) {
     progress: {
       pgp: Math.round(pgpProgress),
       tgp: Math.round(tgpProgress),
-      overall: Math.round(overallProgress)
+      overall: Math.round(overallProgress),
     },
     requirements: {
-      current: currentRank !== 'None' ? crrRanks[currentRank]?.requirements : { pgp: 0, tgp: 0 },
-      next: nextRank ? crrRanks[nextRank]?.requirements : null
+      current:
+        currentRank !== "None"
+          ? crrRanks[currentRank]?.requirements
+          : { pgp: 0, tgp: 0 },
+      next: nextRank ? crrRanks[nextRank]?.requirements : null,
     },
     reward: {
-      current: currentRank !== 'None' ? crrRanks[currentRank]?.reward : 0,
-      next: nextRank ? crrRanks[nextRank]?.reward : 0
+      current: currentRank !== "None" ? crrRanks[currentRank]?.reward : 0,
+      next: nextRank ? crrRanks[nextRank]?.reward : 0,
     },
-    icon: currentRank !== 'None' ? crrRanks[currentRank]?.icon : "🔒",
-    rankHistory: this.crrRank.history.sort((a, b) => new Date(b.achievedAt) - new Date(a.achievedAt))
+    icon: currentRank !== "None" ? crrRanks[currentRank]?.icon : "🔒",
+    rankHistory: this.crrRank.history.sort(
+      (a, b) => new Date(b.achievedAt) - new Date(a.achievedAt)
+    ),
   };
 };
 

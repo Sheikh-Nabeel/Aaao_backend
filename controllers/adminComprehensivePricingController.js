@@ -419,29 +419,51 @@ const updateCarRecoveryRates = async (req, res) => {
       });
     }
 
-    if (enabled !== undefined)
-      config.serviceTypes.carRecovery.enabled = enabled;
+    // Ensure nested structures exist
+    config.serviceTypes = config.serviceTypes || {};
+    config.serviceTypes.carRecovery = config.serviceTypes.carRecovery || {};
+    config.serviceTypes.carRecovery.flatbed =
+      config.serviceTypes.carRecovery.flatbed || {};
+    config.serviceTypes.carRecovery.wheelLift =
+      config.serviceTypes.carRecovery.wheelLift || {};
+    config.serviceTypes.carRecovery.jumpstart =
+      config.serviceTypes.carRecovery.jumpstart || {};
 
+    // enabled
+    if (enabled !== undefined) {
+      config.serviceTypes.carRecovery.enabled = !!enabled;
+    }
+
+    // flatbed.perKmRate
     if (flatbed && flatbed.perKmRate !== undefined) {
-      config.serviceTypes.carRecovery.flatbed.perKmRate = flatbed.perKmRate;
+      config.serviceTypes.carRecovery.flatbed.perKmRate = Number(
+        flatbed.perKmRate
+      );
     }
 
+    // wheelLift.perKmRate
     if (wheelLift && wheelLift.perKmRate !== undefined) {
-      config.serviceTypes.carRecovery.wheelLift.perKmRate = wheelLift.perKmRate;
+      config.serviceTypes.carRecovery.wheelLift.perKmRate = Number(
+        wheelLift.perKmRate
+      );
     }
 
+    // jumpstart group
     if (jumpstart) {
       if (jumpstart.fixedRate !== undefined) {
-        config.serviceTypes.carRecovery.jumpstart.fixedRate =
-          jumpstart.fixedRate;
+        config.serviceTypes.carRecovery.jumpstart.fixedRate = Number(
+          jumpstart.fixedRate
+        );
       }
       if (jumpstart.minAmount !== undefined) {
-        config.serviceTypes.carRecovery.jumpstart.minAmount =
-          jumpstart.minAmount;
+        config.serviceTypes.carRecovery.jumpstart.minAmount = Number(
+          jumpstart.minAmount
+        );
       }
       if (jumpstart.maxAmount !== undefined) {
-        config.serviceTypes.carRecovery.jumpstart.maxAmount =
-          jumpstart.maxAmount;
+        config.serviceTypes.carRecovery.jumpstart.maxAmount = Number(
+          jumpstart.maxAmount
+        );
       }
     }
 
@@ -1036,6 +1058,227 @@ const deleteItemPricing = async (req, res) => {
   }
 };
 
+// Update currency (global)
+const updateCurrency = async (req, res) => {
+  try {
+    const { currency } = req.body;
+    if (!currency || typeof currency !== "string")
+      return res
+        .status(400)
+        .json({ success: false, message: "currency is required" });
+
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config)
+      return res
+        .status(404)
+        .json({ success: false, message: "Config not found" });
+
+    config.currency = currency.trim();
+    config.lastUpdatedBy = req.user.id;
+    await config.save();
+    res.status(200).json({
+      success: true,
+      message: "Currency updated",
+      data: { currency: config.currency },
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating currency",
+      error: err.message,
+    });
+  }
+};
+
+// Update car recovery core base/per-km (+ city-wise adjustment)
+const updateRecoveryCoreRates = async (req, res) => {
+  try {
+    const { baseFare, perKmRate } = req.body; // baseFare: { amount, coverageKm }, perKmRate: { afterBaseCoverage, cityWiseAdjustment{enabled,aboveKm,adjustedRate} }
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config)
+      return res
+        .status(404)
+        .json({ success: false, message: "Config not found" });
+
+    if (baseFare) {
+      if (baseFare.amount !== undefined)
+        config.serviceTypes.carRecovery.baseFare.amount = Number(
+          baseFare.amount
+        );
+      if (baseFare.coverageKm !== undefined)
+        config.serviceTypes.carRecovery.baseFare.coverageKm = Number(
+          baseFare.coverageKm
+        );
+    }
+    if (perKmRate) {
+      if (perKmRate.afterBaseCoverage !== undefined)
+        config.serviceTypes.carRecovery.perKmRate.afterBaseCoverage = Number(
+          perKmRate.afterBaseCoverage
+        );
+      if (perKmRate.cityWiseAdjustment) {
+        const c = perKmRate.cityWiseAdjustment;
+        if (c.enabled !== undefined)
+          config.serviceTypes.carRecovery.perKmRate.cityWiseAdjustment.enabled =
+            !!c.enabled;
+        if (c.aboveKm !== undefined)
+          config.serviceTypes.carRecovery.perKmRate.cityWiseAdjustment.aboveKm =
+            Number(c.aboveKm);
+        if (c.adjustedRate !== undefined)
+          config.serviceTypes.carRecovery.perKmRate.cityWiseAdjustment.adjustedRate =
+            Number(c.adjustedRate);
+      }
+    }
+    config.lastUpdatedBy = req.user.id;
+    await config.save();
+    res.status(200).json({
+      success: true,
+      message: "Recovery core rates updated",
+      data: config.serviceTypes.carRecovery,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating recovery core rates",
+      error: err.message,
+    });
+  }
+};
+
+// Update car recovery waiting charges (service-specific)
+const updateRecoveryWaitingCharges = async (req, res) => {
+  try {
+    const { freeMinutes, perMinuteRate, maximumCharge } = req.body;
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config)
+      return res
+        .status(404)
+        .json({ success: false, message: "Config not found" });
+
+    if (freeMinutes !== undefined)
+      config.serviceTypes.carRecovery.waitingCharges.freeMinutes =
+        Number(freeMinutes);
+    if (perMinuteRate !== undefined)
+      config.serviceTypes.carRecovery.waitingCharges.perMinuteRate =
+        Number(perMinuteRate);
+    if (maximumCharge !== undefined)
+      config.serviceTypes.carRecovery.waitingCharges.maximumCharge =
+        Number(maximumCharge);
+    config.lastUpdatedBy = req.user.id;
+    await config.save();
+    res.status(200).json({
+      success: true,
+      message: "Recovery waiting charges updated",
+      data: config.serviceTypes.carRecovery.waitingCharges,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating recovery waiting",
+      error: err.message,
+    });
+  }
+};
+
+// Update car recovery cancellation charges (service-specific)
+const updateRecoveryCancellationCharges = async (req, res) => {
+  try {
+    const { beforeArrival, after25Percent, after50Percent, afterArrival } =
+      req.body;
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config)
+      return res
+        .status(404)
+        .json({ success: false, message: "Config not found" });
+
+    const cc = config.serviceTypes.carRecovery.cancellationCharges;
+    if (beforeArrival !== undefined) cc.beforeArrival = Number(beforeArrival);
+    if (after25Percent !== undefined)
+      cc.after25Percent = Number(after25Percent);
+    if (after50Percent !== undefined)
+      cc.after50Percent = Number(after50Percent);
+    if (afterArrival !== undefined) cc.afterArrival = Number(afterArrival);
+    config.lastUpdatedBy = req.user.id;
+    await config.save();
+    res.status(200).json({
+      success: true,
+      message: "Recovery cancellation charges updated",
+      data: cc,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating recovery cancellation",
+      error: err.message,
+    });
+  }
+};
+
+// Update car recovery night charges (service-specific)
+const updateRecoveryNightCharges = async (req, res) => {
+  try {
+    const { enabled, startHour, endHour, fixedAmount, multiplier } = req.body;
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config)
+      return res
+        .status(404)
+        .json({ success: false, message: "Config not found" });
+
+    const nc = config.serviceTypes.carRecovery.nightCharges;
+    if (enabled !== undefined) nc.enabled = !!enabled;
+    if (startHour !== undefined) nc.startHour = Number(startHour);
+    if (endHour !== undefined) nc.endHour = Number(endHour);
+    if (fixedAmount !== undefined) nc.fixedAmount = Number(fixedAmount);
+    if (multiplier !== undefined) nc.multiplier = Number(multiplier);
+    config.lastUpdatedBy = req.user.id;
+    await config.save();
+    res.status(200).json({
+      success: true,
+      message: "Recovery night charges updated",
+      data: nc,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating recovery night",
+      error: err.message,
+    });
+  }
+};
+
+// Update car recovery surge flags (service-specific quick toggles)
+const updateRecoverySurgeFlags = async (req, res) => {
+  try {
+    const { enabled, adminControlled, noSurge, surge1_5x, surge2_0x, levels } =
+      req.body;
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config)
+      return res
+        .status(404)
+        .json({ success: false, message: "Config not found" });
+
+    const sp = config.serviceTypes.carRecovery.surgePricing;
+    if (enabled !== undefined) sp.enabled = !!enabled;
+    if (adminControlled !== undefined) sp.adminControlled = !!adminControlled;
+    if (noSurge !== undefined) sp.noSurge = !!noSurge;
+    if (surge1_5x !== undefined) sp.surge1_5x = !!surge1_5x;
+    if (surge2_0x !== undefined) sp.surge2_0x = !!surge2_0x;
+    if (levels && Array.isArray(levels)) sp.levels = levels;
+    config.lastUpdatedBy = req.user.id;
+    await config.save();
+    res.status(200).json({
+      success: true,
+      message: "Recovery surge flags updated",
+      data: sp,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating recovery surge flags",
+      error: err.message,
+    });
+  }
+};
+
 export {
   getComprehensivePricing,
   updateBaseFare,
@@ -1056,4 +1299,10 @@ export {
   addItemPricing,
   updateItemPricing,
   deleteItemPricing,
+  updateCurrency,
+  updateRecoveryCoreRates,
+  updateRecoveryWaitingCharges,
+  updateRecoveryCancellationCharges,
+  updateRecoveryNightCharges,
+  updateRecoverySurgeFlags,
 };
