@@ -4518,7 +4518,7 @@ class RecoveryHandler {
 
       // Load booking
       const booking = await Booking.findById(bookingId).select(
-        "status user driver fareDetails pickupLocation dropoffLocation"
+        "status user driver fareDetails pickupLocation dropoffLocation vehicleDetails"
       );
       if (!booking) throw new Error("Booking not found");
 
@@ -4533,7 +4533,7 @@ class RecoveryHandler {
         throw new Error(`Cannot offer fare on a ${booking.status} booking`);
       }
 
-      // Determine window anchor (best-effort)
+      // Determine window anchor
       const anchor =
         Number(booking?.fareDetails?.finalFare?.amount) ||
         Number(booking?.fareDetails?.estimatedFare?.amount) ||
@@ -4563,10 +4563,74 @@ class RecoveryHandler {
 
       const now = new Date();
 
+      // Minimal display info helper
+      const buildInfo = (u) => {
+        if (!u) return null;
+        const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
+        return {
+          id: String(u._id || ""),
+          name,
+          image: u.profilePicture || null,
+        };
+      };
+
+      // Route info (distance/time)
+      const pickup = booking?.pickupLocation;
+      const dropoff = booking?.dropoffLocation;
+      let route = { distanceKm: null, timeMinutes: null };
+      try {
+        const pLat = pickup?.coordinates?.[1];
+        const pLng = pickup?.coordinates?.[0];
+        const dLat = dropoff?.coordinates?.[1];
+        const dLng = dropoff?.coordinates?.[0];
+        const haveCoords = [pLat, pLng, dLat, dLng].every(
+          (v) => typeof v === "number"
+        );
+        if (haveCoords) {
+          const distanceKm = this._calcDistanceKm(
+            { lat: pLat, lng: pLng },
+            { lat: dLat, lng: dLng }
+          );
+          route.distanceKm = distanceKm;
+          try {
+            const eta = this.calculateETA(
+              { lat: pLat, lng: pLng },
+              { lat: dLat, lng: dLng }
+            );
+            route.timeMinutes = eta?.minutes ?? null;
+          } catch {
+            // keep timeMinutes null if calculateETA unavailable
+          }
+        }
+      } catch {
+        // leave route defaults
+      }
+
+      // Vehicle display name
+      const vd = booking?.vehicleDetails || {};
+      const vehicleName =
+        vd?.name ||
+        vd?.model ||
+        vd?.make ||
+        vd?.type ||
+        vd?.vehicleType ||
+        null;
+
       if (isCustomer) {
         const driverId = String(data?.driverId || "").trim();
         if (!driverId)
           throw new Error("driverId is required for customer offer");
+
+        // Offering party = customer
+        let offeredBy = null;
+        try {
+          const cust = booking?.user
+            ? await User.findById(booking.user)
+                .select("firstName lastName profilePicture")
+                .lean()
+            : null;
+          offeredBy = buildInfo(cust);
+        } catch {}
 
         await Booking.findByIdAndUpdate(
           bookingId,
@@ -4605,13 +4669,17 @@ class RecoveryHandler {
           { new: false }
         );
 
-        // Notify driver
+        // Notify driver (show customer’s name/image + vehicle, route)
         this.webSocketService.sendToUser(String(driverId), {
           event: "fare.offer",
           bookingId,
           data: {
             amount,
             currency,
+            by: "customer",
+            offeredBy, // {id,name,image}
+            vehicleName,
+            route, // {distanceKm, timeMinutes}
             pickupLocation: booking.pickupLocation,
             dropoffLocation: booking.dropoffLocation,
             minFare: window.minFare,
@@ -4619,13 +4687,17 @@ class RecoveryHandler {
           },
         });
 
-        // Ack to customer
+        // Ack to customer (mirror)
         this.emitToClient(ws, {
           event: "fare.offer.ack",
           bookingId,
           data: {
             amount,
             currency,
+            by: "customer",
+            offeredBy,
+            vehicleName,
+            route,
             minFare: window.minFare,
             maxFare: window.maxFare,
           },
@@ -4636,6 +4708,15 @@ class RecoveryHandler {
       if (isDriver) {
         const driverId = String(ws?.user?.id || ws?.user?._id || "").trim();
         if (!driverId) throw new Error("driver identity required");
+
+        // Offering party = driver
+        let offeredBy = null;
+        try {
+          const drv = await User.findById(driverId)
+            .select("firstName lastName profilePicture")
+            .lean();
+          offeredBy = buildInfo(drv);
+        } catch {}
 
         // Persist driver proposal
         await Booking.findByIdAndUpdate(
@@ -4677,7 +4758,7 @@ class RecoveryHandler {
           { new: false }
         );
 
-        // Notify customer
+        // Notify customer (show driver’s name/image + vehicle, route)
         if (booking.user) {
           this.webSocketService.sendToUser(String(booking.user), {
             event: "fare.offer",
@@ -4685,23 +4766,30 @@ class RecoveryHandler {
             data: {
               amount,
               currency,
+              by: "driver",
+              driverId,
+              offeredBy, // {id,name,image}
+              vehicleName,
+              route,
               pickupLocation: booking.pickupLocation,
               dropoffLocation: booking.dropoffLocation,
               minFare: window.minFare,
               maxFare: window.maxFare,
-              by: "driver",
-              driverId,
             },
           });
         }
 
-        // Ack to driver
+        // Ack to driver (mirror)
         this.emitToClient(ws, {
           event: "fare.offer.ack",
           bookingId,
           data: {
             amount,
             currency,
+            by: "driver",
+            offeredBy,
+            vehicleName,
+            route,
             minFare: window.minFare,
             maxFare: window.maxFare,
           },
@@ -4712,6 +4800,18 @@ class RecoveryHandler {
       // Unknown role: require driverId and act as customer
       const fallbackDriverId = String(data?.driverId || "").trim();
       if (!fallbackDriverId) throw new Error("driverId is required");
+
+      // Offering party = customer
+      let offeredBy = null;
+      try {
+        const cust = booking?.user
+          ? await User.findById(booking.user)
+              .select("firstName lastName profilePicture")
+              .lean()
+          : null;
+        offeredBy = buildInfo(cust);
+      } catch {}
+
       await Booking.findByIdAndUpdate(
         bookingId,
         {
@@ -4748,24 +4848,36 @@ class RecoveryHandler {
         },
         { new: false }
       );
+
+      // Notify fallback driver (show customer’s name/image + vehicle, route)
       this.webSocketService.sendToUser(String(fallbackDriverId), {
         event: "fare.offer",
         bookingId,
         data: {
           amount,
           currency,
+          by: "customer",
+          offeredBy, // {id,name,image}
+          vehicleName,
+          route,
           pickupLocation: booking.pickupLocation,
           dropoffLocation: booking.dropoffLocation,
           minFare: window.minFare,
           maxFare: window.maxFare,
         },
       });
+
+      // Ack to initiator
       this.emitToClient(ws, {
         event: "fare.offer.ack",
         bookingId,
         data: {
           amount,
           currency,
+          by: "customer",
+          offeredBy,
+          vehicleName,
+          route,
           minFare: window.minFare,
           maxFare: window.maxFare,
         },
@@ -5498,11 +5610,15 @@ class RecoveryHandler {
     const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
     let driverId = String(data?.driverId || "").trim();
 
+    // Local holder for booking + vehicle details
+    let booking = null;
+    let vehicleDetails = null;
+
     try {
       if (!driverId && !bookingId)
         throw new Error("bookingId or driverId is required");
 
-      // Resolve driverId via Redis mapping first
+      // Resolve driverId via Redis mapping first if bookingId present
       if (!driverId && bookingId) {
         try {
           const mapped = await redis.get(`booking:driver:${bookingId}`);
@@ -5510,12 +5626,16 @@ class RecoveryHandler {
         } catch {}
       }
 
-      // Fallback to DB mapping
-      if (!driverId && bookingId) {
-        const b = await Booking.findById(bookingId)
-          .select("user driver")
+      // Fallback to DB mapping; also fetch vehicle details once
+      if (bookingId) {
+        booking = await Booking.findById(bookingId)
+          .select("user driver vehicleDetails")
           .lean();
-        if (!b?.driver) {
+        vehicleDetails = booking?.vehicleDetails || null;
+      }
+      if (!driverId && bookingId) {
+        if (!booking?.driver) {
+          // No driver assigned: still send vehicle info if available
           this.emitToClient(ws, {
             event: "driver.location",
             bookingId,
@@ -5523,20 +5643,18 @@ class RecoveryHandler {
               available: false,
               source: "redis",
               reason: "no_driver_assigned",
+              vehicle: vehicleDetails || null,
             },
           });
           return;
         }
-        driverId = String(b.driver);
+        driverId = String(booking.driver);
       }
 
-      // Auth
+      // Auth: driver, owner, or admin/support
       let ownerId = null;
       if (bookingId) {
-        const b = await Booking.findById(bookingId)
-          .select("user driver")
-          .lean();
-        ownerId = b?.user ? String(b.user) : null;
+        ownerId = booking?.user ? String(booking.user) : null;
       }
       const callerId = String(ws?.user?.id || ws?.user?._id || "");
       const role = String(ws?.user?.role || "").toLowerCase();
@@ -5583,6 +5701,7 @@ class RecoveryHandler {
         } catch {}
         const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
         for (let i = 0; i < 8; i++) {
+          // slightly extended retries
           await sleep(300);
           parsed = await fetchRedisLocation();
           if (parsed && isFresh(parsed.at)) break;
@@ -5610,12 +5729,14 @@ class RecoveryHandler {
                   ? new Date(u.lastActiveAt).toISOString()
                   : undefined,
                 driverId,
+                vehicle: vehicleDetails || null,
                 stale: true,
               },
             });
             return;
           }
         } catch {}
+        // Nothing available; still include vehicle info for UI
         this.emitToClient(ws, {
           event: "driver.location",
           bookingId: bookingId || null,
@@ -5623,12 +5744,13 @@ class RecoveryHandler {
             available: false,
             source: "redis",
             reason: "stale_or_missing",
+            vehicle: vehicleDetails || null,
           },
         });
         return;
       }
 
-      // Fresh redis
+      // Fresh redis; include vehicle details
       this.emitToClient(ws, {
         event: "driver.location",
         bookingId: bookingId || parsed.bookingId || null,
@@ -5638,6 +5760,7 @@ class RecoveryHandler {
           location: { lat: parsed.lat, lng: parsed.lng },
           at: parsed.at,
           driverId,
+          vehicle: vehicleDetails || null,
         },
       });
 

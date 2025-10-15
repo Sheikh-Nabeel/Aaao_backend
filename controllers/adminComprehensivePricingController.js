@@ -408,7 +408,12 @@ const updateSurgePricing = async (req, res) => {
 // Update car recovery service rates (Towing, Flatbed, Wheel Lift, Jumpstart)
 const updateCarRecoveryRates = async (req, res) => {
   try {
+    // Backward-compatible fields
     const { enabled, flatbed, wheelLift, jumpstart } = req.body;
+    // New-style: allow full carRecovery payload (direct or nested)
+    const carRecoveryPayload =
+      req.body?.serviceTypes?.carRecovery ?? req.body?.carRecovery ?? null;
+
     const adminId = req.user.id;
 
     const config = await ComprehensivePricing.findOne({ isActive: true });
@@ -419,9 +424,86 @@ const updateCarRecoveryRates = async (req, res) => {
       });
     }
 
-    // Ensure nested structures exist
+    // Local deep-merge helper (objects only; arrays replaced)
+    function deepMergeReplaceArrays(target, source) {
+      if (!source || typeof source !== "object" || Array.isArray(source))
+        return target;
+      Object.keys(source).forEach((key) => {
+        const srcVal = source[key];
+        if (srcVal && typeof srcVal === "object" && !Array.isArray(srcVal)) {
+          if (
+            !target[key] ||
+            typeof target[key] !== "object" ||
+            Array.isArray(target[key])
+          ) {
+            target[key] = {};
+          }
+          deepMergeReplaceArrays(target[key], srcVal);
+        } else {
+          target[key] = srcVal;
+        }
+      });
+      return target;
+    }
+
+    // Ensure base branch exists
     config.serviceTypes = config.serviceTypes || {};
     config.serviceTypes.carRecovery = config.serviceTypes.carRecovery || {};
+
+    // If we received a new-style carRecovery payload, init subtrees and merge
+    if (carRecoveryPayload && typeof carRecoveryPayload === "object") {
+      const cr = config.serviceTypes.carRecovery;
+
+      // Initialize nested serviceTypes as needed
+      if (
+        carRecoveryPayload.serviceTypes &&
+        typeof carRecoveryPayload.serviceTypes === "object"
+      ) {
+        cr.serviceTypes = cr.serviceTypes || {};
+
+        // winching
+        if (carRecoveryPayload.serviceTypes.winching) {
+          cr.serviceTypes.winching = cr.serviceTypes.winching || {};
+          cr.serviceTypes.winching.subCategories =
+            cr.serviceTypes.winching.subCategories || {};
+          const wSubs =
+            carRecoveryPayload.serviceTypes.winching.subCategories || {};
+          Object.keys(wSubs).forEach((name) => {
+            cr.serviceTypes.winching.subCategories[name] =
+              cr.serviceTypes.winching.subCategories[name] || {};
+          });
+        }
+
+        // roadsideAssistance
+        if (carRecoveryPayload.serviceTypes.roadsideAssistance) {
+          cr.serviceTypes.roadsideAssistance =
+            cr.serviceTypes.roadsideAssistance || {};
+          cr.serviceTypes.roadsideAssistance.subCategories =
+            cr.serviceTypes.roadsideAssistance.subCategories || {};
+          const rSubs =
+            carRecoveryPayload.serviceTypes.roadsideAssistance.subCategories ||
+            {};
+          Object.keys(rSubs).forEach((name) => {
+            cr.serviceTypes.roadsideAssistance.subCategories[name] =
+              cr.serviceTypes.roadsideAssistance.subCategories[name] || {};
+          });
+        }
+
+        // keyUnlockerServices (category-level)
+        if (carRecoveryPayload.serviceTypes.keyUnlockerServices) {
+          cr.serviceTypes.keyUnlockerServices =
+            cr.serviceTypes.keyUnlockerServices || {};
+        }
+      }
+
+      // Deep-merge payload into carRecovery (arrays replaced)
+      deepMergeReplaceArrays(
+        config.serviceTypes.carRecovery,
+        carRecoveryPayload
+      );
+    }
+
+    // Backward compatibility: legacy fields (flatbed/wheelLift/jumpstart)
     config.serviceTypes.carRecovery.flatbed =
       config.serviceTypes.carRecovery.flatbed || {};
     config.serviceTypes.carRecovery.wheelLift =
@@ -429,26 +511,22 @@ const updateCarRecoveryRates = async (req, res) => {
     config.serviceTypes.carRecovery.jumpstart =
       config.serviceTypes.carRecovery.jumpstart || {};
 
-    // enabled
     if (enabled !== undefined) {
       config.serviceTypes.carRecovery.enabled = !!enabled;
     }
 
-    // flatbed.perKmRate
     if (flatbed && flatbed.perKmRate !== undefined) {
       config.serviceTypes.carRecovery.flatbed.perKmRate = Number(
         flatbed.perKmRate
       );
     }
 
-    // wheelLift.perKmRate
     if (wheelLift && wheelLift.perKmRate !== undefined) {
       config.serviceTypes.carRecovery.wheelLift.perKmRate = Number(
         wheelLift.perKmRate
       );
     }
 
-    // jumpstart group
     if (jumpstart) {
       if (jumpstart.fixedRate !== undefined) {
         config.serviceTypes.carRecovery.jumpstart.fixedRate = Number(
@@ -700,11 +778,33 @@ const updateMinimumFare = async (req, res) => {
   }
 };
 
-// Bulk update comprehensive pricing
-const bulkUpdatePricing = async (req, res) => {
+// Deep merge helper (objects only; arrays are replaced for predictability)
+function deepMergeReplaceArrays(target, source) {
+  if (!source || typeof source !== "object" || Array.isArray(source))
+    return target;
+  Object.keys(source).forEach((key) => {
+    const srcVal = source[key];
+    if (srcVal && typeof srcVal === "object" && !Array.isArray(srcVal)) {
+      if (
+        !target[key] ||
+        typeof target[key] !== "object" ||
+        Array.isArray(target[key])
+      ) {
+        target[key] = {};
+      }
+      deepMergeReplaceArrays(target[key], srcVal);
+    } else {
+      target[key] = srcVal;
+    }
+  });
+  return target;
+}
+
+// Bulk update comprehensive pricing (flow-name strict + validation + deep-merge)
+export const bulkUpdatePricing = async (req, res) => {
   try {
-    const updates = req.body;
-    const adminId = req.user.id;
+    const updates = req.body || {};
+    const adminId = req.user?.id;
 
     const config = await ComprehensivePricing.findOne({ isActive: true });
     if (!config) {
@@ -714,39 +814,383 @@ const bulkUpdatePricing = async (req, res) => {
       });
     }
 
-    // Apply all updates
-    Object.keys(updates).forEach((key) => {
-      if (key !== "lastUpdatedBy" && updates[key] !== undefined) {
-        if (typeof updates[key] === "object" && !Array.isArray(updates[key])) {
-          // Handle nested objects
-          Object.keys(updates[key]).forEach((nestedKey) => {
-            if (config[key] && updates[key][nestedKey] !== undefined) {
+    // STRICT allowed flow keys (exact)
+    const ALLOWED_FLOW = {
+      services: ["car recovery", "shifting & movers", "car cab", "bike"],
+      carRecoveryCategories: [
+        "towing services",
+        "winching services",
+        "roadside assistance",
+        "specialized/heavy recovery", // schema doesn't support; will be rejected if sent with data
+      ],
+      towingSub: ["flatbed towing", "wheel lift towing"], // maps to flatbed, wheelLift
+      roadsideSub: ["battery jump start", "fuel delivery"], // maps to jumpstart, fuelDelivery
+      // NOTE: If you need more, extend model and add them here.
+    };
+
+    // Map flow keys -> schema keys (only exact allowed above are accepted)
+    const MAP = {
+      serviceTypes: {
+        "car recovery": "carRecovery",
+        "shifting & movers": "shiftingMovers",
+        "car cab": "carCab",
+        bike: "bike",
+      },
+      carRecoveryCategories: {
+        "towing services": "winching",
+        "winching services": "winching", // treated same as winching
+        "roadside assistance": "roadsideAssistance",
+        // "specialized/heavy recovery": no schema; reject if data provided
+      },
+      towingSub: {
+        "flatbed towing": "flatbed",
+        "wheel lift towing": "wheelLift",
+      },
+      roadsideSub: {
+        "battery jump start": "jumpstart",
+        "fuel delivery": "fuelDelivery",
+      },
+    };
+
+    // Transform flow-style payload to schema-style (strict). Throws 400 for unknown/unsupported names.
+    function transformFlowToSchema(flowPayload) {
+      const out = {};
+      if (
+        !flowPayload?.serviceTypes ||
+        typeof flowPayload.serviceTypes !== "object"
+      ) {
+        return out;
+      }
+
+      out.serviceTypes = {};
+      for (const svcName of Object.keys(flowPayload.serviceTypes)) {
+        if (!ALLOWED_FLOW.services.includes(svcName)) {
+          throw new Error(
+            `Unknown service '${svcName}'. Allowed: ${ALLOWED_FLOW.services.join(
+              ", "
+            )}`
+          );
+        }
+        const svcKey = MAP.serviceTypes[svcName];
+        const svcBlock = flowPayload.serviceTypes[svcName] || {};
+        out.serviceTypes[svcKey] = out.serviceTypes[svcKey] || {};
+
+        // Car Recovery special-handling for nested categories
+        if (svcName === "car recovery") {
+          const srcCR = svcBlock;
+          const dstCR = out.serviceTypes[svcKey];
+
+          // Pass-through known top-level carRecovery blocks if present
+          [
+            "baseFare",
+            "perKmRate",
+            "minimumFare",
+            "platformFee",
+            "cancellationCharges",
+            "waitingCharges",
+            "nightCharges",
+            "surgePricing",
+            "refreshmentAlert",
+            "freeStayMinutes",
+            "vat",
+          ].forEach((k) => {
+            if (srcCR[k] !== undefined) dstCR[k] = srcCR[k];
+          });
+
+          if (srcCR.serviceTypes && typeof srcCR.serviceTypes === "object") {
+            dstCR.serviceTypes = dstCR.serviceTypes || {};
+            for (const catName of Object.keys(srcCR.serviceTypes)) {
+              if (!ALLOWED_FLOW.carRecoveryCategories.includes(catName)) {
+                throw new Error(
+                  `Unknown car recovery category '${catName}'. Allowed: ${ALLOWED_FLOW.carRecoveryCategories.join(
+                    ", "
+                  )}`
+                );
+              }
+              // Not supported in schema
+              if (catName === "specialized/heavy recovery") {
+                throw new Error(
+                  "'specialized/heavy recovery' is not supported by the current schema"
+                );
+              }
+
+              const catKey = MAP.carRecoveryCategories[catName];
+              const srcCat = srcCR.serviceTypes[catName] || {};
+              const dstCat = (dstCR.serviceTypes[catKey] =
+                dstCR.serviceTypes[catKey] || {});
+
+              // Towing/Winching subcategories
               if (
-                typeof updates[key][nestedKey] === "object" &&
-                !Array.isArray(updates[key][nestedKey])
+                catName === "towing services" ||
+                catName === "winching services"
               ) {
-                // Handle deeply nested objects
-                Object.keys(updates[key][nestedKey]).forEach((deepKey) => {
-                  if (
-                    config[key][nestedKey] &&
-                    updates[key][nestedKey][deepKey] !== undefined
-                  ) {
-                    config[key][nestedKey][deepKey] =
-                      updates[key][nestedKey][deepKey];
+                if (
+                  srcCat.subCategories &&
+                  typeof srcCat.subCategories === "object"
+                ) {
+                  dstCat.subCategories = dstCat.subCategories || {};
+                  for (const subName of Object.keys(srcCat.subCategories)) {
+                    if (!ALLOWED_FLOW.towingSub.includes(subName)) {
+                      throw new Error(
+                        `Unknown towing sub-service '${subName}'. Allowed: ${ALLOWED_FLOW.towingSub.join(
+                          ", "
+                        )}`
+                      );
+                    }
+                    const subKey = MAP.towingSub[subName];
+                    dstCat.subCategories[subKey] =
+                      srcCat.subCategories[subName];
                   }
-                });
-              } else {
-                config[key][nestedKey] = updates[key][nestedKey];
+                }
+              }
+
+              // Roadside Assistance subcategories
+              if (catName === "roadside assistance") {
+                if (
+                  srcCat.subCategories &&
+                  typeof srcCat.subCategories === "object"
+                ) {
+                  dstCat.subCategories = dstCat.subCategories || {};
+                  for (const subName of Object.keys(srcCat.subCategories)) {
+                    if (!ALLOWED_FLOW.roadsideSub.includes(subName)) {
+                      throw new Error(
+                        `Unknown roadside sub-service '${subName}'. Allowed: ${ALLOWED_FLOW.roadsideSub.join(
+                          ", "
+                        )}`
+                      );
+                    }
+                    const subKey = MAP.roadsideSub[subName];
+                    dstCat.subCategories[subKey] =
+                      srcCat.subCategories[subName];
+                  }
+                }
               }
             }
-          });
+          }
         } else {
-          config[key] = updates[key];
+          // Other services: pass-through as-is (schema validation will apply)
+          Object.assign(out.serviceTypes[svcKey], svcBlock);
         }
+      }
+      return out;
+    }
+
+    // Determine if incoming is flow-style (strict flow keys) or schema-style
+    let normalized = updates;
+    const isFlowStyle =
+      !!updates?.serviceTypes &&
+      Object.keys(updates.serviceTypes).some((k) =>
+        ALLOWED_FLOW.services.includes(k)
+      );
+
+    if (isFlowStyle) {
+      try {
+        normalized = transformFlowToSchema(updates);
+      } catch (e) {
+        return res.status(400).json({ success: false, message: e.message });
+      }
+    }
+
+    // 1) Light validations (top-level numeric blocks) — keep your existing validators
+    if (normalized.baseFare) {
+      if (normalized.baseFare.amount !== undefined) {
+        normalized.baseFare.amount = validatePositiveNumber(
+          normalized.baseFare.amount,
+          "Base fare amount"
+        );
+      }
+      if (normalized.baseFare.coverageKm !== undefined) {
+        normalized.baseFare.coverageKm = validatePositiveNumber(
+          normalized.baseFare.coverageKm,
+          "Coverage distance"
+        );
+      }
+    }
+
+    if (normalized.platformFee) {
+      const { percentage, driverShare, customerShare } = normalized.platformFee;
+      if (percentage !== undefined)
+        normalized.platformFee.percentage = validatePercentage(
+          percentage,
+          "Platform fee percentage"
+        );
+      if (driverShare !== undefined)
+        normalized.platformFee.driverShare = validatePercentage(
+          driverShare,
+          "Driver share percentage"
+        );
+      if (customerShare !== undefined)
+        normalized.platformFee.customerShare = validatePercentage(
+          customerShare,
+          "Customer share percentage"
+        );
+      if (
+        normalized.platformFee.driverShare != null &&
+        normalized.platformFee.customerShare != null &&
+        normalized.platformFee.driverShare +
+          normalized.platformFee.customerShare >
+          100
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Driver share and customer share combined cannot exceed 100%",
+        });
+      }
+    }
+
+    if (normalized.waitingCharges) {
+      const { freeMinutes, perMinuteRate, maximumCharge } =
+        normalized.waitingCharges;
+      if (freeMinutes !== undefined)
+        normalized.waitingCharges.freeMinutes = validateInteger(
+          freeMinutes,
+          "Free minutes",
+          0
+        );
+      if (perMinuteRate !== undefined)
+        normalized.waitingCharges.perMinuteRate = validatePositiveNumber(
+          perMinuteRate,
+          "Per-minute rate"
+        );
+      if (maximumCharge !== undefined)
+        normalized.waitingCharges.maximumCharge = validatePositiveNumber(
+          maximumCharge,
+          "Maximum waiting charge"
+        );
+    }
+
+    if (normalized.nightCharges) {
+      const { enabled, startHour, endHour, fixedAmount, multiplier } =
+        normalized.nightCharges;
+      if (enabled !== undefined && typeof enabled !== "boolean")
+        return res.status(400).json({
+          success: false,
+          message: "nightCharges.enabled must be boolean",
+        });
+      if (startHour !== undefined)
+        normalized.nightCharges.startHour = validateInteger(
+          startHour,
+          "Night startHour",
+          0,
+          23
+        );
+      if (endHour !== undefined)
+        normalized.nightCharges.endHour = validateInteger(
+          endHour,
+          "Night endHour",
+          0,
+          23
+        );
+      if (fixedAmount !== undefined)
+        normalized.nightCharges.fixedAmount = validatePositiveNumber(
+          fixedAmount,
+          "Night fixedAmount"
+        );
+      if (multiplier !== undefined)
+        normalized.nightCharges.multiplier = validatePositiveNumber(
+          multiplier,
+          "Night multiplier"
+        );
+    }
+
+    if (normalized.vat) {
+      const { enabled, percentage } = normalized.vat;
+      if (enabled !== undefined && typeof enabled !== "boolean")
+        return res
+          .status(400)
+          .json({ success: false, message: "vat.enabled must be boolean" });
+      if (percentage !== undefined)
+        normalized.vat.percentage = validatePercentage(
+          percentage,
+          "VAT percentage"
+        );
+    }
+
+    if (normalized.minimumFare !== undefined) {
+      normalized.minimumFare = validatePositiveNumber(
+        normalized.minimumFare,
+        "Minimum fare"
+      );
+    }
+
+    // 2) Initializers for branches we may merge into
+    if (
+      normalized?.serviceTypes &&
+      typeof normalized.serviceTypes === "object"
+    ) {
+      config.serviceTypes = config.serviceTypes || {};
+
+      // carRecovery nested
+      if (normalized.serviceTypes.carRecovery) {
+        config.serviceTypes.carRecovery = config.serviceTypes.carRecovery || {};
+        const cr = normalized.serviceTypes.carRecovery;
+        if (cr.serviceTypes && typeof cr.serviceTypes === "object") {
+          const cfgCR = config.serviceTypes.carRecovery;
+          cfgCR.serviceTypes = cfgCR.serviceTypes || {};
+          if (cr.serviceTypes.winching) {
+            const cfgW = (cfgCR.serviceTypes.winching =
+              cfgCR.serviceTypes.winching || {});
+            cfgW.subCategories = cfgW.subCategories || {};
+            if (cr.serviceTypes.winching.subCategories) {
+              Object.keys(cr.serviceTypes.winching.subCategories).forEach(
+                (name) => {
+                  cfgW.subCategories[name] = cfgW.subCategories[name] || {};
+                }
+              );
+            }
+          }
+          if (cr.serviceTypes.roadsideAssistance) {
+            const cfgR = (cfgCR.serviceTypes.roadsideAssistance =
+              cfgCR.serviceTypes.roadsideAssistance || {});
+            cfgR.subCategories = cfgR.subCategories || {};
+            if (cr.serviceTypes.roadsideAssistance.subCategories) {
+              Object.keys(
+                cr.serviceTypes.roadsideAssistance.subCategories
+              ).forEach((name) => {
+                cfgR.subCategories[name] = cfgR.subCategories[name] || {};
+              });
+            }
+          }
+          if (cr.serviceTypes.keyUnlockerServices) {
+            cfgCR.serviceTypes.keyUnlockerServices =
+              cfgCR.serviceTypes.keyUnlockerServices || {};
+          }
+        }
+      }
+
+      // carCab/bike initializers
+      if (normalized.serviceTypes.carCab) {
+        config.serviceTypes.carCab = config.serviceTypes.carCab || {};
+        config.serviceTypes.carCab.vehicleTypes =
+          config.serviceTypes.carCab.vehicleTypes || {};
+      }
+      if (normalized.serviceTypes.bike) {
+        config.serviceTypes.bike = config.serviceTypes.bike || {};
+        config.serviceTypes.bike.vehicleTypes =
+          config.serviceTypes.bike.vehicleTypes || {};
+      }
+    }
+
+    // 3) APPLY MERGE (objects deep-merged; arrays replaced)
+    Object.keys(normalized).forEach((key) => {
+      const src = normalized[key];
+      if (src && typeof src === "object" && !Array.isArray(src)) {
+        if (
+          !config[key] ||
+          typeof config[key] !== "object" ||
+          Array.isArray(config[key])
+        ) {
+          config[key] = {};
+        }
+        deepMergeReplaceArrays(config[key], src);
+      } else {
+        // primitives and arrays replace
+        config[key] = src;
       }
     });
 
-    config.lastUpdatedBy = adminId;
+    config.lastUpdatedBy = adminId || config.lastUpdatedBy || null;
     await config.save();
 
     res.status(200).json({
@@ -1294,7 +1738,7 @@ export {
   updateRoundTripFeatures,
   updateVATConfiguration,
   updateMinimumFare,
-  bulkUpdatePricing,
+  // bulkUpdatePricing,
   getItemPricing,
   addItemPricing,
   updateItemPricing,
