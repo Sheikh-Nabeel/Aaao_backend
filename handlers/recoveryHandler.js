@@ -4259,97 +4259,164 @@ class RecoveryHandler {
       }
       if (typeof lat !== "number" || typeof lng !== "number") return [];
 
-      // If ignoreGeo is set, we will not filter by location at all
+      // If ignoreGeo is set, we will not filter by location at all (but we will still compute distance using DB/Redis if available)
       const ignoreGeo = !!filters?.ignoreGeo;
+
+      // Base query shared
+      const baseQuery = {
+        role: "driver",
+        kycLevel: { $gte: 2 },
+        kycStatus: "approved",
+        isActive: true,
+        "statusFlags.blockedForDues": { $ne: true },
+        // Enforce: Pink captains are NOT eligible for Car Recovery
+        "driverSettings.ridePreferences.pinkCaptainMode": { $ne: true },
+        driverStatus: filters.onlyAssignable
+          ? "online"
+          : { $in: ["online", "on_ride", "busy"] },
+      };
+
+      // Discovery filters
+      const applyDiscoveryFilters = (q) => {
+        if (filters.pinkCaptainOnly) {
+          q.gender = "female";
+          q["driverSettings.ridePreferences.pinkCaptainMode"] = true;
+        }
+        if (filters?.safety?.noMaleCompanion) {
+          q["driverSettings.ridePreferences.acceptFemaleOnly"] = true;
+        }
+        if (filters?.safety?.familyWithGuardianMale) {
+          q["driverSettings.ridePreferences.allowFamilyWithGuardian"] = true;
+        }
+        if (filters?.safety?.maleWithoutFemale) {
+          q["driverSettings.ridePreferences.allowMaleWithoutFemale"] = true;
+        }
+        if (filters?.multiStopEnabled === true) {
+          q["driverSettings.ridePreferences.allowMultiStop"] = { $ne: false };
+        }
+
+        // Preferred dispatch
+        const mode = String(
+          filters?.preferredDispatch?.mode || ""
+        ).toLowerCase();
+        const pinnedId = filters?.preferredDispatch?.driverId;
+        if (mode === "female_only") {
+          q.gender = "female";
+        }
+        if (mode === "pinned" && pinnedId) {
+          q._id = String(pinnedId);
+        }
+        return q;
+      };
+
+      // 1) Primary path: $near query (fast, DB geospatial index)
       if (!ignoreGeo) {
-        // Find available drivers near the pickup location
-        // Uses User model with role 'driver', geospatial index on currentLocation
-        const query = {
-          role: "driver",
-          kycLevel: { $gte: 2 },
-          kycStatus: "approved",
-          isActive: true,
-          "statusFlags.blockedForDues": { $ne: true },
-          // Enforce: Pink captains are NOT eligible for Car Recovery
-          "driverSettings.ridePreferences.pinkCaptainMode": { $ne: true },
-          driverStatus: filters.onlyAssignable
-            ? "online"
-            : { $in: ["online", "on_ride", "busy"] },
+        const geoQuery = applyDiscoveryFilters({
+          ...baseQuery,
           currentLocation: {
             $near: {
               $geometry: { type: "Point", coordinates: [lng, lat] },
               $maxDistance: maxDistanceKm * 1000,
             },
           },
-        };
+        });
 
-        // Apply discovery filters
-        if (filters.pinkCaptainOnly) {
-          query.gender = "female";
-          query["driverSettings.ridePreferences.pinkCaptainMode"] = true;
-        }
-        if (filters?.safety?.noMaleCompanion) {
-          query["driverSettings.ridePreferences.acceptFemaleOnly"] = true;
-        }
-        if (filters?.safety?.familyWithGuardianMale) {
-          query[
-            "driverSettings.ridePreferences.allowFamilyWithGuardian"
-          ] = true;
-        }
-        if (filters?.safety?.maleWithoutFemale) {
-          query["driverSettings.ridePreferences.allowMaleWithoutFemale"] = true;
-        }
-        if (filters?.multiStopEnabled === true) {
-          query["driverSettings.ridePreferences.allowMultiStop"] = {
-            $ne: false,
-          };
-        }
-
-        // Apply preferred dispatch filters
-        const mode = String(
-          filters?.preferredDispatch?.mode || ""
-        ).toLowerCase();
-        const pinnedId = filters?.preferredDispatch?.driverId;
-        if (mode === "female_only") {
-          query.gender = "female";
-        }
-        if (mode === "pinned" && pinnedId) {
-          query._id = String(pinnedId);
-        } else if (mode === "favorite") {
-          // Restrict to user's favourite drivers
-          try {
-            let favIds = filters?.favoriteDriverIds || [];
-            if ((!favIds || favIds.length === 0) && filters?.favoriteUserId) {
-              const user = await User.findById(filters.favoriteUserId).select(
-                "favoriteDrivers"
-              );
-              favIds = (user?.favoriteDrivers || []).map((x) => String(x));
-            }
-            if (favIds?.length) {
-              query._id = { $in: favIds };
-            } else {
-              // No favourites: return empty list
-              return [];
-            }
-          } catch {}
-        }
-
-        const drivers = await User.find(query)
+        let drivers = await User.find(geoQuery)
           .limit(10)
           .select(
             "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
           );
 
-        // Map to the shape expected by findAndAssignDriver
-        return drivers.map((d) => {
-          let distanceKmDriver = null;
-          let etaMinutes = null;
+        // If none found by DB geo, fall back to non-geo + Redis proximity
+        if (!drivers || drivers.length === 0) {
+          const broadQuery = applyDiscoveryFilters({ ...baseQuery });
+          const broadDrivers = await User.find(broadQuery)
+            .limit(50)
+            .select(
+              "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
+            );
+
+          const results = [];
+          for (const d of broadDrivers) {
+            let dlat = null;
+            let dlng = null;
+
+            // Prefer DB currentLocation
+            if (
+              Array.isArray(d.currentLocation?.coordinates) &&
+              d.currentLocation.coordinates.length >= 2
+            ) {
+              dlat = d.currentLocation.coordinates[1];
+              dlng = d.currentLocation.coordinates[0];
+            } else {
+              // Redis fallback
+              try {
+                const raw = await redis.get(`driver:loc:${d._id}`);
+                if (raw) {
+                  const p = JSON.parse(raw);
+                  if (typeof p.lat === "number" && typeof p.lng === "number") {
+                    dlat = p.lat;
+                    dlng = p.lng;
+                  }
+                }
+              } catch {}
+            }
+
+            if (typeof dlat === "number" && typeof dlng === "number") {
+              const distanceKmDriver = this._calcDistanceKm(
+                { lat, lng },
+                { lat: dlat, lng: dlng }
+              );
+              if (distanceKmDriver <= maxDistanceKm) {
+                const etaMinutes = Math.ceil((distanceKmDriver / 30) * 60);
+                results.push({
+                  id: d._id.toString(),
+                  name: `${d.firstName ?? ""}`.trim(),
+                  phone: d.phoneNumber,
+                  rating: 5,
+                  status: d.driverStatus,
+                  pendingAmounts: Number(d?.dues?.outstanding || 0) > 0,
+                  distanceKm: distanceKmDriver,
+                  etaMinutes,
+                  location: {
+                    coordinates: { lat: dlat, lng: dlng },
+                  },
+                });
+              }
+            }
+          }
+
+          results.sort((a, b) => (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
+          return results.slice(0, 10);
+        }
+
+        // Have drivers from $near; also compute distance/eta; if any missing location, try Redis to enrich
+        const mapped = [];
+        for (const d of drivers) {
+          let dlat = null;
+          let dlng = null;
           if (
             Array.isArray(d.currentLocation?.coordinates) &&
             d.currentLocation.coordinates.length >= 2
           ) {
-            const dlat = d.currentLocation.coordinates[1];
-            const dlng = d.currentLocation.coordinates[0];
+            dlat = d.currentLocation.coordinates[1];
+            dlng = d.currentLocation.coordinates[0];
+          } else {
+            try {
+              const raw = await redis.get(`driver:loc:${d._id}`);
+              if (raw) {
+                const p = JSON.parse(raw);
+                if (typeof p.lat === "number" && typeof p.lng === "number") {
+                  dlat = p.lat;
+                  dlng = p.lng;
+                }
+              }
+            } catch {}
+          }
+
+          let distanceKmDriver = null;
+          let etaMinutes = null;
+          if (typeof dlat === "number" && typeof dlng === "number") {
             distanceKmDriver = this._calcDistanceKm(
               { lat, lng },
               { lat: dlat, lng: dlng }
@@ -4357,7 +4424,8 @@ class RecoveryHandler {
             const avgSpeed = 30; // km/h
             etaMinutes = Math.ceil((distanceKmDriver / avgSpeed) * 60);
           }
-          return {
+
+          mapped.push({
             id: d._id.toString(),
             name: `${d.firstName ?? ""}`.trim(),
             phone: d.phoneNumber,
@@ -4366,110 +4434,96 @@ class RecoveryHandler {
             pendingAmounts: Number(d?.dues?.outstanding || 0) > 0,
             distanceKm: distanceKmDriver,
             etaMinutes,
-            location: d.currentLocation
-              ? {
-                  coordinates: {
-                    lat: d.currentLocation.coordinates?.[1],
-                    lng: d.currentLocation.coordinates?.[0],
-                  },
-                }
-              : null,
-          };
-        });
-      } else {
-        // If ignoreGeo is set, we will not filter by location at all
-        const query = {
-          role: "driver",
-          kycLevel: { $gte: 2 },
-          kycStatus: "approved",
-          isActive: true,
-          "statusFlags.blockedForDues": { $ne: true },
-          // Enforce: Pink captains are NOT eligible for Car Recovery
-          "driverSettings.ridePreferences.pinkCaptainMode": { $ne: true },
-          driverStatus: filters.onlyAssignable
-            ? "online"
-            : { $in: ["online", "on_ride", "busy"] },
-        };
-
-        // Apply discovery filters
-        if (filters.pinkCaptainOnly) {
-          query.gender = "female";
-          query["driverSettings.ridePreferences.pinkCaptainMode"] = true;
-        }
-        if (filters?.safety?.noMaleCompanion) {
-          query["driverSettings.ridePreferences.acceptFemaleOnly"] = true;
-        }
-        if (filters?.safety?.familyWithGuardianMale) {
-          query[
-            "driverSettings.ridePreferences.allowFamilyWithGuardian"
-          ] = true;
-        }
-        if (filters?.safety?.maleWithoutFemale) {
-          query["driverSettings.ridePreferences.allowMaleWithoutFemale"] = true;
-        }
-        if (filters?.multiStopEnabled === true) {
-          query["driverSettings.ridePreferences.allowMultiStop"] = {
-            $ne: false,
-          };
+            location:
+              typeof dlat === "number" && typeof dlng === "number"
+                ? { coordinates: { lat: dlat, lng: dlng } }
+                : d.currentLocation
+                ? {
+                    coordinates: {
+                      lat: d.currentLocation.coordinates?.[1],
+                      lng: d.currentLocation.coordinates?.[0],
+                    },
+                  }
+                : null,
+          });
         }
 
-        // Apply preferred dispatch filters
-        const mode = String(
-          filters?.preferredDispatch?.mode || ""
-        ).toLowerCase();
-        const pinnedId = filters?.preferredDispatch?.driverId;
-        if (mode === "female_only") {
-          query.gender = "female";
-        }
-        if (mode === "pinned" && pinnedId) {
-          query._id = String(pinnedId);
-        } else if (mode === "favorite") {
-          // Restrict to user's favourite drivers
+        return mapped;
+      }
+
+      // 2) ignoreGeo=true: do not filter by location in DB; compute proximity via DB/Redis if available
+      const nonGeoQuery = applyDiscoveryFilters({ ...baseQuery });
+      const nonGeoDrivers = await User.find(nonGeoQuery)
+        .limit(50)
+        .select(
+          "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
+        );
+
+      const results = [];
+      for (const d of nonGeoDrivers) {
+        let dlat = null;
+        let dlng = null;
+
+        if (
+          Array.isArray(d.currentLocation?.coordinates) &&
+          d.currentLocation.coordinates.length >= 2
+        ) {
+          dlat = d.currentLocation.coordinates[1];
+          dlng = d.currentLocation.coordinates[0];
+        } else {
           try {
-            let favIds = filters?.favoriteDriverIds || [];
-            if ((!favIds || favIds.length === 0) && filters?.favoriteUserId) {
-              const user = await User.findById(filters.favoriteUserId).select(
-                "favoriteDrivers"
-              );
-              favIds = (user?.favoriteDrivers || []).map((x) => String(x));
-            }
-            if (favIds?.length) {
-              query._id = { $in: favIds };
-            } else {
-              // No favourites: return empty list
-              return [];
+            const raw = await redis.get(`driver:loc:${d._id}`);
+            if (raw) {
+              const p = JSON.parse(raw);
+              if (typeof p.lat === "number" && typeof p.lng === "number") {
+                dlat = p.lat;
+                dlng = p.lng;
+              }
             }
           } catch {}
         }
 
-        const drivers = await User.find(query)
-          .limit(10)
-          .select(
-            "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
+        let distanceKmDriver = null;
+        let etaMinutes = null;
+        if (typeof dlat === "number" && typeof dlng === "number") {
+          distanceKmDriver = this._calcDistanceKm(
+            { lat, lng },
+            { lat: dlat, lng: dlng }
           );
+          etaMinutes = Math.ceil((distanceKmDriver / 30) * 60);
+        }
 
-        // Map to the shape expected by findAndAssignDriver
-        return drivers.map((d) => {
-          return {
+        // If you want to respect maxDistanceKm even in ignoreGeo mode:
+        if (
+          distanceKmDriver === null ||
+          distanceKmDriver <= Number(maxDistanceKm || 100)
+        ) {
+          results.push({
             id: d._id.toString(),
             name: `${d.firstName ?? ""}`.trim(),
             phone: d.phoneNumber,
             rating: 5,
             status: d.driverStatus,
             pendingAmounts: Number(d?.dues?.outstanding || 0) > 0,
-            distanceKm: null,
-            etaMinutes: null,
-            location: d.currentLocation
-              ? {
-                  coordinates: {
-                    lat: d.currentLocation.coordinates?.[1],
-                    lng: d.currentLocation.coordinates?.[0],
-                  },
-                }
-              : null,
-          };
-        });
+            distanceKm: distanceKmDriver,
+            etaMinutes,
+            location:
+              typeof dlat === "number" && typeof dlng === "number"
+                ? { coordinates: { lat: dlat, lng: dlng } }
+                : d.currentLocation
+                ? {
+                    coordinates: {
+                      lat: d.currentLocation.coordinates?.[1],
+                      lng: d.currentLocation.coordinates?.[0],
+                    },
+                  }
+                : null,
+          });
+        }
       }
+
+      results.sort((a, b) => (a.distanceKm ?? 1e9) - (b.distanceKm ?? 1e9));
+      return results.slice(0, 10);
     } catch (e) {
       logger.error("Error querying available drivers:", e);
       return [];
