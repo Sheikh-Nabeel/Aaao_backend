@@ -48,7 +48,7 @@ router.put("/bike-rates", updateBikeRates);
 router.put("/round-trip-features", updateRoundTripFeatures);
 router.put("/vat-configuration", updateVATConfiguration);
 router.put("/minimum-fare", updateMinimumFare);
-router.put("/bulk-update", bulkUpdatePricing);
+router.put("/update-all", bulkUpdatePricing);
 router.get("/item-pricing", getItemPricing);
 router.post("/item-pricing", addItemPricing);
 router.put("/item-pricing/:itemName", updateItemPricing);

@@ -262,7 +262,7 @@ const getFareAdjustmentSettings = async (serviceType) => {
   }
 };
 
-// Helpers for recovery sub-service/category normalization
+// Helpers for recovery sub-service/category normalization to schema keys
 const normalizeRecoverySubService = (s) => {
   const raw = String(s || "")
     .trim()
@@ -272,7 +272,7 @@ const normalizeRecoverySubService = (s) => {
     .replace(/[^a-z0-9\s-]/g, "")
     .replace(/[\s-]+/g, "_");
   const table = {
-    // Towing
+    // Towing (flow labels)
     flatbed_towing: "flatbed_towing",
     wheel_lift_towing: "wheel_lift_towing",
     // Winching
@@ -282,7 +282,7 @@ const normalizeRecoverySubService = (s) => {
     battery_jump_start: "battery_jump_start",
     fuel_delivery: "fuel_delivery",
     key_unlock: "key_unlock",
-    // Specialized/Heavy
+    // Specialized/Heavy (not used in calculator directly)
     luxury_and_exotic_car_recovery: "luxury_exotic",
     luxury_exotic: "luxury_exotic",
     accident_and_collision_recovery: "accident_collision",
@@ -320,6 +320,22 @@ const normalizeRecoveryCategoryBucket = (c) => {
   if (v.includes("roadside")) return "roadside_assistance";
   if (v.includes("key")) return "key_unlock";
   return "specialized_recovery";
+};
+
+// Map recovery flow sub-service/category to schema vehicleType for comprehensive calculator
+const mapRecoveryVehicleType = (subService, category) => {
+  // Prefer subService; fallback to category-based inference
+  const raw = String(subService || category || "")
+    .toLowerCase()
+    .trim();
+  if (raw.includes("flatbed")) return "flatbed";
+  if (raw.includes("wheel")) return "wheelLift";
+  if (raw.includes("jump")) return "jumpstart";
+  if (raw.includes("fuel")) return "fuelDelivery";
+  if (raw.includes("tire")) return "tirePunctureRepair";
+  if (raw.includes("battery")) return "batteryReplacement";
+  if (raw.includes("key") || raw.includes("unlock")) return "keyUnlocker";
+  return null;
 };
 
 // Calculate fare by service type using comprehensive system
@@ -712,19 +728,6 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         }
 
         // Map recovery sub-service/category to comprehensive vehicleType
-        const mapRecoveryVehicleType = (subService, category) => {
-          const raw = String(subService || category || "").toLowerCase();
-          if (raw.includes("flatbed")) return "flatbed";
-          if (raw.includes("wheel")) return "wheelLift";
-          if (raw.includes("jump")) return "jumpstart";
-          if (raw.includes("fuel")) return "fuelDelivery";
-          if (raw.includes("tire")) return "tirePunctureRepair";
-          if (raw.includes("battery")) return "batteryReplacement";
-          if (raw.includes("key") || raw.includes("unlock"))
-            return "keyUnlocker";
-          return null;
-        };
-
         const recoveryVehicleType =
           mapRecoveryVehicleType(
             req.body.subService,
@@ -733,11 +736,12 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           booking.vehicleType ||
           null;
 
+        // COMPREHENSIVE CALCULATOR for car recovery
         fareResult = await calculateComprehensiveFare({
           serviceType: "car recovery",
           vehicleType: recoveryVehicleType,
           distance: distanceKm,
-          routeType,
+          routeType: booking.routeType || routeType,
           estimatedDuration: durationMinutes,
           waitingMinutes: Number(
             req.body?.options?.waitingTime || req.body.waitingMinutes || 0
@@ -1063,15 +1067,20 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           .json({ success: false, error: e.message });
       }
 
-      fareResult = await computeAdminCarRecoveryFare({
-        distanceKm: computedDistanceMeters / 1000,
+      // Map to comprehensive calculator
+      const recoveryVehicleType =
+        mapRecoveryVehicleType(req.body.subService, req.body.serviceCategory) ||
+        vehicleType ||
+        null;
+
+      fareResult = await calculateComprehensiveFare({
+        serviceType: "car recovery",
+        vehicleType: recoveryVehicleType,
+        distance: computedDistanceMeters / 1000,
         routeType,
-        startTime: req.body.startTime,
-        pickupLocation,
-        vehicleType,
-        serviceCategory,
-        subService: req.body.subService,
-        helper: req.body.helper || req.body.options?.helper,
+        estimatedDuration:
+          req.body.estimatedDuration ||
+          Math.ceil((computedDistanceMeters / 1000 / 40) * 60),
         waitingMinutes:
           req.body.options?.waitingTime || req.body.waitingMinutes || 0,
       });
@@ -1399,374 +1408,6 @@ const adjustFareEstimation = asyncHandler(async (req, res) => {
   }
 });
 
-// Clean Admin-only calculator for Car Recovery (winching, towing, roadside, etc.)
-async function computeAdminCarRecoveryFare({
-  distanceKm,
-  routeType,
-  startTime,
-  pickupLocation,
-  vehicleType,
-  serviceCategory,
-  subService,
-  helper,
-  waitingMinutes,
-}) {
-  // Hardcoded Admin Defaults (mirror pricingModel.js schema defaults)
-  const admin = {
-    serviceCharges: {
-      default: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      roadside_assistance: { baseKm: 0, baseFare: 45, perKm: 6 },
-      key_unlock: { baseKm: 0, baseFare: 80, perKm: 6 },
-      specialized_recovery: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      flatbed_towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      wheel_lift_towing: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      on_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      off_road_winching: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      battery_jump_start: { baseKm: 0, baseFare: 50, perKm: 6 },
-      fuel_delivery: { baseKm: 0, baseFare: 45, perKm: 6 },
-      luxury_exotic: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      accident_collision: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      heavy_duty: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-      basement_pull_out: { baseKm: 6, baseFare: 50, perKm: 7.5 },
-    },
-    serviceChargesByCategory: {
-      towing: {
-        default: {
-          baseKm: 6,
-          baseFare: 50,
-          perKm: 7.5,
-          convenienceFee: 0,
-          minArrivalFee: 0,
-        },
-        subServices: {
-          flatbed_towing: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 0,
-          },
-          wheel_lift_towing: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 0,
-          },
-        },
-      },
-      winching: {
-        default: {
-          baseKm: 6,
-          baseFare: 50,
-          perKm: 7.5,
-          convenienceFee: 0,
-          minArrivalFee: 5,
-        },
-        subServices: {
-          on_road_winching: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 5,
-          },
-          off_road_winching: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 5,
-          },
-        },
-      },
-      roadside_assistance: {
-        default: {
-          baseKm: 0,
-          baseFare: 45,
-          perKm: 6,
-          convenienceFee: 0,
-          minArrivalFee: 5,
-        },
-        subServices: {
-          battery_jump_start: {
-            baseKm: 0,
-            baseFare: 50,
-            perKm: 6,
-            convenienceFee: 0,
-            minArrivalFee: 5,
-          },
-          fuel_delivery: {
-            baseKm: 0,
-            baseFare: 45,
-            perKm: 6,
-            convenienceFee: 0,
-            minArrivalFee: 5,
-          },
-          key_unlock: {
-            baseKm: 0,
-            baseFare: 80,
-            perKm: 6,
-            convenienceFee: 0,
-            minArrivalFee: 5,
-          },
-        },
-      },
-      specialized_recovery: {
-        default: {
-          baseKm: 6,
-          baseFare: 50,
-          perKm: 7.5,
-          convenienceFee: 0,
-          minArrivalFee: 0,
-        },
-        subServices: {
-          luxury_exotic: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 0,
-          },
-          accident_collision: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 0,
-          },
-          heavy_duty: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 0,
-          },
-          basement_pull_out: {
-            baseKm: 6,
-            baseFare: 50,
-            perKm: 7.5,
-            convenienceFee: 0,
-            minArrivalFee: 0,
-          },
-        },
-      },
-      default: {
-        default: {
-          baseKm: 6,
-          baseFare: 50,
-          perKm: 7.5,
-          convenienceFee: 0,
-          minArrivalFee: 0,
-        },
-        subServices: {},
-      },
-    },
-    platformCharges: {
-      percentage: 15,
-      splitRatio: { customer: 50, serviceProvider: 50 },
-    },
-  };
-
-  const mapToCalcType = (cat) => {
-    const v = String(cat || "")
-      .toLowerCase()
-      .trim();
-    // Exact flow labels
-    if (v === "towing services" || v === "towing") return "towing";
-    if (v === "winching services" || v === "winching") return "winching";
-    if (
-      v === "roadside assistance" ||
-      v === "roadside_assistance" ||
-      v === "roadside"
-    )
-      return "roadside_assistance";
-    if (
-      v === "specialized/heavy recovery" ||
-      v.includes("specialized") ||
-      v.includes("heavy")
-    )
-      return "specialized_recovery";
-    // Fallbacks
-    if (v.includes("towing")) return "towing";
-    if (v.includes("winching")) return "winching";
-    if (v.includes("roadside")) return "roadside_assistance";
-    if (v.includes("key")) return "key_unlock";
-    return "specialized_recovery";
-  };
-  const normalizeRecoverySubService = (s) => {
-    const raw = String(s || "")
-      .trim()
-      .toLowerCase();
-    // Remove special chars, normalize hyphens/spaces to underscore
-    const base = raw
-      .replace(/&/g, " and ")
-      .replace(/[^a-z0-9\s-]/g, "")
-      .replace(/[\s-]+/g, "_");
-    // Map specific flow labels to canonical keys
-    const table = {
-      // Towing
-      flatbed_towing: "flatbed_towing",
-      wheel_lift_towing: "wheel_lift_towing",
-      // Winching
-      on_road_winching: "on_road_winching",
-      off_road_winching: "off_road_winching",
-      // Roadside
-      battery_jump_start: "battery_jump_start",
-      fuel_delivery: "fuel_delivery",
-      key_unlock: "key_unlock",
-      // Specialized/Heavy
-      luxury_and_exotic_car_recovery: "luxury_exotic",
-      luxury_exotic: "luxury_exotic",
-      accident_and_collision_recovery: "accident_collision",
-      accident_collision: "accident_collision",
-      heavy_duty_vehicle_recovery: "heavy_duty",
-      heavy_duty: "heavy_duty",
-      basement_pull_out: "basement_pull_out",
-    };
-    return table[base] || base;
-  };
-  const normalizeRecoveryCategoryBucket = (s) => mapToCalcType(s);
-  const isRoundTrip = routeType === "two_way" || routeType === "round_trip";
-  const dEff = Math.max(0, isRoundTrip ? distanceKm * 2 : distanceKm);
-  const legMultiplier = isRoundTrip ? 2 : 1;
-
-  // Resolve charges (prefer structured, then flat)
-  const preferredSub = normalizeRecoverySubService(subService);
-  const broad = normalizeRecoveryCategoryBucket(serviceCategory);
-  let sc = {};
-  const byCat = admin.serviceChargesByCategory;
-  if (byCat && (byCat[broad] || byCat.default)) {
-    const bucket = byCat[broad] || byCat.default;
-    sc =
-      (bucket.subServices && bucket.subServices[preferredSub]) ||
-      bucket.default ||
-      {};
-  }
-  if (!sc || Object.keys(sc).length === 0) {
-    sc =
-      admin.serviceCharges[preferredSub] ||
-      admin.serviceCharges[broad] ||
-      admin.serviceCharges.default ||
-      {};
-  }
-
-  // No city/comprehensive overrides: use admin hardcoded values only
-
-  const baseKm = Number(sc.baseKm ?? 6);
-  const baseFare = Number(sc.baseFare ?? 50);
-  const perKm = Number(sc.perKm ?? 7.5);
-  const convenienceFee = Number(sc.convenienceFee || 0);
-  const minArrivalFee = Number(sc.minArrivalFee || 0);
-  const platformPct = Number(admin.platformCharges?.percentage ?? 15);
-  const vatPct = Number(process.env.VAT_PERCENT || 0);
-
-  const extraKm = Math.max(0, dEff - baseKm);
-  const distanceFare = Math.round(extraKm * perKm);
-
-  // No night/surge when using hardcoded admin-only pricing
-  const nightCharge = 0;
-  const nightMultiplier = 1;
-  const surgeMultiplier = 1;
-
-  // Subtotal core
-  let subtotalCore = Math.round(
-    baseFare * legMultiplier +
-      distanceFare +
-      convenienceFee * legMultiplier +
-      minArrivalFee * legMultiplier
-  );
-  subtotalCore = Math.round(
-    (subtotalCore + nightCharge) * nightMultiplier * surgeMultiplier
-  );
-
-  // Waiting and helper
-  // Waiting charges: free 5 minutes, then AED 2/min, capped at AED 20
-  const waitFree = 5;
-  const waitPerMinute = 2;
-  const waitCap = 20;
-  const wm = Math.max(0, Number(waitingMinutes || 0));
-  const billable = Math.max(0, wm - waitFree);
-  const rawWait = billable * waitPerMinute;
-  const waitCharge = Math.min(waitCap, rawWait);
-  const wc = {
-    freeMinutes: waitFree,
-    billableMinutes: billable,
-    perMinute: waitPerMinute,
-    waitingCharges: waitCharge,
-  };
-  const helperEnabled = !!helper;
-  const helperFeeAed = helperEnabled
-    ? Number(process.env.HELPER_FEE_AED || 25)
-    : 0;
-
-  // Platform after waiting/helper
-  const preVatTotalBeforePlatform =
-    subtotalCore + wc.waitingCharges + helperFeeAed;
-  const platformFee = Math.round(
-    (preVatTotalBeforePlatform * platformPct) / 100
-  );
-  const platformCustomer = Math.round(platformFee / 2);
-  const platformDriver = platformFee - platformCustomer;
-  const subtotalWithPlatform = preVatTotalBeforePlatform + platformFee;
-  const vatAmount = Math.round((subtotalWithPlatform * vatPct) / 100);
-
-  // Round-trip discount
-  const rtDiscount = 0;
-  let totalFare = Math.max(0, subtotalWithPlatform + vatAmount - rtDiscount);
-
-  // Monotonicity guard: two_way >= one_way
-  if (isRoundTrip) {
-    const d1 = Math.max(0, dEff / 2);
-    const extraKm1 = Math.max(0, d1 - baseKm);
-    const distanceFare1 = Math.round(extraKm1 * perKm);
-    let subtotalCore1 = Math.round(
-      baseFare + distanceFare1 + convenienceFee + minArrivalFee
-    );
-    subtotalCore1 = Math.round(
-      (subtotalCore1 + nightCharge) * nightMultiplier * surgeMultiplier
-    );
-    const preVatBeforePlatform1 = subtotalCore1; // waiting/helper assumed 0 for one-way baseline guard
-    const platformFee1 = Math.round(
-      (preVatBeforePlatform1 * platformPct) / 100
-    );
-    const subtotalWithPlatform1 = preVatBeforePlatform1 + platformFee1;
-    const vatAmount1 = Math.round((subtotalWithPlatform1 * vatPct) / 100);
-    const oneWayTotal = Math.max(0, subtotalWithPlatform1 + vatAmount1);
-    if (totalFare < oneWayTotal) totalFare = oneWayTotal;
-  }
-
-  return {
-    currency: "AED",
-    baseFare,
-    distanceFare,
-    platformFee,
-    platformFeeSplit: { customer: platformCustomer, driver: platformDriver },
-    nightCharge: nightCharge || undefined,
-    nightCharges: nightCharge || undefined,
-    nightMultiplier: nightMultiplier !== 1 ? nightMultiplier : undefined,
-    surgeMultiplier: surgeMultiplier !== 1 ? surgeMultiplier : undefined,
-    cityOverridePerKm: undefined,
-    waiting: wc,
-    helper: { enabled: helperEnabled, fee: helperFeeAed },
-    roundTripDiscount: rtDiscount || undefined,
-    vatAmount,
-    subtotal: subtotalWithPlatform,
-    totalFare,
-    breakdown: {
-      baseKm,
-      perKm,
-      distanceInKm: dEff,
-      effectiveDistanceKm: dEff,
-      perKmUsed: perKm,
-      routeType,
-      usedSubService: preferredSub || broad,
-    },
-  };
-}
-
 // Enums for car cab and bike vehicle types
 const CAR_CAB_VEHICLE_TYPES = new Set([
   "economy",
@@ -1912,5 +1553,4 @@ export {
   getFareEstimation,
   adjustFareEstimation,
   findQualifiedDriversForEstimation,
-  computeAdminCarRecoveryFare,
 };

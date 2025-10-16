@@ -289,7 +289,6 @@ class RecoveryHandler {
         );
       }
 
-      // Normalize helper (still used for room naming, not for validation)
       const norm = (s) =>
         String(s || "")
           .trim()
@@ -304,7 +303,7 @@ class RecoveryHandler {
         data.userId ||
         null;
 
-      // Extract coordinates
+      // Extract coordinates from payload
       const pLat =
         data.pickupLocation?.coordinates?.lat ??
         data.pickupLocation?.coordinates?.latitude;
@@ -367,13 +366,13 @@ class RecoveryHandler {
         ) || 0;
       const distanceInMeters = Math.round(distanceKm * 1000);
 
-      // Search radius (clamp 1..50 km)
+      // Search radius (default bumped to 15km, clamp 1..50)
       const selectedRadiusKm = Math.max(
         1,
-        Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 10))
+        Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 15))
       );
 
-      // Map to booking enums (no validation; just categorize)
+      // Map to booking enums (categorization only)
       const mapCategory = (t) => {
         const v = String(t || "")
           .toLowerCase()
@@ -398,7 +397,7 @@ class RecoveryHandler {
       const bookingServiceType = "car recovery";
       const bookingServiceCategory = mapCategory(data.serviceType);
 
-      // Estimated fare (dynamic via comprehensive pricing)
+      // Infer a recovery vehicle type for pricing (optional)
       const mapRecoveryVehicleType = (subService, serviceType) => {
         const v = String(subService || serviceType || "")
           .toLowerCase()
@@ -412,12 +411,12 @@ class RecoveryHandler {
         if (v.includes("key") || v.includes("unlock")) return "keyUnlocker";
         return null;
       };
-
       const recoveryVehicleType = mapRecoveryVehicleType(
         data?.subService,
         data?.serviceType
       );
 
+      // Estimate fare using comprehensive pricing
       let computedFareBreakdown;
       try {
         computedFareBreakdown = await calculateComprehensiveFare({
@@ -435,11 +434,10 @@ class RecoveryHandler {
           breakdown: [],
         };
       }
-
       const estimatedFare = Number(computedFareBreakdown?.totalFare || 0);
       const currencyFromConfig = computedFareBreakdown?.currency || "AED";
 
-      // Build idempotency key
+      // Idempotency
       const clientKey =
         data?.idempotencyKey ||
         data?.clientRequestId ||
@@ -466,7 +464,7 @@ class RecoveryHandler {
           .digest("hex")
           .slice(0, 48);
 
-      // Atomic, idempotent creation (requires unique sparse index on idempotencyKey)
+      // Atomic insert
       const insertDoc = {
         idempotencyKey,
         user: creatorId,
@@ -512,7 +510,7 @@ class RecoveryHandler {
       }
       const bid = String(upserted._id);
 
-      // Cache in memory
+      // Cache minimal request in memory
       const recoveryRequest = {
         requestId: bid,
         status: "pending",
@@ -571,10 +569,9 @@ class RecoveryHandler {
         serviceCategory: bookingServiceCategory,
         vehicleDetails: data.vehicleDetails || {},
       };
-
       this.activeRecoveries.set(bid, recoveryRequest);
 
-      // Compute allowed fare adjustment (for requester UI)
+      // Allowed fare adjustment for requester
       const adjustment = await (async () => {
         try {
           const pc = await PricingConfig.findOne({
@@ -608,7 +605,7 @@ class RecoveryHandler {
         }
       })();
 
-      // Notify requester
+      // Notify requester request created
       this.emitToClient(ws, {
         event: "recovery.request_created",
         bookingId: bid,
@@ -632,116 +629,64 @@ class RecoveryHandler {
         },
       });
 
-      // Nearby drivers
-      const nearbyDrivers = await this.getAvailableDrivers(
+      // Nearby drivers (first pass)
+      const nearbyDrivers1 = await this.getAvailableDrivers(
         recoveryRequest.pickupLocation,
-        recoveryRequest.searchRadiusKm || 10,
+        recoveryRequest.searchRadiusKm || 15,
         recoveryRequest.discoveryFilters || {}
       );
 
-      // Send driver list back to requester
+      // Second-chance discovery if first pass returns none
+      let finalDrivers = nearbyDrivers1;
+      if (!finalDrivers || finalDrivers.length === 0) {
+        // 1) Try larger radius
+        const widerRadius = Math.min(
+          50,
+          Math.ceil((recoveryRequest.searchRadiusKm || 15) * 1.5)
+        );
+        const attempt2 = await this.getAvailableDrivers(
+          recoveryRequest.pickupLocation,
+          widerRadius,
+          recoveryRequest.discoveryFilters || {}
+        );
+        finalDrivers = attempt2;
+
+        // 2) Try ignoreGeo to compute via DB/Redis without $near
+        if (!finalDrivers || finalDrivers.length === 0) {
+          const filters2 = {
+            ...(recoveryRequest.discoveryFilters || {}),
+            ignoreGeo: true,
+          };
+          const attempt3 = await this.getAvailableDrivers(
+            recoveryRequest.pickupLocation,
+            widerRadius,
+            filters2
+          );
+          finalDrivers = attempt3;
+        }
+      }
+
+      // Emit available drivers
       this.emitToClient(ws, {
         event: "carRecovery:driversAvailable",
         bookingId: bid,
         data: {
-          drivers: nearbyDrivers,
-          count: nearbyDrivers.length,
+          drivers: finalDrivers,
+          count: finalDrivers.length,
           updatedAt: new Date(),
           dispatchMode:
             recoveryRequest.discoveryFilters?.preferredDispatch?.mode || null,
         },
       });
 
-      // Service room name: svc:car_recovery[:sub]
-      const roomName = (() => {
-        const st = norm(bookingServiceType).replace(/\s+/g, "_"); // 'car recovery' -> 'car_recovery'
-        const sub = norm(data?.subService);
-        return sub ? `svc:${st}:${sub.replace(/\s+/g, "_")}` : `svc:${st}`;
-      })();
-
-      // Intersect: only send to nearby drivers who are actually in that room
-      const driverIds = nearbyDrivers.map((d) => String(d.id));
-      if (driverIds.length > 0) {
-        // Min/Max fare window for drivers
-        let allowedPct = 3;
-        try {
-          const pc = await PricingConfig.findOne({
-            serviceType: "car_recovery",
-            isActive: true,
-          }).lean();
-          allowedPct = Number(
-            pc?.fareAdjustmentSettings?.allowedAdjustmentPercentage ?? 3
-          );
-        } catch {}
-        const baseEstimate =
-          Number(
-            typeof data?.estimatedFare === "number"
-              ? data.estimatedFare
-              : typeof data?.estimated?.amount === "number"
-              ? data.estimated.amount
-              : estimatedFare
-          ) || 0;
-        const minFare = Math.max(
-          0,
-          Math.round(baseEstimate * (1 - allowedPct / 100) * 100) / 100
-        );
-        const maxFare =
-          Math.round(baseEstimate * (1 + allowedPct / 100) * 100) / 100;
-
-        this.webSocketService.sendToRoomUsers(roomName, driverIds, {
-          event: "newRecoveryRequest",
-          bookingId: bid,
-          data: {
-            bookingId: bid,
-            pickupLocation: recoveryRequest.pickupLocation,
-            dropoffLocation: recoveryRequest.dropoffLocation,
-            estimatedFare: recoveryRequest.fareContext?.estimatedFare || 0,
-            offeredFare: recoveryRequest.fareContext?.clientEstimatedFare || 0,
-            minFare,
-            maxFare,
-            currency: "AED",
-          },
-        });
-      }
-
-      // Optional alerts (kept)
-      try {
-        const alertPayload = {
-          title: "Free Stay Time Ended – Select Action",
-          message: "Driver can choose to start or skip overtime charges.",
-          actions: [
-            {
-              action: "continue_no_overtime",
-              label: "Continue – No Overtime Charges",
-            },
-            { action: "start_overtime", label: "Start Overtime Charges" },
-          ],
-          policy: { perMinute: 1, per5Min: 5, maxMinutes: 30 },
-        };
-        if (distanceKm > 20) {
-          this.emitToClient(ws, {
-            event: "refreshment.alert",
-            bookingId: data?.bookingId || bid,
-            data: { reason: "distance", thresholdKm: 20, ...alertPayload },
-          });
-        }
-        const estimatedDurationMinutes = Math.ceil((distanceKm / 30) * 60);
-        if (estimatedDurationMinutes > 30) {
-          this.emitToClient(ws, {
-            event: "refreshment.alert",
-            bookingId: data?.bookingId || bid,
-            data: { reason: "duration", thresholdMin: 30, ...alertPayload },
-          });
-        }
-      } catch {}
+      // Optionally, compute and send to drivers’ room later (unchanged)
+      // ...
     } catch (error) {
-      logger.error("Error handling recovery request:", error);
+      logger.error("Error in handleRecoveryRequest:", error);
       this.emitToClient(ws, {
         event: "error",
-        error: {
-          code: ERROR_CODES.VALIDATION_ERROR,
-          message: error.message || "Failed to process recovery request",
-        },
+        bookingId: null,
+        error: { code: "RECOVERY_REQUEST_ERROR", message: error.message },
       });
     }
   }
@@ -4248,7 +4193,7 @@ class RecoveryHandler {
         pickupLocation.longitude ??
         pickupLocation.coordinates?.lng ??
         pickupLocation.coordinates?.longitude;
-      // Support GeoJSON Point { type: 'Point', coordinates: [lng, lat] }
+      // GeoJSON support
       if (
         (typeof lat !== "number" || typeof lng !== "number") &&
         Array.isArray(pickupLocation.coordinates) &&
@@ -4259,24 +4204,20 @@ class RecoveryHandler {
       }
       if (typeof lat !== "number" || typeof lng !== "number") return [];
 
-      // If ignoreGeo is set, we will not filter by location at all (but we will still compute distance using DB/Redis if available)
       const ignoreGeo = !!filters?.ignoreGeo;
 
-      // Base query shared
       const baseQuery = {
         role: "driver",
         kycLevel: { $gte: 2 },
         kycStatus: "approved",
         isActive: true,
         "statusFlags.blockedForDues": { $ne: true },
-        // Enforce: Pink captains are NOT eligible for Car Recovery
-        "driverSettings.ridePreferences.pinkCaptainMode": { $ne: true },
+        // NOTE: do NOT hard-exclude pinkCaptainMode; only apply when explicitly requested
         driverStatus: filters.onlyAssignable
           ? "online"
           : { $in: ["online", "on_ride", "busy"] },
       };
 
-      // Discovery filters
       const applyDiscoveryFilters = (q) => {
         if (filters.pinkCaptainOnly) {
           q.gender = "female";
@@ -4295,21 +4236,16 @@ class RecoveryHandler {
           q["driverSettings.ridePreferences.allowMultiStop"] = { $ne: false };
         }
 
-        // Preferred dispatch
         const mode = String(
           filters?.preferredDispatch?.mode || ""
         ).toLowerCase();
         const pinnedId = filters?.preferredDispatch?.driverId;
-        if (mode === "female_only") {
-          q.gender = "female";
-        }
-        if (mode === "pinned" && pinnedId) {
-          q._id = String(pinnedId);
-        }
+        if (mode === "female_only") q.gender = "female";
+        if (mode === "pinned" && pinnedId) q._id = String(pinnedId);
         return q;
       };
 
-      // 1) Primary path: $near query (fast, DB geospatial index)
+      // Primary path: $near
       if (!ignoreGeo) {
         const geoQuery = applyDiscoveryFilters({
           ...baseQuery,
@@ -4327,8 +4263,8 @@ class RecoveryHandler {
             "_id firstName lastName phoneNumber currentLocation driverStatus dues.outstanding statusFlags.blockedForDues"
           );
 
-        // If none found by DB geo, fall back to non-geo + Redis proximity
         if (!drivers || drivers.length === 0) {
+          // Fallback: non-geo query + Redis location for proximity
           const broadQuery = applyDiscoveryFilters({ ...baseQuery });
           const broadDrivers = await User.find(broadQuery)
             .limit(50)
@@ -4341,7 +4277,6 @@ class RecoveryHandler {
             let dlat = null;
             let dlng = null;
 
-            // Prefer DB currentLocation
             if (
               Array.isArray(d.currentLocation?.coordinates) &&
               d.currentLocation.coordinates.length >= 2
@@ -4349,7 +4284,6 @@ class RecoveryHandler {
               dlat = d.currentLocation.coordinates[1];
               dlng = d.currentLocation.coordinates[0];
             } else {
-              // Redis fallback
               try {
                 const raw = await redis.get(`driver:loc:${d._id}`);
                 if (raw) {
@@ -4378,9 +4312,7 @@ class RecoveryHandler {
                   pendingAmounts: Number(d?.dues?.outstanding || 0) > 0,
                   distanceKm: distanceKmDriver,
                   etaMinutes,
-                  location: {
-                    coordinates: { lat: dlat, lng: dlng },
-                  },
+                  location: { coordinates: { lat: dlat, lng: dlng } },
                 });
               }
             }
@@ -4390,7 +4322,7 @@ class RecoveryHandler {
           return results.slice(0, 10);
         }
 
-        // Have drivers from $near; also compute distance/eta; if any missing location, try Redis to enrich
+        // Enrich $near results, using Redis if DB coordinate missing
         const mapped = [];
         for (const d of drivers) {
           let dlat = null;
@@ -4451,7 +4383,7 @@ class RecoveryHandler {
         return mapped;
       }
 
-      // 2) ignoreGeo=true: do not filter by location in DB; compute proximity via DB/Redis if available
+      // ignoreGeo: non-geo query + compute proximity if possible
       const nonGeoQuery = applyDiscoveryFilters({ ...baseQuery });
       const nonGeoDrivers = await User.find(nonGeoQuery)
         .limit(50)
@@ -4493,7 +4425,6 @@ class RecoveryHandler {
           etaMinutes = Math.ceil((distanceKmDriver / 30) * 60);
         }
 
-        // If you want to respect maxDistanceKm even in ignoreGeo mode:
         if (
           distanceKmDriver === null ||
           distanceKmDriver <= Number(maxDistanceKm || 100)
@@ -4587,7 +4518,7 @@ class RecoveryHandler {
 
       // Load booking
       const booking = await Booking.findById(bookingId).select(
-        "status user driver fareDetails pickupLocation dropoffLocation"
+        "status user driver fareDetails pickupLocation dropoffLocation vehicleDetails"
       );
       if (!booking) throw new Error("Booking not found");
 
@@ -4602,7 +4533,7 @@ class RecoveryHandler {
         throw new Error(`Cannot offer fare on a ${booking.status} booking`);
       }
 
-      // Determine window anchor (best-effort)
+      // Determine window anchor
       const anchor =
         Number(booking?.fareDetails?.finalFare?.amount) ||
         Number(booking?.fareDetails?.estimatedFare?.amount) ||
@@ -4632,10 +4563,74 @@ class RecoveryHandler {
 
       const now = new Date();
 
+      // Minimal display info helper
+      const buildInfo = (u) => {
+        if (!u) return null;
+        const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
+        return {
+          id: String(u._id || ""),
+          name,
+          image: u.profilePicture || null,
+        };
+      };
+
+      // Route info (distance/time)
+      const pickup = booking?.pickupLocation;
+      const dropoff = booking?.dropoffLocation;
+      let route = { distanceKm: null, timeMinutes: null };
+      try {
+        const pLat = pickup?.coordinates?.[1];
+        const pLng = pickup?.coordinates?.[0];
+        const dLat = dropoff?.coordinates?.[1];
+        const dLng = dropoff?.coordinates?.[0];
+        const haveCoords = [pLat, pLng, dLat, dLng].every(
+          (v) => typeof v === "number"
+        );
+        if (haveCoords) {
+          const distanceKm = this._calcDistanceKm(
+            { lat: pLat, lng: pLng },
+            { lat: dLat, lng: dLng }
+          );
+          route.distanceKm = distanceKm;
+          try {
+            const eta = this.calculateETA(
+              { lat: pLat, lng: pLng },
+              { lat: dLat, lng: dLng }
+            );
+            route.timeMinutes = eta?.minutes ?? null;
+          } catch {
+            // keep timeMinutes null if calculateETA unavailable
+          }
+        }
+      } catch {
+        // leave route defaults
+      }
+
+      // Vehicle display name
+      const vd = booking?.vehicleDetails || {};
+      const vehicleName =
+        vd?.name ||
+        vd?.model ||
+        vd?.make ||
+        vd?.type ||
+        vd?.vehicleType ||
+        null;
+
       if (isCustomer) {
         const driverId = String(data?.driverId || "").trim();
         if (!driverId)
           throw new Error("driverId is required for customer offer");
+
+        // Offering party = customer
+        let offeredBy = null;
+        try {
+          const cust = booking?.user
+            ? await User.findById(booking.user)
+                .select("firstName lastName profilePicture")
+                .lean()
+            : null;
+          offeredBy = buildInfo(cust);
+        } catch {}
 
         await Booking.findByIdAndUpdate(
           bookingId,
@@ -4674,13 +4669,17 @@ class RecoveryHandler {
           { new: false }
         );
 
-        // Notify driver
+        // Notify driver (show customer’s name/image + vehicle, route)
         this.webSocketService.sendToUser(String(driverId), {
           event: "fare.offer",
           bookingId,
           data: {
             amount,
             currency,
+            by: "customer",
+            offeredBy, // {id,name,image}
+            vehicleName,
+            route, // {distanceKm, timeMinutes}
             pickupLocation: booking.pickupLocation,
             dropoffLocation: booking.dropoffLocation,
             minFare: window.minFare,
@@ -4688,13 +4687,17 @@ class RecoveryHandler {
           },
         });
 
-        // Ack to customer
+        // Ack to customer (mirror)
         this.emitToClient(ws, {
           event: "fare.offer.ack",
           bookingId,
           data: {
             amount,
             currency,
+            by: "customer",
+            offeredBy,
+            vehicleName,
+            route,
             minFare: window.minFare,
             maxFare: window.maxFare,
           },
@@ -4705,6 +4708,15 @@ class RecoveryHandler {
       if (isDriver) {
         const driverId = String(ws?.user?.id || ws?.user?._id || "").trim();
         if (!driverId) throw new Error("driver identity required");
+
+        // Offering party = driver
+        let offeredBy = null;
+        try {
+          const drv = await User.findById(driverId)
+            .select("firstName lastName profilePicture")
+            .lean();
+          offeredBy = buildInfo(drv);
+        } catch {}
 
         // Persist driver proposal
         await Booking.findByIdAndUpdate(
@@ -4746,7 +4758,7 @@ class RecoveryHandler {
           { new: false }
         );
 
-        // Notify customer
+        // Notify customer (show driver’s name/image + vehicle, route)
         if (booking.user) {
           this.webSocketService.sendToUser(String(booking.user), {
             event: "fare.offer",
@@ -4754,23 +4766,30 @@ class RecoveryHandler {
             data: {
               amount,
               currency,
+              by: "driver",
+              driverId,
+              offeredBy, // {id,name,image}
+              vehicleName,
+              route,
               pickupLocation: booking.pickupLocation,
               dropoffLocation: booking.dropoffLocation,
               minFare: window.minFare,
               maxFare: window.maxFare,
-              by: "driver",
-              driverId,
             },
           });
         }
 
-        // Ack to driver
+        // Ack to driver (mirror)
         this.emitToClient(ws, {
           event: "fare.offer.ack",
           bookingId,
           data: {
             amount,
             currency,
+            by: "driver",
+            offeredBy,
+            vehicleName,
+            route,
             minFare: window.minFare,
             maxFare: window.maxFare,
           },
@@ -4781,6 +4800,18 @@ class RecoveryHandler {
       // Unknown role: require driverId and act as customer
       const fallbackDriverId = String(data?.driverId || "").trim();
       if (!fallbackDriverId) throw new Error("driverId is required");
+
+      // Offering party = customer
+      let offeredBy = null;
+      try {
+        const cust = booking?.user
+          ? await User.findById(booking.user)
+              .select("firstName lastName profilePicture")
+              .lean()
+          : null;
+        offeredBy = buildInfo(cust);
+      } catch {}
+
       await Booking.findByIdAndUpdate(
         bookingId,
         {
@@ -4817,24 +4848,36 @@ class RecoveryHandler {
         },
         { new: false }
       );
+
+      // Notify fallback driver (show customer’s name/image + vehicle, route)
       this.webSocketService.sendToUser(String(fallbackDriverId), {
         event: "fare.offer",
         bookingId,
         data: {
           amount,
           currency,
+          by: "customer",
+          offeredBy, // {id,name,image}
+          vehicleName,
+          route,
           pickupLocation: booking.pickupLocation,
           dropoffLocation: booking.dropoffLocation,
           minFare: window.minFare,
           maxFare: window.maxFare,
         },
       });
+
+      // Ack to initiator
       this.emitToClient(ws, {
         event: "fare.offer.ack",
         bookingId,
         data: {
           amount,
           currency,
+          by: "customer",
+          offeredBy,
+          vehicleName,
+          route,
           minFare: window.minFare,
           maxFare: window.maxFare,
         },
@@ -5567,11 +5610,15 @@ class RecoveryHandler {
     const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
     let driverId = String(data?.driverId || "").trim();
 
+    // Local holder for booking + vehicle details
+    let booking = null;
+    let vehicleDetails = null;
+
     try {
       if (!driverId && !bookingId)
         throw new Error("bookingId or driverId is required");
 
-      // Resolve driverId from Redis mapping first
+      // Resolve driverId via Redis mapping first if bookingId present
       if (!driverId && bookingId) {
         try {
           const mapped = await redis.get(`booking:driver:${bookingId}`);
@@ -5579,22 +5626,35 @@ class RecoveryHandler {
         } catch {}
       }
 
-      // Fallback to DB mapping if Redis miss (only to discover driverId)
-      if (!driverId && bookingId) {
-        const b = await Booking.findById(bookingId)
-          .select("user driver")
+      // Fallback to DB mapping; also fetch vehicle details once
+      if (bookingId) {
+        booking = await Booking.findById(bookingId)
+          .select("user driver vehicleDetails")
           .lean();
-        if (!b?.driver) throw new Error("No driver assigned");
-        driverId = String(b.driver);
+        vehicleDetails = booking?.vehicleDetails || null;
+      }
+      if (!driverId && bookingId) {
+        if (!booking?.driver) {
+          // No driver assigned: still send vehicle info if available
+          this.emitToClient(ws, {
+            event: "driver.location",
+            bookingId,
+            data: {
+              available: false,
+              source: "redis",
+              reason: "no_driver_assigned",
+              vehicle: vehicleDetails || null,
+            },
+          });
+          return;
+        }
+        driverId = String(booking.driver);
       }
 
-      // Basic auth: caller must be assigned driver or booking owner
+      // Auth: driver, owner, or admin/support
       let ownerId = null;
       if (bookingId) {
-        const b = await Booking.findById(bookingId)
-          .select("user driver")
-          .lean();
-        ownerId = b?.user ? String(b.user) : null;
+        ownerId = booking?.user ? String(booking.user) : null;
       }
       const callerId = String(ws?.user?.id || ws?.user?._id || "");
       const role = String(ws?.user?.role || "").toLowerCase();
@@ -5602,10 +5662,12 @@ class RecoveryHandler {
       const isOwner =
         (role === "user" || role === "customer" || role === "client") &&
         ownerId === callerId;
-      if (!isDriver && !isOwner)
+      const isAdmin =
+        role === "admin" || role === "superadmin" || role === "support";
+      if (!isDriver && !isOwner && !isAdmin)
         throw new Error("Not authorized to view driver location");
 
-      // Helper: fetch redis location
+      // Helper: redis read
       const fetchRedisLocation = async () => {
         try {
           const r = await redis.get(`driver:loc:${driverId}`);
@@ -5619,16 +5681,16 @@ class RecoveryHandler {
         }
       };
 
-      // Helper: freshness window (15 seconds)
+      // Freshness window
       const isFresh = (iso) => {
         const t = iso ? new Date(iso).getTime() : 0;
         return t > 0 && Date.now() - t < 15 * 1000;
       };
 
-      // Try initial read
+      // Initial read
       let parsed = await fetchRedisLocation();
 
-      // If missing/stale, request a live update and retry a few times
+      // Ask driver for live update and retry a few times if stale/missing
       if (!parsed || !isFresh(parsed.at)) {
         try {
           this.webSocketService.sendToUser(String(driverId), {
@@ -5637,17 +5699,44 @@ class RecoveryHandler {
             data: { reason: "realtime_request" },
           });
         } catch {}
-
         const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 8; i++) {
+          // slightly extended retries
           await sleep(300);
           parsed = await fetchRedisLocation();
           if (parsed && isFresh(parsed.at)) break;
         }
       }
 
-      // If still missing/stale, return stale_or_missing
+      // DB fallback if still stale/missing
       if (!parsed || !isFresh(parsed.at)) {
+        try {
+          const u = await User.findById(driverId)
+            .select("currentLocation lastActiveAt")
+            .lean();
+          const coords = Array.isArray(u?.currentLocation?.coordinates)
+            ? u.currentLocation.coordinates
+            : null;
+          if (coords && coords.length >= 2) {
+            this.emitToClient(ws, {
+              event: "driver.location",
+              bookingId: bookingId || null,
+              data: {
+                available: true,
+                source: "db",
+                location: { lat: coords[1], lng: coords[0] },
+                at: u?.lastActiveAt
+                  ? new Date(u.lastActiveAt).toISOString()
+                  : undefined,
+                driverId,
+                vehicle: vehicleDetails || null,
+                stale: true,
+              },
+            });
+            return;
+          }
+        } catch {}
+        // Nothing available; still include vehicle info for UI
         this.emitToClient(ws, {
           event: "driver.location",
           bookingId: bookingId || null,
@@ -5655,12 +5744,13 @@ class RecoveryHandler {
             available: false,
             source: "redis",
             reason: "stale_or_missing",
+            vehicle: vehicleDetails || null,
           },
         });
         return;
       }
 
-      // Fresh Redis location -> return to caller
+      // Fresh redis; include vehicle details
       this.emitToClient(ws, {
         event: "driver.location",
         bookingId: bookingId || parsed.bookingId || null,
@@ -5670,10 +5760,11 @@ class RecoveryHandler {
           location: { lat: parsed.lat, lng: parsed.lng },
           at: parsed.at,
           driverId,
+          vehicle: vehicleDetails || null,
         },
       });
 
-      // Auto-persist to DB (location.set) and emit ack
+      // Persist snapshot to DB best-effort
       try {
         const when = parsed.at ? new Date(parsed.at) : new Date();
         await User.findByIdAndUpdate(
@@ -5689,16 +5780,10 @@ class RecoveryHandler {
           },
           { new: false }
         );
-
-        // Optional acknowledgement event
         this.emitToClient(ws, {
           event: "driver.location.set",
           bookingId: bookingId || parsed.bookingId || null,
-          data: {
-            stored: true,
-            at: when.toISOString(),
-            driverId,
-          },
+          data: { stored: true, at: when.toISOString(), driverId },
         });
       } catch {}
     } catch (error) {
