@@ -666,7 +666,7 @@ class RecoveryHandler {
         }
       }
 
-      // Emit available drivers
+      // Emit available drivers to requester
       this.emitToClient(ws, {
         event: "carRecovery:driversAvailable",
         bookingId: bid,
@@ -679,8 +679,31 @@ class RecoveryHandler {
         },
       });
 
-      // Optionally, compute and send to drivers’ room later (unchanged)
-      // ...
+      // NEW: Notify each discovered driver about the new recovery request
+      try {
+        const targets = (finalDrivers || [])
+          .map((d) => String(d.id || d._id || "").trim())
+          .filter(Boolean);
+
+        for (const driverId of targets) {
+          this.webSocketService.sendToUser(driverId, {
+            event: "newRecoveryRequest",
+            bookingId: bid,
+            data: {
+              bookingId: bid,
+              serviceType: bookingServiceType,
+              serviceCategory: bookingServiceCategory,
+              pickupLocation: pickupGeo,
+              dropoffLocation: dropoffGeo,
+              distanceKm,
+              estimatedFare,
+              at: new Date().toISOString(),
+            },
+          });
+        }
+      } catch (e) {
+        logger.warn("Broadcast to drivers failed:", e?.message || e);
+      }
     } catch (error) {
       logger.error("Error in handleRecoveryRequest:", error);
       this.emitToClient(ws, {
@@ -908,6 +931,21 @@ class RecoveryHandler {
           driverId,
         },
       });
+
+      // NEW: Notify customer that the driver is en route ("I'm coming")
+      try {
+        if (booking?.user) {
+          this.webSocketService.sendToUser(String(booking.user), {
+            event: "driver.enroute",
+            bookingId,
+            data: {
+              message: "I'm coming",
+              at: new Date(),
+              driverId,
+            },
+          });
+        }
+      } catch {}
     } catch (error) {
       logger.error("Error in handleAcceptRequest:", error);
       this.emitToClient(ws, {
@@ -4563,14 +4601,14 @@ class RecoveryHandler {
 
       const now = new Date();
 
-      // Minimal display info helper
+      // Minimal display info helper (name + profile pic)
       const buildInfo = (u) => {
         if (!u) return null;
         const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
         return {
           id: String(u._id || ""),
-          name,
-          image: u.profilePicture || null,
+          name: name || u.username || "User",
+          image: u.profilePicture || u.avatarUrl || null, // allow alternate field
         };
       };
 
@@ -4616,22 +4654,23 @@ class RecoveryHandler {
         vd?.vehicleType ||
         null;
 
+      // CUSTOMER -> DRIVER offer
       if (isCustomer) {
         const driverId = String(data?.driverId || "").trim();
         if (!driverId)
           throw new Error("driverId is required for customer offer");
 
-        // Offering party = customer
         let offeredBy = null;
         try {
           const cust = booking?.user
             ? await User.findById(booking.user)
-                .select("firstName lastName profilePicture")
+                .select("firstName lastName profilePicture username avatarUrl")
                 .lean()
             : null;
           offeredBy = buildInfo(cust);
         } catch {}
 
+        // Persist negotiation state
         await Booking.findByIdAndUpdate(
           bookingId,
           {
@@ -4649,27 +4688,26 @@ class RecoveryHandler {
                   allowedPct: window.allowedPct,
                 },
               },
-              "fareDetails.negotiation.history": [
-                ...(booking?.fareDetails?.negotiation?.history || []),
-                {
-                  action: "offer",
-                  by: "customer",
-                  amount,
-                  currency,
-                  at: now,
-                  bounds: {
-                    min: window.minFare,
-                    max: window.maxFare,
-                    allowedPct: window.allowedPct,
-                  },
+            },
+            $push: {
+              "fareDetails.negotiation.history": {
+                action: "offer",
+                by: "customer",
+                amount,
+                currency,
+                at: now,
+                bounds: {
+                  min: window.minFare,
+                  max: window.maxFare,
+                  allowedPct: window.allowedPct,
                 },
-              ],
+              },
             },
           },
           { new: false }
         );
 
-        // Notify driver (show customer’s name/image + vehicle, route)
+        // Notify driver: include customer's name + profile picture
         this.webSocketService.sendToUser(String(driverId), {
           event: "fare.offer",
           bookingId,
@@ -4677,9 +4715,9 @@ class RecoveryHandler {
             amount,
             currency,
             by: "customer",
-            offeredBy, // {id,name,image}
+            offeredBy, // { id, name, image }
             vehicleName,
-            route, // {distanceKm, timeMinutes}
+            route, // { distanceKm, timeMinutes }
             pickupLocation: booking.pickupLocation,
             dropoffLocation: booking.dropoffLocation,
             minFare: window.minFare,
@@ -4705,15 +4743,15 @@ class RecoveryHandler {
         return;
       }
 
+      // DRIVER -> CUSTOMER offer
       if (isDriver) {
         const driverId = String(ws?.user?.id || ws?.user?._id || "").trim();
         if (!driverId) throw new Error("driver identity required");
 
-        // Offering party = driver
         let offeredBy = null;
         try {
           const drv = await User.findById(driverId)
-            .select("firstName lastName profilePicture")
+            .select("firstName lastName profilePicture username avatarUrl")
             .lean();
           offeredBy = buildInfo(drv);
         } catch {}
@@ -4737,28 +4775,27 @@ class RecoveryHandler {
                   allowedPct: window.allowedPct,
                 },
               },
-              "fareDetails.negotiation.history": [
-                ...(booking?.fareDetails?.negotiation?.history || []),
-                {
-                  action: "offer",
-                  by: "driver",
-                  amount,
-                  currency,
-                  at: now,
-                  driverId,
-                  bounds: {
-                    min: window.minFare,
-                    max: window.maxFare,
-                    allowedPct: window.allowedPct,
-                  },
+            },
+            $push: {
+              "fareDetails.negotiation.history": {
+                action: "offer",
+                by: "driver",
+                amount,
+                currency,
+                at: now,
+                driverId,
+                bounds: {
+                  min: window.minFare,
+                  max: window.maxFare,
+                  allowedPct: window.allowedPct,
                 },
-              ],
+              },
             },
           },
           { new: false }
         );
 
-        // Notify customer (show driver’s name/image + vehicle, route)
+        // Notify customer: include driver's name + profile picture
         if (booking.user) {
           this.webSocketService.sendToUser(String(booking.user), {
             event: "fare.offer",
@@ -4768,7 +4805,7 @@ class RecoveryHandler {
               currency,
               by: "driver",
               driverId,
-              offeredBy, // {id,name,image}
+              offeredBy, // { id, name, image }
               vehicleName,
               route,
               pickupLocation: booking.pickupLocation,
@@ -4797,96 +4834,12 @@ class RecoveryHandler {
         return;
       }
 
-      // Unknown role: require driverId and act as customer
-      const fallbackDriverId = String(data?.driverId || "").trim();
-      if (!fallbackDriverId) throw new Error("driverId is required");
-
-      // Offering party = customer
-      let offeredBy = null;
-      try {
-        const cust = booking?.user
-          ? await User.findById(booking.user)
-              .select("firstName lastName profilePicture")
-              .lean()
-          : null;
-        offeredBy = buildInfo(cust);
-      } catch {}
-
-      await Booking.findByIdAndUpdate(
-        bookingId,
-        {
-          $set: {
-            "fareDetails.negotiation.state": "proposed",
-            "fareDetails.negotiation.updatedAt": now,
-            "fareDetails.negotiation.proposed": {
-              by: "customer",
-              amount,
-              currency,
-              at: now,
-              bounds: {
-                min: window.minFare,
-                max: window.maxFare,
-                allowedPct: window.allowedPct,
-              },
-            },
-            "fareDetails.negotiation.history": [
-              ...(booking?.fareDetails?.negotiation?.history || []),
-              {
-                action: "offer",
-                by: "customer",
-                amount,
-                currency,
-                at: now,
-                bounds: {
-                  min: window.minFare,
-                  max: window.maxFare,
-                  allowedPct: window.allowedPct,
-                },
-              },
-            ],
-          },
-        },
-        { new: false }
-      );
-
-      // Notify fallback driver (show customer’s name/image + vehicle, route)
-      this.webSocketService.sendToUser(String(fallbackDriverId), {
-        event: "fare.offer",
-        bookingId,
-        data: {
-          amount,
-          currency,
-          by: "customer",
-          offeredBy, // {id,name,image}
-          vehicleName,
-          route,
-          pickupLocation: booking.pickupLocation,
-          dropoffLocation: booking.dropoffLocation,
-          minFare: window.minFare,
-          maxFare: window.maxFare,
-        },
-      });
-
-      // Ack to initiator
-      this.emitToClient(ws, {
-        event: "fare.offer.ack",
-        bookingId,
-        data: {
-          amount,
-          currency,
-          by: "customer",
-          offeredBy,
-          vehicleName,
-          route,
-          minFare: window.minFare,
-          maxFare: window.maxFare,
-        },
-      });
+      throw new Error("Only drivers or customers can send fare offers");
     } catch (error) {
       logger.error("Error in handleFareOffer:", error);
       this.emitToClient(ws, {
         event: "error",
-        bookingId: bookingId || null,
+        bookingId,
         error: { code: "FARE_OFFER_ERROR", message: error.message },
       });
     }
