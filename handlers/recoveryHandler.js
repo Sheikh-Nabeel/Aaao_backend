@@ -368,29 +368,110 @@ class RecoveryHandler {
 
       // Service typing: keep a valid serviceType and separate category
       const serviceType = "car recovery"; // valid enum value
-      const deriveCategory = (t) => {
-        const v = String(t || "")
+
+      const normKeyLoose = (t) =>
+        String(t || "")
           .toLowerCase()
-          .trim();
-        if (["towing", "flatbed", "wheel_lift", "wheel-lift"].includes(v))
-          return "towing services";
-        if (["winching", "on-road winching", "off-road winching"].includes(v))
-          return "winching services";
+          .trim()
+          .replace(/[_-]+/g, " ");
+
+      const deriveCategory = (t, sub) => {
+        const v = normKeyLoose(t);
+        const s = normKeyLoose(sub);
+
+        // Towing
         if (
-          [
-            "roadside",
-            "roadside_assistance",
-            "roadside assistance",
-            "battery",
-            "fuel",
-          ].includes(v)
+          v.includes("tow") ||
+          v.includes("towing") ||
+          v.includes("towing services")
+        )
+          return "towing services";
+        if (
+          s.includes("tow") ||
+          s.includes("flatbed") ||
+          s.includes("wheel lift")
+        )
+          return "towing services";
+
+        // Winching
+        if (v.includes("winch") || v.includes("winching"))
+          return "winching services";
+        if (s.includes("winch")) return "winching services";
+
+        // Roadside
+        if (
+          v.includes("roadside") ||
+          v.includes("battery") ||
+          v.includes("fuel") ||
+          v.includes("jump")
         )
           return "roadside assistance";
+        if (
+          s.includes("roadside") ||
+          s.includes("battery") ||
+          s.includes("fuel") ||
+          s.includes("jump")
+        )
+          return "roadside assistance";
+
+        // Default
         return "specialized/heavy recovery";
       };
+
+      const deriveSubcategoryVehicleType = (sub) => {
+        const s = normKeyLoose(sub);
+
+        // Map to Booking.vehicleType enum values
+        if (s.includes("flatbed")) return "flatbed towing";
+        if (s.includes("wheel lift")) return "wheel lift towing";
+        if (s.includes("on road winch") || s.includes("on road winching"))
+          return "on-road winching";
+        if (s.includes("off road winch") || s.includes("off road winching"))
+          return "off-road winching";
+        if (s.includes("battery")) return "battery jump start";
+        if (s.includes("fuel")) return "fuel delivery";
+
+        return null; // unknown -> leave null
+      };
+
       const serviceCategory = deriveCategory(
-        data?.serviceType || data?.subService
+        data?.serviceType || data?.subService,
+        data?.subService
       );
+      const subServiceNormalized = normKeyLoose(data?.subService || "");
+
+      const rawVehicleType =
+        data?.vehicleType ||
+        data?.vehicleDetails?.type ||
+        data?.vehicleDetails?.vehicleType ||
+        null;
+
+      const derivedFromSub = deriveSubcategoryVehicleType(data?.subService);
+
+      // Accept only Booking.vehicleType enum values
+      const isValidVehicleType = (s) => {
+        const v = String(s || "")
+          .toLowerCase()
+          .trim();
+        return [
+          "flatbed towing",
+          "wheel lift towing",
+          "on-road winching",
+          "off-road winching",
+          "battery jump start",
+          "fuel delivery",
+          "luxury & exotic car recovery",
+          "accident & collision recovery",
+          "heavy-duty vehicle recovery",
+          "basement pull-out",
+        ].includes(v);
+      };
+
+      const vehicleTypeDerived = isValidVehicleType(rawVehicleType)
+        ? rawVehicleType
+        : derivedFromSub && isValidVehicleType(derivedFromSub)
+        ? derivedFromSub
+        : null;
 
       // Compute distanc
       let distanceKm =
@@ -513,7 +594,8 @@ class RecoveryHandler {
         status: "pending",
         user: userId || null,
         driver: null,
-        serviceType, // valid enum value
+        serviceType,
+        vehicleType: vehicleTypeDerived,
         serviceCategory,
         createdAt: now,
         updatedAt: now,
@@ -606,6 +688,8 @@ class RecoveryHandler {
           bookingId,
           serviceType,
           serviceCategory,
+          subService: subServiceNormalized || data?.subService || null,
+          vehicleType: vehicleTypeDerived,
           pickupLocation: insertDoc.pickupLocation,
           dropoffLocation: insertDoc.dropoffLocation,
           distance: distanceKmInt,
