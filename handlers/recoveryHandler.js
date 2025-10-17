@@ -274,32 +274,20 @@ class RecoveryHandler {
         this.handleBookingDetails.bind(this)
       );
     }
+
+    // Dynamic Message
+    this.webSocketService.on("recovery.on_the_way", (ws, msg) =>
+      this.handleDriverOnTheWay(ws, msg)
+    );
+
+    // Alias for legacy/new clients
+    this.webSocketService.on("driver:on_the_way", (ws, msg) =>
+      this.handleDriverOnTheWay(ws, msg)
+    );
   }
 
   /**
    * Handle recovery request from client
-   */
-  /**
-   * Handle recovery request from client
-   * Accepts coordinates in [lng, lat] or {lng,lat}/{longitude,latitude}
-   * Emits to requester:
-   * - request.created
-   * - carRecovery:driversAvailable (discovered drivers)
-   * Notifies drivers:
-   * - targeted driver: recovery.requested + newRecoveryRequest (with customer profile)
-   * - discovered drivers: recovery.requested + newRecoveryRequest (with customer profile)
-   * - room broadcast: recovery.requested (with customer profile)
-   */
-  /**
-   * Handle recovery request from client
-   * Accepts coordinates in [lng, lat] or {lng,lat}/{longitude,latitude}
-   * Emits to requester:
-   * - request.created
-   * - carRecovery:driversAvailable (discovered drivers)
-   * Notifies drivers:
-   * - targeted driver: recovery.requested + newRecoveryRequest (with customer profile)
-   * - discovered drivers: recovery.requested + newRecoveryRequest (with customer profile)
-   * - room broadcast: recovery.requested + newRecoveryRequest (with customer profile)
    */
   async handleRecoveryRequest(ws, message) {
     // Helpers
@@ -6330,6 +6318,126 @@ class RecoveryHandler {
         event: "error",
         bookingId: bookingId || null,
         error: { code: "GET_DRIVER_LOCATION_RT_ERROR", message: error.message },
+      });
+    }
+  }
+
+  /**
+   * Driver says "I'm coming" with a dynamic, frontend-controlled message
+   */
+  async handleDriverOnTheWay(ws, message) {
+    // Small helpers to stay consistent with the file
+    const toStr = (v) => (v == null ? "" : String(v));
+    const buildDriverProfile = (u) => {
+      if (!u) return null;
+      const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
+      return {
+        id: String(u._id || u.id || ""),
+        name: name || u.username || "Driver",
+        email: u.email || null,
+        phone: u.phoneNumber || null,
+        image: u.selfieImage || u.avatarUrl || null,
+      };
+    };
+
+    // Normalize incoming message
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || msg || {};
+    const bookingId = toStr(data?.bookingId || "").trim();
+    const role = String(ws?.user?.role || "").toLowerCase();
+    const driverId = String(ws?.user?._id || ws?.user?.id || "").trim();
+
+    try {
+      // Validate role and input
+      if (role !== "driver")
+        throw new Error("Only drivers can send this event");
+      if (!driverId) throw new Error("Driver identity required");
+      if (!bookingId) throw new Error("bookingId is required");
+
+      // Load booking
+      const booking = await Booking.findById(bookingId).select(
+        "status user driver pickupLocation dropoffLocation fareDetails"
+      );
+      if (!booking) throw new Error("Booking not found");
+
+      // Basic authorization: must be assigned driver (if booking has driver)
+      if (booking?.driver && String(booking.driver) !== driverId) {
+        throw new Error("Driver is not assigned to this booking");
+      }
+
+      // Resolve the message (frontend-controlled text)
+      const text = toStr(data?.message || "I'm coming").slice(0, 1000);
+      const now = new Date();
+
+      // Optional: build driver profile for the customer’s view
+      let driverProfile = null;
+      try {
+        const d = await User.findById(driverId).select(
+          "firstName lastName email phoneNumber selfieImage username avatarUrl"
+        );
+        driverProfile = buildDriverProfile(d);
+      } catch {}
+
+      // Persist a lightweight status entry
+      try {
+        await Booking.findByIdAndUpdate(
+          bookingId,
+          {
+            $set: {
+              "fareDetails.negotiation.updatedAt": now,
+              driverOnTheWayAt: now,
+            },
+            $push: {
+              statusHistory: {
+                status: "on_the_way",
+                timestamp: now,
+                message: text,
+              },
+            },
+          },
+          { new: false }
+        );
+      } catch {}
+
+      // ACK to driver
+      this.emitToClient(ws, {
+        event: "recovery.on_the_way.ack",
+        bookingId,
+        data: {
+          at: now,
+          message: text,
+        },
+      });
+
+      // Notify customer with the dynamic message
+      try {
+        if (booking?.user) {
+          this.webSocketService.sendToUser(String(booking.user), {
+            event: "recovery.on_the_way",
+            bookingId,
+            data: {
+              at: now,
+              message: text, // frontend-controlled text
+              driver: driverProfile, // optional context for client UI
+              pickupLocation: booking.pickupLocation || null,
+              dropoffLocation: booking.dropoffLocation || null,
+            },
+          });
+        }
+      } catch {}
+    } catch (error) {
+      logger.error("Error in handleDriverOnTheWay:", error);
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId: bookingId || null,
+        error: { code: "DRIVER_ON_THE_WAY_ERROR", message: error.message },
       });
     }
   }
