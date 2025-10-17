@@ -529,7 +529,7 @@ class RecoveryHandler {
         },
         waypoints: Array.isArray(data?.waypoints) ? data.waypoints : [],
         // Required distance fields
-        distanceKm: distanceKmInt,
+        distance: distanceKmInt,
         distanceInMeters,
         // Required fare fields
         fare,
