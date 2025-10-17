@@ -392,59 +392,111 @@ class RecoveryHandler {
         data?.serviceType || data?.subService
       );
 
-      // Compute distance
-      const distanceKm =
+      // Compute distanc
+      let distanceKm =
         this._calcDistanceKm(
           { lat: pickArr[1], lng: pickArr[0] },
           { lat: dropArr[1], lng: dropArr[0] }
         ) || 0;
-      const distanceInMeters = Math.round(distanceKm * 1000);
 
-      // Estimate fare with safe fallback
-      let computed;
-      try {
-        if (typeof this._computeCRFare === "function") {
-          computed = await this._computeCRFare({
-            distanceKm,
-            vehicleType:
-              data?.vehicleType ||
-              data?.vehicleDetails?.type ||
-              data?.vehicleDetails?.vehicleType ||
-              null,
-            routeType: data?.routeType, // allow undefined
-            estimatedDuration: Number(data?.estimatedDuration || 0),
-            waitingMinutes: Number(data?.options?.waitingTime || 0),
-            demandRatio: Number(data?.demandRatio || 1),
-            tripProgress: 0,
-            isCancelled: false,
-            cancellationReason: null,
-          });
-        } else {
-          // Fallback to comprehensive calculator
-          // Ensure calculateComprehensiveFare is imported at top of file:
-          // const { calculateComprehensiveFare } = require("../utils/comprehensiveFareCalculator");
-          computed = await calculateComprehensiveFare({
-            serviceType: "car recovery",
-            vehicleType:
-              data?.vehicleType ||
-              data?.vehicleDetails?.type ||
-              data?.vehicleDetails?.vehicleType ||
-              null,
-            distance: distanceKm, // km
-            routeType: data?.routeType || "one_way",
-            estimatedDuration: Number(data?.estimatedDuration || 0),
-            waitingMinutes: Number(data?.options?.waitingTime || 0),
-            demandRatio: Number(data?.demandRatio || 1),
-          });
+      // If zero, try from payload or waypoints
+      if (distanceKm === 0) {
+        // Prefer explicit distance fields if client sent one
+        const provided = toNum(
+          data?.distanceKm ??
+            data?.distance ??
+            data?.estimatedDistance ??
+            data?.estimated?.distance
+        );
+        if (provided && provided > 0) {
+          distanceKm = provided;
+        } else if (
+          Array.isArray(data?.waypoints) &&
+          data.waypoints.length > 1
+        ) {
+          // Sum segment distances over waypoints if available
+          let acc = 0;
+          for (let i = 1; i < data.waypoints.length; i++) {
+            const a = normalizeCoords(data.waypoints[i - 1]?.coordinates);
+            const b = normalizeCoords(data.waypoints[i]?.coordinates);
+            if (a && b) {
+              acc += this._calcDistanceKm(
+                { lat: a[1], lng: a[0] },
+                { lat: b[1], lng: b[0] }
+              );
+            }
+          }
+          if (acc > 0) distanceKm = acc;
         }
-      } catch (e) {
-        computed = { totalFare: 0, currency: "AED", breakdown: {}, alerts: [] };
+
+        // Warn if pickup and dropoff are identical
+        if (
+          distanceKm === 0 &&
+          pickArr &&
+          dropArr &&
+          pickArr[0] === dropArr[0] &&
+          pickArr[1] === dropArr[1]
+        ) {
+          logger.warn(
+            "Pickup and dropoff coordinates are identical; distance = 0. Check client payload.",
+            {
+              pickup: pickArr,
+              dropoff: dropArr,
+              addressPick: data?.pickupLocation?.address,
+              addressDrop: data?.dropoffLocation?.address,
+            }
+          );
+        }
       }
 
-      const estimatedFare = Number(
-        computed?.totalFare ?? computed?.total ?? computed?.price?.total ?? 0
-      );
+      const distanceKmInt = Math.round(distanceKm);
+      const distanceInMeters = Math.round(distanceKm * 1000);
+
+      // Estimate fare
+      let computed;
+      try {
+        computed = await calculateComprehensiveFare({
+          serviceType: "car recovery",
+          vehicleType:
+            data?.vehicleType ||
+            data?.vehicleDetails?.type ||
+            data?.vehicleDetails?.vehicleType ||
+            null,
+          distance: Number(distanceKm || 0), // km
+          routeType: data?.routeType || "one_way",
+          estimatedDuration: Number(data?.estimatedDuration || 0),
+          waitingMinutes: Number(data?.options?.waitingTime || 0),
+          demandRatio: Number(data?.demandRatio || 1),
+          // Cancellation flags not used at request time
+          tripProgress: 0,
+          isCancelled: false,
+          cancellationReason: null,
+        });
+      } catch (e) {
+        computed = {
+          totalFare: 0,
+          currency: "AED",
+          baseFare: 0,
+          distanceFare: 0,
+          platformFee: 0,
+          nightCharges: 0,
+          surgeCharges: 0,
+          waitingCharges: 0,
+          cancellationCharges: 0,
+          vatAmount: 0,
+          subtotal: 0,
+          breakdown: {},
+          alerts: [],
+        };
+      }
+
+      // Estimated fare (Comprehensive totalFare already includes VAT, platform, etc.)
+      const estimatedFare = Number(computed?.totalFare ?? computed?.total ?? 0);
       const currencyFromConfig = computed?.currency || "AED";
+
+      // Also compute min/max fares for driver notifications (no range logic available -> use same for now)
+      const minFare = estimatedFare;
+      const maxFare = estimatedFare;
 
       // Required schema fields (fare/offeredFare)
       const clientEstimated =
@@ -477,12 +529,12 @@ class RecoveryHandler {
         },
         waypoints: Array.isArray(data?.waypoints) ? data.waypoints : [],
         // Required distance fields
-        distance: distanceKm,
+        distanceKm: distanceKmInt,
         distanceInMeters,
         // Required fare fields
         fare,
         offeredFare,
-        // Detailed fareDetails
+        // Detailed fareDetails (mapped from Comprehensive)
         fareDetails: {
           currency: currencyFromConfig,
           routeType: data?.routeType || undefined,
@@ -556,12 +608,12 @@ class RecoveryHandler {
           serviceCategory,
           pickupLocation: insertDoc.pickupLocation,
           dropoffLocation: insertDoc.dropoffLocation,
-          distance: distanceKm,
+          distance: distanceKmInt,
           distanceInMeters,
           fare: { estimated: { customer: estimatedFare } },
           fareDetails: {
             currency: currencyFromConfig,
-            estimatedDistance: distanceKm,
+            estimatedDistance: distanceKmInt,
             estimatedFare,
             baseFare: insertDoc.fareDetails.baseFare,
             distanceFare: insertDoc.fareDetails.distanceFare,
@@ -651,7 +703,7 @@ class RecoveryHandler {
         },
       });
 
-      // Notify targeted preferred driver (both event names)
+      // Notify targeted preferred driver (both event names) + min/max fare
       try {
         if (preferredDriverId) {
           const driverPayloadNew = {
@@ -664,6 +716,8 @@ class RecoveryHandler {
               dropoffLocation: insertDoc.dropoffLocation,
               distance: distanceKm,
               estimatedFare,
+              minFare,
+              maxFare,
               currency: currencyFromConfig,
               vehicleType:
                 data?.vehicleType ||
@@ -683,8 +737,10 @@ class RecoveryHandler {
               serviceCategory,
               pickupLocation: insertDoc.pickupLocation,
               dropoffLocation: insertDoc.dropoffLocation,
-              distanceKm,
+              distanceKm: distanceKmInt,
               estimatedFare,
+              minFare,
+              maxFare,
               customer: customerProfile,
               at: now.toISOString(),
             },
@@ -700,7 +756,7 @@ class RecoveryHandler {
         }
       } catch {}
 
-      // Notify each discovered driver (direct ping) with both event names
+      // Notify each discovered driver (direct ping) with both event names + min/max fare
       try {
         const targets = (nearbyDrivers || [])
           .map((d) => String(d.id || d._id || "").trim())
@@ -717,6 +773,8 @@ class RecoveryHandler {
               dropoffLocation: insertDoc.dropoffLocation,
               distance: distanceKm,
               estimatedFare,
+              minFare,
+              maxFare,
               currency: currencyFromConfig,
               vehicleType:
                 data?.vehicleType ||
@@ -738,6 +796,8 @@ class RecoveryHandler {
               dropoffLocation: insertDoc.dropoffLocation,
               distanceKm,
               estimatedFare,
+              minFare,
+              maxFare,
               customer: customerProfile,
               at: now.toISOString(),
             },
@@ -750,7 +810,7 @@ class RecoveryHandler {
         );
       }
 
-      // Broadcast to room (both event names)
+      // Broadcast to room (both event names) + min/max fare
       try {
         const roomName = `svc:${normKey("car recovery")}`;
         const newEventPayload = {
@@ -763,6 +823,8 @@ class RecoveryHandler {
             dropoffLocation: insertDoc.dropoffLocation,
             distance: distanceKm,
             estimatedFare,
+            minFare,
+            maxFare,
             currency: currencyFromConfig,
             vehicleType:
               data?.vehicleType ||
@@ -784,6 +846,8 @@ class RecoveryHandler {
             dropoffLocation: insertDoc.dropoffLocation,
             distanceKm,
             estimatedFare,
+            minFare,
+            maxFare,
             customer: customerProfile,
             at: now.toISOString(),
           },
@@ -4957,6 +5021,8 @@ class RecoveryHandler {
       return {
         id: String(u._id || u.id || ""),
         name: name || u.username || "User",
+        email: u.email || null,
+        phone: u.phoneNumber || u.phone || null,
         image: u.selfieImage || u.avatarUrl || null,
       };
     };
@@ -6442,26 +6508,46 @@ class RecoveryHandler {
     }
   }
 
-  // Helper: Haversine distance in KM between two { lat, lng }
+  // Helper: distance in KM between two points
   _calcDistanceKm(from, to) {
-    const fromLat = from?.lat ?? from?.latitude;
-    const fromLng = from?.lng ?? from?.longitude;
-    const toLat = to?.lat ?? to?.latitude;
-    const toLng = to?.lng ?? to?.longitude;
-    if ([fromLat, fromLng, toLat, toLng].some((v) => typeof v !== "number")) {
-      return 0;
-    }
+    const norm = (p) => {
+      if (!p) return null;
+
+      // Array form: [lng, lat]
+      if (Array.isArray(p) && p.length >= 2) {
+        const lng = Number(p[0]);
+        const lat = Number(p[1]);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          return { lat, lng };
+        }
+        return null;
+      }
+
+      // Object form: { lat, lng } or { latitude, longitude }
+      const lat = Number(p.lat ?? p.latitude);
+      const lng = Number(p.lng ?? p.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        return { lat, lng };
+      }
+      return null;
+    };
+
+    const A = norm(from);
+    const B = norm(to);
+    if (!A || !B) return 0;
+
     const R = 6371; // km
-    const dLat = ((toLat - fromLat) * Math.PI) / 180;
-    const dLon = ((toLng - fromLng) * Math.PI) / 180;
+    const dLat = ((B.lat - A.lat) * Math.PI) / 180;
+    const dLon = ((B.lng - A.lng) * Math.PI) / 180;
+    const lat1 = (A.lat * Math.PI) / 180;
+    const lat2 = (B.lat * Math.PI) / 180;
+
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos((fromLat * Math.PI) / 180) *
-        Math.cos((toLat * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return Number((R * c).toFixed(2));
+    // Higher precision to avoid near-zero truncation; meters rounding is done by callers
+    return Number((R * c).toFixed(6));
   }
 }
 
