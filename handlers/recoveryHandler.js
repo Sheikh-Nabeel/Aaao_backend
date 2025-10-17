@@ -279,102 +279,108 @@ class RecoveryHandler {
   /**
    * Handle recovery request from client
    */
+  /**
+   * Handle recovery request from client
+   * Accepts coordinates in [lng, lat] or {lng,lat}/{longitude,latitude}
+   * Emits to requester:
+   * - request.created
+   * - carRecovery:driversAvailable (discovered drivers)
+   * Notifies drivers:
+   * - targeted driver: recovery.requested + newRecoveryRequest (with customer profile)
+   * - discovered drivers: recovery.requested + newRecoveryRequest (with customer profile)
+   * - room broadcast: recovery.requested (with customer profile)
+   */
+  /**
+   * Handle recovery request from client
+   * Accepts coordinates in [lng, lat] or {lng,lat}/{longitude,latitude}
+   * Emits to requester:
+   * - request.created
+   * - carRecovery:driversAvailable (discovered drivers)
+   * Notifies drivers:
+   * - targeted driver: recovery.requested + newRecoveryRequest (with customer profile)
+   * - discovered drivers: recovery.requested + newRecoveryRequest (with customer profile)
+   * - room broadcast: recovery.requested + newRecoveryRequest (with customer profile)
+   */
   async handleRecoveryRequest(ws, message) {
-    const { data } = message || {};
+    // Helpers
+    const toNum = (v) => {
+      if (typeof v === "number") return Number.isFinite(v) ? v : null;
+      if (typeof v === "string" && v.trim() !== "") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+    const normalizeCoords = (c) => {
+      // Accept [lng, lat]
+      if (Array.isArray(c) && c.length >= 2) {
+        const lng = toNum(c[0]);
+        const lat = toNum(c[1]);
+        if (lng != null && lat != null) return [lng, lat];
+      }
+      // Accept { lng, lat } or { longitude, latitude }
+      if (c && typeof c === "object") {
+        const lng = toNum(c.lng ?? c.longitude);
+        const lat = toNum(c.lat ?? c.latitude);
+        if (lng != null && lat != null) return [lng, lat];
+      }
+      return null;
+    };
+    const normKey = (s) =>
+      String(s || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "_");
+    const buildCustomerProfile = (u) => {
+      if (!u) return null;
+      const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
+      return {
+        id: String(u._id || u.id || ""),
+        name: name || u.username || "User",
+        email: u.email || null,
+        phone: u.phoneNumber || u.phone || null,
+        image: u.selfieImage || u.avatarUrl || null,
+      };
+    };
+
+    // Normalize message
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const userId = String(
+      ws?.user?._id || ws?.user?.id || data?.userId || ""
+    ).trim();
 
     try {
-      // Basic required fields
-      if (!data || !data.pickupLocation || !data.serviceType) {
+      // Validate presence
+      if (!data || !data.pickupLocation || !data.dropoffLocation) {
         throw new Error(
-          "Missing required fields: pickupLocation and serviceType are required"
+          "Missing required fields: pickupLocation and dropoffLocation are required"
         );
       }
 
-      const norm = (s) =>
-        String(s || "")
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, "_");
-
-      // Identify creator
-      const creatorId =
-        ws?.user?.id ||
-        ws?.user?._id?.toString?.() ||
-        data.customerId ||
-        data.userId ||
-        null;
-
-      // Extract coordinates from payload
-      const pLat =
-        data.pickupLocation?.coordinates?.lat ??
-        data.pickupLocation?.coordinates?.latitude;
-      const pLng =
-        data.pickupLocation?.coordinates?.lng ??
-        data.pickupLocation?.coordinates?.longitude;
-
-      const dLat =
-        (data.destinationLocation || data.dropoffLocation)?.coordinates?.lat ??
-        (data.destinationLocation || data.dropoffLocation)?.coordinates
-          ?.latitude;
-      const dLng =
-        (data.destinationLocation || data.dropoffLocation)?.coordinates?.lng ??
-        (data.destinationLocation || data.dropoffLocation)?.coordinates
-          ?.longitude;
-
-      // Validate numeric coordinates
-      if (typeof pLat !== "number" || typeof pLng !== "number") {
-        throw new Error("pickupLocation.coordinates {lat,lng} must be numbers");
-      }
-      if (dLat != null || dLng != null) {
-        if (typeof dLat !== "number" || typeof dLng !== "number") {
-          throw new Error(
-            "dropoffLocation.coordinates {lat,lng} must be numbers"
-          );
-        }
+      // Normalize coordinates
+      const pickArr = normalizeCoords(data.pickupLocation?.coordinates);
+      const dropArr = normalizeCoords(data.dropoffLocation?.coordinates);
+      if (!pickArr || !dropArr) {
+        throw new Error(
+          "pickupLocation.coordinates and dropoffLocation.coordinates must be arrays [lng, lat] or objects {lng,lat}"
+        );
       }
 
-      // Build GeoJSON locations
-      const pickupGeo = {
-        type: "Point",
-        coordinates: [Number(pLng) || 0, Number(pLat) || 0], // [lng, lat]
-        address: data.pickupLocation.address || "Unknown",
-        zone: data.pickupLocation.zone || "general",
-      };
-      const dropoffGeo =
-        dLat != null && dLng != null
-          ? {
-              type: "Point",
-              coordinates: [Number(dLng) || 0, Number(dLat) || 0],
-              address:
-                (data.destinationLocation || data.dropoffLocation)?.address ||
-                "Unknown",
-              zone:
-                (data.destinationLocation || data.dropoffLocation)?.zone ||
-                "general",
-            }
-          : {
-              type: "Point",
-              coordinates: [Number(pLng) || 0, Number(pLat) || 0],
-              address: data.pickupLocation.address || "Unknown",
-              zone: data.pickupLocation.zone || "general",
-            };
+      // Derive zones with defaults (schema requires zone)
+      const pickupZone = data?.pickupLocation?.zone || "general";
+      const dropoffZone = data?.dropoffLocation?.zone || "general";
 
-      // Distance
-      const distanceKm =
-        this._calcDistanceKm(
-          { lat: pickupGeo.coordinates[1], lng: pickupGeo.coordinates[0] },
-          { lat: dropoffGeo.coordinates[1], lng: dropoffGeo.coordinates[0] }
-        ) || 0;
-      const distanceInMeters = Math.round(distanceKm * 1000);
-
-      // Search radius (default bumped to 15km, clamp 1..50)
-      const selectedRadiusKm = Math.max(
-        1,
-        Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 15))
-      );
-
-      // Map to booking enums (categorization only)
-      const mapCategory = (t) => {
+      // Service typing: keep a valid serviceType and separate category
+      const serviceType = "car recovery"; // valid enum value
+      const deriveCategory = (t) => {
         const v = String(t || "")
           .toLowerCase()
           .trim();
@@ -394,317 +400,411 @@ class RecoveryHandler {
           return "roadside assistance";
         return "specialized/heavy recovery";
       };
-
-      const bookingServiceType = "car recovery";
-      const bookingServiceCategory = mapCategory(data.serviceType);
-
-      // Infer a recovery vehicle type for pricing (optional)
-      const mapRecoveryVehicleType = (subService, serviceType) => {
-        const v = String(subService || serviceType || "")
-          .toLowerCase()
-          .trim();
-        if (v.includes("flatbed")) return "flatbed";
-        if (v.includes("wheel") || v.includes("wheel_lift")) return "wheelLift";
-        if (v.includes("jump")) return "jumpstart";
-        if (v.includes("fuel")) return "fuelDelivery";
-        if (v.includes("tire")) return "tirePunctureRepair";
-        if (v.includes("battery")) return "batteryReplacement";
-        if (v.includes("key") || v.includes("unlock")) return "keyUnlocker";
-        return null;
-      };
-      const recoveryVehicleType = mapRecoveryVehicleType(
-        data?.subService,
-        data?.serviceType
+      const serviceCategory = deriveCategory(
+        data?.serviceType || data?.subService
       );
 
-      // Estimate fare using comprehensive pricing
-      let computedFareBreakdown;
+      // Compute distance
+      const distanceKm =
+        this._calcDistanceKm(
+          { lat: pickArr[1], lng: pickArr[0] },
+          { lat: dropArr[1], lng: dropArr[0] }
+        ) || 0;
+      const distanceInMeters = Math.round(distanceKm * 1000);
+
+      // Estimate fare with safe fallback
+      let computed;
       try {
-        computedFareBreakdown = await calculateComprehensiveFare({
-          serviceType: bookingServiceType, // "car recovery"
-          vehicleType: recoveryVehicleType,
-          distance: distanceKm, // km
-          routeType: "one_way",
-          estimatedDuration: Number(data?.estimatedDuration || 0),
-          waitingMinutes: Number(data?.options?.waitingTime || 0),
-        });
-      } catch {
-        computedFareBreakdown = {
-          totalFare: 0,
-          currency: "AED",
-          breakdown: [],
-        };
-      }
-      const estimatedFare = Number(computedFareBreakdown?.totalFare || 0);
-      const currencyFromConfig = computedFareBreakdown?.currency || "AED";
-
-      // Idempotency
-      const clientKey =
-        data?.idempotencyKey ||
-        data?.clientRequestId ||
-        data?.requestKey ||
-        null;
-      const idempotencyKey =
-        clientKey ||
-        createHash("sha256")
-          .update(
-            [
-              String(creatorId || "anonymous"),
-              Number(pLat) || 0,
-              Number(pLng) || 0,
-              Number(dLat ?? pLat) || 0,
-              Number(dLng ?? pLng) || 0,
-              String(data.serviceType || "")
-                .trim()
-                .toLowerCase(),
-              String(data?.subService || "")
-                .trim()
-                .toLowerCase(),
-            ].join("|")
-          )
-          .digest("hex")
-          .slice(0, 48);
-
-      // Atomic insert
-      const insertDoc = {
-        idempotencyKey,
-        user: creatorId,
-        serviceType: bookingServiceType,
-        serviceCategory: bookingServiceCategory,
-        pickupLocation: pickupGeo,
-        dropoffLocation: dropoffGeo,
-        distance: distanceKm,
-        distanceInMeters,
-        fare: Number(estimatedFare) || 0,
-        offeredFare:
-          Number(
-            typeof data?.estimatedFare === "number"
-              ? data.estimatedFare
-              : typeof data?.estimated?.amount === "number"
-              ? data.estimated.amount
-              : estimatedFare
-          ) || 0,
-        vehicleDetails: data.vehicleDetails || {},
-        status: "pending",
-        createdAt: new Date(),
-        fareDetails: {
-          estimatedDistance: distanceKm,
-          estimatedFare: estimatedFare,
-          currency: currencyFromConfig,
-          breakdown: computedFareBreakdown?.breakdown || [],
-        },
-      };
-
-      let upserted;
-      try {
-        upserted = await Booking.findOneAndUpdate(
-          { idempotencyKey },
-          { $setOnInsert: insertDoc },
-          { upsert: true, new: true, projection: "_id" }
-        );
-      } catch (e) {
-        if (String(e?.code) === "11000") {
-          upserted = await Booking.findOne({ idempotencyKey }).select("_id");
+        if (typeof this._computeCRFare === "function") {
+          computed = await this._computeCRFare({
+            distanceKm,
+            vehicleType:
+              data?.vehicleType ||
+              data?.vehicleDetails?.type ||
+              data?.vehicleDetails?.vehicleType ||
+              null,
+            routeType: data?.routeType, // allow undefined
+            estimatedDuration: Number(data?.estimatedDuration || 0),
+            waitingMinutes: Number(data?.options?.waitingTime || 0),
+            demandRatio: Number(data?.demandRatio || 1),
+            tripProgress: 0,
+            isCancelled: false,
+            cancellationReason: null,
+          });
         } else {
-          throw e;
+          // Fallback to comprehensive calculator
+          // Ensure calculateComprehensiveFare is imported at top of file:
+          // const { calculateComprehensiveFare } = require("../utils/comprehensiveFareCalculator");
+          computed = await calculateComprehensiveFare({
+            serviceType: "car recovery",
+            vehicleType:
+              data?.vehicleType ||
+              data?.vehicleDetails?.type ||
+              data?.vehicleDetails?.vehicleType ||
+              null,
+            distance: distanceKm, // km
+            routeType: data?.routeType || "one_way",
+            estimatedDuration: Number(data?.estimatedDuration || 0),
+            waitingMinutes: Number(data?.options?.waitingTime || 0),
+            demandRatio: Number(data?.demandRatio || 1),
+          });
         }
+      } catch (e) {
+        computed = { totalFare: 0, currency: "AED", breakdown: {}, alerts: [] };
       }
-      const bid = String(upserted._id);
 
-      // Cache minimal request in memory
-      const recoveryRequest = {
-        requestId: bid,
+      const estimatedFare = Number(
+        computed?.totalFare ?? computed?.total ?? computed?.price?.total ?? 0
+      );
+      const currencyFromConfig = computed?.currency || "AED";
+
+      // Required schema fields (fare/offeredFare)
+      const clientEstimated =
+        (typeof data?.estimatedFare === "number" ? data.estimatedFare : null) ??
+        (typeof data?.estimated?.amount === "number"
+          ? data.estimated.amount
+          : null);
+      const offeredFare = toNum(clientEstimated) ?? estimatedFare;
+      const fare = estimatedFare;
+
+      // Build document
+      const now = new Date();
+      const insertDoc = {
         status: "pending",
-        createdAt: new Date(),
-        ...data,
-        userId: creatorId,
-        driverId: null,
-        driverLocation: null,
-        statusHistory: [
-          {
-            status: "pending",
-            timestamp: new Date(),
-            message: "Recovery request created",
-          },
-        ],
-        bookingId: bid,
-        searchRadiusKm: selectedRadiusKm,
-        discoveryFilters: {
-          pinkCaptainOnly: !!(
-            data?.pinkCaptainOnly || data?.preferences?.pinkCaptainOnly
-          ),
-          safety: {
-            familyWithGuardianMale: !!data?.preferences?.familyWithGuardianMale,
-            noMaleCompanion: !!data?.preferences?.noMaleCompanion,
-            maleWithoutFemale: !!data?.preferences?.maleWithoutFemale,
-          },
-          preferredDispatch: {
-            mode:
-              data?.dispatchPreference ||
-              data?.preferredDispatch?.mode ||
-              data?.preferences?.dispatchMode ||
-              null,
-            driverId:
-              data?.pinnedDriverId ||
-              data?.preferredDispatch?.driverId ||
-              data?.preferences?.pinnedDriverId ||
-              null,
-          },
+        user: userId || null,
+        driver: null,
+        serviceType, // valid enum value
+        serviceCategory,
+        createdAt: now,
+        updatedAt: now,
+        pickupLocation: {
+          address: data?.pickupLocation?.address || null,
+          zone: pickupZone,
+          coordinates: pickArr, // [lng, lat]
         },
-        fareContext: {
-          estimatedDistance: distanceKm,
-          estimatedFare: estimatedFare,
-          currency: "AED",
-          clientEstimatedFare:
-            typeof data?.estimatedFare === "number"
-              ? data.estimatedFare
-              : typeof data?.estimated?.amount === "number"
-              ? data.estimated.amount
-              : estimatedFare,
+        dropoffLocation: {
+          address: data?.dropoffLocation?.address || null,
+          zone: dropoffZone,
+          coordinates: dropArr, // [lng, lat]
         },
-        pickupLocation: pickupGeo,
-        dropoffLocation: dropoffGeo,
+        waypoints: Array.isArray(data?.waypoints) ? data.waypoints : [],
+        // Required distance fields
         distance: distanceKm,
         distanceInMeters,
-        serviceType: bookingServiceType,
-        serviceCategory: bookingServiceCategory,
-        vehicleDetails: data.vehicleDetails || {},
+        // Required fare fields
+        fare,
+        offeredFare,
+        // Detailed fareDetails
+        fareDetails: {
+          currency: currencyFromConfig,
+          routeType: data?.routeType || undefined,
+          estimatedDistance: distanceKm,
+          estimatedFare: estimatedFare,
+          baseFare: Number(computed?.baseFare || 0),
+          distanceFare: Number(computed?.distanceFare || 0),
+          platformFee: Number(computed?.platformFee || 0),
+          nightCharges: Number(computed?.nightCharges || 0),
+          surgeCharges: Number(computed?.surgeCharges || 0),
+          waitingCharges: Number(computed?.waitingCharges || 0),
+          cancellationCharges: Number(computed?.cancellationCharges || 0),
+          vatAmount: Number(computed?.vatAmount || 0),
+          subtotal: Number(computed?.subtotal || 0),
+          breakdown: computed?.breakdown || {},
+          alerts: computed?.alerts || [],
+          negotiation: {
+            state: "open",
+            proposed: null,
+            history: [],
+          },
+        },
       };
-      this.activeRecoveries.set(bid, recoveryRequest);
 
-      // Allowed fare adjustment for requester
-      const adjustment = await (async () => {
-        try {
-          const pc = await PricingConfig.findOne({
-            serviceType: "car_recovery",
-            isActive: true,
-          }).lean();
-          const cfg = pc?.fareAdjustmentSettings || {
-            allowedAdjustmentPercentage: 3,
-          };
-          const pct = Number(cfg.allowedAdjustmentPercentage || 3);
-          const base =
-            (typeof data?.estimatedFare === "number"
-              ? data.estimatedFare
-              : typeof data?.estimated?.amount === "number"
-              ? data.estimated.amount
-              : estimatedFare) || 0;
-          const minFare = Math.round(base * (1 - pct / 100) * 100) / 100;
-          const maxFare = Math.round(base * (1 + pct / 100) * 100) / 100;
-          return { allowedPct: pct, min: minFare, max: maxFare };
-        } catch {
-          const pct = 3;
-          const base =
-            (typeof data?.estimatedFare === "number"
-              ? data.estimatedFare
-              : typeof data?.estimated?.amount === "number"
-              ? data.estimated.amount
-              : estimatedFare) || 0;
-          const minFare = Math.round(base * (1 - pct / 100) * 100) / 100;
-          const maxFare = Math.round(base * (1 + pct / 100) * 100) / 100;
-          return { allowedPct: pct, min: minFare, max: maxFare };
+      // Targeted driver preference (optional)
+      const preferredDriverId = String(data?.driverId || "").trim();
+      if (preferredDriverId) {
+        insertDoc.pendingAssignment = { driverId: preferredDriverId, at: now };
+      }
+
+      // Persist booking
+      const booking = await Booking.create(insertDoc);
+      const bookingId = String(booking._id);
+
+      // Build customer profile once for all driver notifications
+      let customerProfile = null;
+      try {
+        if (userId) {
+          const cust = await User.findById(userId)
+            .select(
+              "firstName lastName email phoneNumber selfieImage username avatarUrl"
+            )
+            .lean();
+          customerProfile = buildCustomerProfile(cust);
         }
-      })();
+      } catch {}
 
-      // Notify requester request created
+      // Cache
+      const rec = {
+        status: "pending",
+        createdAt: now,
+        bookingId,
+        userId,
+        pickupLocation: insertDoc.pickupLocation,
+        dropoffLocation: insertDoc.dropoffLocation,
+        estimatedFare,
+        currency: currencyFromConfig,
+        freeStay: {},
+        statusHistory: [{ status: "pending", timestamp: now }],
+      };
+      this.activeRecoveries.set(bookingId, rec);
+
+      // ACK to requester
       this.emitToClient(ws, {
-        event: "recovery.request_created",
-        bookingId: bid,
+        event: "request.created",
+        bookingId,
         data: {
           status: "pending",
-          estimatedTime: "Calculating...",
-          message: "Looking for available drivers",
-          fare: {
-            estimated: {
-              admin: undefined,
-              customer:
-                typeof data?.estimatedFare === "number"
-                  ? data.estimatedFare
-                  : typeof data?.estimated?.amount === "number"
-                  ? data.estimated.amount
-                  : estimatedFare,
-            },
-            finalFare: null,
-            adjustment,
+          bookingId,
+          serviceType,
+          serviceCategory,
+          pickupLocation: insertDoc.pickupLocation,
+          dropoffLocation: insertDoc.dropoffLocation,
+          distance: distanceKm,
+          distanceInMeters,
+          fare: { estimated: { customer: estimatedFare } },
+          fareDetails: {
+            currency: currencyFromConfig,
+            estimatedDistance: distanceKm,
+            estimatedFare,
+            baseFare: insertDoc.fareDetails.baseFare,
+            distanceFare: insertDoc.fareDetails.distanceFare,
+            platformFee: insertDoc.fareDetails.platformFee,
+            nightCharges: insertDoc.fareDetails.nightCharges,
+            surgeCharges: insertDoc.fareDetails.surgeCharges,
+            waitingCharges: insertDoc.fareDetails.waitingCharges,
+            cancellationCharges: insertDoc.fareDetails.cancellationCharges,
+            vatAmount: insertDoc.fareDetails.vatAmount,
+            subtotal: insertDoc.fareDetails.subtotal,
+            breakdown: insertDoc.fareDetails.breakdown,
+            alerts: insertDoc.fareDetails.alerts,
+            negotiation: insertDoc.fareDetails.negotiation,
           },
+          createdAt: now,
         },
       });
 
-      // Nearby drivers (first pass)
-      const nearbyDrivers1 = await this.getAvailableDrivers(
-        recoveryRequest.pickupLocation,
-        recoveryRequest.searchRadiusKm || 15,
-        recoveryRequest.discoveryFilters || {}
+      // Discover nearby drivers
+      const searchRadiusKm = Math.max(
+        1,
+        Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 15))
+      );
+      let discoveryFilters = {
+        pinkCaptainOnly: !!(
+          data?.pinkCaptainOnly || data?.preferences?.pinkCaptainOnly
+        ),
+        safety: {
+          familyWithGuardianMale: !!data?.preferences?.familyWithGuardianMale,
+          noMaleCompanion: !!data?.preferences?.noMaleCompanion,
+          maleWithoutFemale: !!data?.preferences?.maleWithoutFemale,
+        },
+        preferredDispatch: {
+          mode:
+            data?.dispatchPreference ||
+            data?.preferredDispatch?.mode ||
+            data?.preferences?.dispatchMode ||
+            null,
+          driverId:
+            data?.pinnedDriverId ||
+            data?.preferredDispatch?.driverId ||
+            data?.preferences?.pinnedDriverId ||
+            null,
+        },
+      };
+
+      const pickupGeoForDiscovery = {
+        type: "Point",
+        coordinates: [pickArr[0], pickArr[1]],
+        address: insertDoc.pickupLocation.address || "Unknown",
+        zone: pickupZone,
+      };
+
+      let nearbyDrivers = await this.getAvailableDrivers(
+        pickupGeoForDiscovery,
+        searchRadiusKm,
+        discoveryFilters
       );
 
-      // Second-chance discovery if first pass returns none
-      let finalDrivers = nearbyDrivers1;
-      if (!finalDrivers || finalDrivers.length === 0) {
-        // 1) Try larger radius
-        const widerRadius = Math.min(
-          50,
-          Math.ceil((recoveryRequest.searchRadiusKm || 15) * 1.5)
-        );
-        const attempt2 = await this.getAvailableDrivers(
-          recoveryRequest.pickupLocation,
+      // Second pass if none found
+      if (!nearbyDrivers || nearbyDrivers.length === 0) {
+        const widerRadius = Math.min(50, Math.ceil(searchRadiusKm * 1.5));
+        nearbyDrivers = await this.getAvailableDrivers(
+          pickupGeoForDiscovery,
           widerRadius,
-          recoveryRequest.discoveryFilters || {}
+          discoveryFilters
         );
-        finalDrivers = attempt2;
-
-        // 2) Try ignoreGeo to compute via DB/Redis without $near
-        if (!finalDrivers || finalDrivers.length === 0) {
-          const filters2 = {
-            ...(recoveryRequest.discoveryFilters || {}),
-            ignoreGeo: true,
-          };
-          const attempt3 = await this.getAvailableDrivers(
-            recoveryRequest.pickupLocation,
+        if (!nearbyDrivers || nearbyDrivers.length === 0) {
+          const filters2 = { ...discoveryFilters, ignoreGeo: true };
+          nearbyDrivers = await this.getAvailableDrivers(
+            pickupGeoForDiscovery,
             widerRadius,
             filters2
           );
-          finalDrivers = attempt3;
         }
       }
 
-      // Emit available drivers to requester
+      // Emit available drivers list to requester
       this.emitToClient(ws, {
         event: "carRecovery:driversAvailable",
-        bookingId: bid,
+        bookingId,
         data: {
-          drivers: finalDrivers,
-          count: finalDrivers.length,
+          drivers: nearbyDrivers || [],
+          count: nearbyDrivers?.length || 0,
           updatedAt: new Date(),
-          dispatchMode:
-            recoveryRequest.discoveryFilters?.preferredDispatch?.mode || null,
+          dispatchMode: discoveryFilters?.preferredDispatch?.mode || null,
         },
       });
 
-      // NEW: Notify each discovered driver about the new recovery request
+      // Notify targeted preferred driver (both event names)
       try {
-        const targets = (finalDrivers || [])
+        if (preferredDriverId) {
+          const driverPayloadNew = {
+            event: "recovery.requested",
+            bookingId,
+            data: {
+              serviceType,
+              serviceCategory,
+              pickupLocation: insertDoc.pickupLocation,
+              dropoffLocation: insertDoc.dropoffLocation,
+              distance: distanceKm,
+              estimatedFare,
+              currency: currencyFromConfig,
+              vehicleType:
+                data?.vehicleType ||
+                data?.vehicleDetails?.type ||
+                data?.vehicleDetails?.vehicleType ||
+                null,
+              customer: customerProfile,
+              at: now,
+            },
+          };
+          const driverPayloadLegacy = {
+            event: "newRecoveryRequest",
+            bookingId,
+            data: {
+              bookingId,
+              serviceType,
+              serviceCategory,
+              pickupLocation: insertDoc.pickupLocation,
+              dropoffLocation: insertDoc.dropoffLocation,
+              distanceKm,
+              estimatedFare,
+              customer: customerProfile,
+              at: now.toISOString(),
+            },
+          };
+          this.webSocketService.sendToUser(
+            String(preferredDriverId),
+            driverPayloadNew
+          );
+          this.webSocketService.sendToUser(
+            String(preferredDriverId),
+            driverPayloadLegacy
+          );
+        }
+      } catch {}
+
+      // Notify each discovered driver (direct ping) with both event names
+      try {
+        const targets = (nearbyDrivers || [])
           .map((d) => String(d.id || d._id || "").trim())
           .filter(Boolean);
 
-        for (const driverId of targets) {
-          this.webSocketService.sendToUser(driverId, {
-            event: "newRecoveryRequest",
-            bookingId: bid,
+        for (const drvId of targets) {
+          this.webSocketService.sendToUser(String(drvId), {
+            event: "recovery.requested",
+            bookingId,
             data: {
-              bookingId: bid,
-              serviceType: bookingServiceType,
-              serviceCategory: bookingServiceCategory,
-              pickupLocation: pickupGeo,
-              dropoffLocation: dropoffGeo,
+              serviceType,
+              serviceCategory,
+              pickupLocation: insertDoc.pickupLocation,
+              dropoffLocation: insertDoc.dropoffLocation,
+              distance: distanceKm,
+              estimatedFare,
+              currency: currencyFromConfig,
+              vehicleType:
+                data?.vehicleType ||
+                data?.vehicleDetails?.type ||
+                data?.vehicleDetails?.vehicleType ||
+                null,
+              customer: customerProfile,
+              at: now,
+            },
+          });
+          this.webSocketService.sendToUser(String(drvId), {
+            event: "newRecoveryRequest",
+            bookingId,
+            data: {
+              bookingId,
+              serviceType,
+              serviceCategory,
+              pickupLocation: insertDoc.pickupLocation,
+              dropoffLocation: insertDoc.dropoffLocation,
               distanceKm,
               estimatedFare,
-              at: new Date().toISOString(),
+              customer: customerProfile,
+              at: now.toISOString(),
             },
           });
         }
       } catch (e) {
-        logger.warn("Broadcast to drivers failed:", e?.message || e);
+        logger.warn(
+          "Direct notify to discovered drivers failed:",
+          e?.message || e
+        );
       }
+
+      // Broadcast to room (both event names)
+      try {
+        const roomName = `svc:${normKey("car recovery")}`;
+        const newEventPayload = {
+          event: "recovery.requested",
+          bookingId,
+          data: {
+            serviceType,
+            serviceCategory,
+            pickupLocation: insertDoc.pickupLocation,
+            dropoffLocation: insertDoc.dropoffLocation,
+            distance: distanceKm,
+            estimatedFare,
+            currency: currencyFromConfig,
+            vehicleType:
+              data?.vehicleType ||
+              data?.vehicleDetails?.type ||
+              data?.vehicleDetails?.vehicleType ||
+              null,
+            customer: customerProfile,
+            at: now,
+          },
+        };
+        const legacyEventPayload = {
+          event: "newRecoveryRequest",
+          bookingId,
+          data: {
+            bookingId,
+            serviceType,
+            serviceCategory,
+            pickupLocation: insertDoc.pickupLocation,
+            dropoffLocation: insertDoc.dropoffLocation,
+            distanceKm,
+            estimatedFare,
+            customer: customerProfile,
+            at: now.toISOString(),
+          },
+        };
+        if (this.webSocketService?.sendToRoom) {
+          this.webSocketService.sendToRoom(roomName, newEventPayload);
+          this.webSocketService.sendToRoom(roomName, legacyEventPayload);
+        }
+      } catch {}
     } catch (error) {
       logger.error("Error in handleRecoveryRequest:", error);
       this.emitToClient(ws, {
@@ -4869,7 +4969,7 @@ class RecoveryHandler {
       return {
         id: String(u._id || u.id || ""),
         name: name || u.username || "User",
-        image: u.profilePicture || u.avatarUrl || null,
+        image: u.selfieImage || u.avatarUrl || null,
       };
     };
     const buildProfile = (u) => {
@@ -4880,7 +4980,7 @@ class RecoveryHandler {
         name: name || u.username || "User",
         email: u.email || null,
         phone: u.phoneNumber || u.phone || null,
-        image: u.profilePicture || u.avatarUrl || null,
+        image: u.selfieImage || u.avatarUrl || null,
       };
     };
 
@@ -4955,14 +5055,14 @@ class RecoveryHandler {
         if (by === "driver") {
           const drv = await User.findById(ws?.user?.id || ws?.user?._id)
             .select(
-              "firstName lastName email phoneNumber profilePicture username avatarUrl"
+              "firstName lastName email phoneNumber selfieImage username avatarUrl"
             )
             .lean();
           offeredBy = buildInfo(drv);
           if (booking?.user) {
             const cust = await User.findById(booking.user)
               .select(
-                "firstName lastName email phoneNumber profilePicture username avatarUrl"
+                "firstName lastName email phoneNumber selfieImage username avatarUrl"
               )
               .lean();
             counterparty = buildProfile(cust);
@@ -4971,7 +5071,7 @@ class RecoveryHandler {
           if (booking?.user) {
             const cust = await User.findById(booking.user)
               .select(
-                "firstName lastName email phoneNumber profilePicture username avatarUrl"
+                "firstName lastName email phoneNumber selfieImage username avatarUrl"
               )
               .lean();
             offeredBy = buildInfo(cust);
@@ -4980,7 +5080,7 @@ class RecoveryHandler {
           if (targetDriverId) {
             const drv = await User.findById(String(targetDriverId))
               .select(
-                "firstName lastName email phoneNumber profilePicture username avatarUrl"
+                "firstName lastName email phoneNumber selfieImage username avatarUrl"
               )
               .lean();
             counterparty = buildProfile(drv);
@@ -5304,7 +5404,7 @@ class RecoveryHandler {
           try {
             if (booking.driver) {
               const d = await User.findById(booking.driver).select(
-                "firstName lastName email phoneNumber profilePicture"
+                "firstName lastName email phoneNumber selfieImage"
               );
               driverProfile = d
                 ? {
@@ -5312,7 +5412,7 @@ class RecoveryHandler {
                     name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
                     email: d.email || null,
                     phone: d.phoneNumber || null,
-                    image: d.profilePicture || null,
+                    image: d.selfieImage || null,
                   }
                 : null;
 
@@ -5396,7 +5496,7 @@ class RecoveryHandler {
 
       // Validate driver (allow online/busy/on_ride)
       const driver = await User.findById(driverId).select(
-        "firstName lastName email phoneNumber profilePicture role kycStatus kycLevel isActive driverStatus"
+        "firstName lastName email phoneNumber selfieImage role kycStatus kycLevel isActive driverStatus"
       );
       if (!driver || driver.role !== "driver")
         throw new Error("Invalid driver");
@@ -5493,7 +5593,7 @@ class RecoveryHandler {
         name: `${driver.firstName ?? ""} ${driver.lastName ?? ""}`.trim(),
         email: driver.email || null,
         phone: driver.phoneNumber || null,
-        image: driver.profilePicture || null,
+        image: driver.selfieImage || null,
       };
 
       let vehicleDetails = null;
