@@ -35,8 +35,16 @@ class WebSocketService {
    * Initialize event handlers
    */
   initializeEventHandlers() {
-    // RecoveryHandler already self-registers all its WS events in its constructor.
-    // Do NOT re-register them here to avoid duplicate handler invocations.
+    // Safety binds for dynamic "I'm coming" message in case RH registration hasn't happened yet
+    this.on("recovery.on_the_way", (ws, payload) =>
+      this.recoveryHandler.handleDriverOnTheWay(ws, payload)
+    );
+    this.on("driver:on_the_way", (ws, payload) =>
+      this.recoveryHandler.handleDriverOnTheWay(ws, payload)
+    );
+    this.on("driver.on_the_way", (ws, payload) =>
+      this.recoveryHandler.handleDriverOnTheWay(ws, payload)
+    );
 
     // Prevent 'Unhandled event: authenticated' if clients echo server's AUTHENTICATED message
     this.on("authenticated", async () => {
@@ -58,7 +66,6 @@ class WebSocketService {
         this.joinRoom(ws, `role:${role}`);
         this.joinRoom(ws, `user:${ws.userId}`);
         ws.user.role = role;
-
         // Optionally join service/subservice rooms
         // Expected data.services: [{ serviceType: 'car recovery'|'car cab'|'bike'|..., subService: 'towing'|'winching'|... }]
         if (Array.isArray(data?.services)) {
