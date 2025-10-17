@@ -4854,6 +4854,36 @@ class RecoveryHandler {
    * Driver payload:   { bookingId, amount, currency? }  // driverId inferred from ws token
    */
   async handleFareOffer(ws, message) {
+    // Helpers
+    const toNum = (v) => {
+      if (typeof v === "number") return Number.isFinite(v) ? v : null;
+      if (typeof v === "string" && v.trim() !== "") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+    const buildInfo = (u) => {
+      if (!u) return null;
+      const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
+      return {
+        id: String(u._id || u.id || ""),
+        name: name || u.username || "User",
+        image: u.profilePicture || u.avatarUrl || null,
+      };
+    };
+    const buildProfile = (u) => {
+      if (!u) return null;
+      const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
+      return {
+        id: String(u._id || u.id || ""),
+        name: name || u.username || "User",
+        email: u.email || null,
+        phone: u.phoneNumber || u.phone || null,
+        image: u.profilePicture || u.avatarUrl || null,
+      };
+    };
+
     // Normalize
     let msg = message || {};
     if (typeof msg === "string") {
@@ -4864,340 +4894,246 @@ class RecoveryHandler {
       }
     }
     const data = msg?.data || {};
-    const bookingId = String(data?.bookingId || "").trim();
+    const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
+    const action = String(data?.action || "").toLowerCase();
     const currency = data?.currency || "AED";
-    const role = String(ws?.user?.role || "").toLowerCase();
-    const isDriver = role === "driver";
-    const isCustomer =
-      role === "user" || role === "customer" || role === "client";
-
-    const isFiniteNumber = (v) => typeof v === "number" && Number.isFinite(v);
 
     try {
       if (!bookingId) throw new Error("bookingId is required");
-      const amount = Number(data?.amount);
-      if (!isFiniteNumber(amount) || amount <= 0) {
-        throw new Error("positive numeric amount is required");
-      }
 
       // Load booking
       const booking = await Booking.findById(bookingId).select(
-        "status user driver fareDetails pickupLocation dropoffLocation vehicleDetails"
+        "status user driver fareDetails pickupLocation dropoffLocation"
       );
       if (!booking) throw new Error("Booking not found");
 
-      // Only allow offers while booking is open for negotiation
-      const allowedForOffer = new Set([
-        "pending",
-        "requested",
-        "searching",
-        "assigned",
-      ]);
-      if (!allowedForOffer.has(String(booking.status))) {
-        throw new Error(`Cannot offer fare on a ${booking.status} booking`);
+      // Actor detection
+      const role = String(ws?.user?.role || "").toLowerCase();
+      let by =
+        data?.by &&
+        ["driver", "customer"].includes(String(data.by).toLowerCase())
+          ? String(data.by).toLowerCase()
+          : null;
+      const isDriver = role === "driver";
+      const isCustomer = ["user", "customer", "client"].includes(role);
+      if (isDriver) by = "driver";
+      if (isCustomer) by = "customer";
+      if (!by) {
+        if (
+          ws?.user?._id &&
+          booking?.user &&
+          String(booking.user) === String(ws.user._id)
+        )
+          by = "customer";
+        else if (
+          ws?.user?._id &&
+          booking?.driver &&
+          String(booking.driver) === String(ws.user._id)
+        )
+          by = "driver";
+        else by = "customer";
       }
 
-      // Determine window anchor
-      const anchor =
-        Number(booking?.fareDetails?.finalFare?.amount) ||
-        Number(booking?.fareDetails?.estimatedFare?.amount) ||
-        (typeof booking?.fareDetails?.estimatedFare === "number"
-          ? Number(booking?.fareDetails?.estimatedFare)
-          : 0) ||
-        amount;
-
-      const window =
-        typeof this._getAllowedFareWindow === "function"
-          ? await this._getAllowedFareWindow(anchor)
-          : (() => {
-              const pct = 3;
-              const min = Math.max(
-                0,
-                Math.round(anchor * (1 - pct / 100) * 100) / 100
-              );
-              const max = Math.round(anchor * (1 + pct / 100) * 100) / 100;
-              return { allowedPct: pct, minFare: min, maxFare: max };
-            })();
-
-      if (!(amount >= window.minFare && amount <= window.maxFare)) {
-        throw new Error(
-          `Offered amount must be between ${window.minFare} and ${window.maxFare} ${currency}`
-        );
+      // Resolve driverId context
+      let driverId = null;
+      if (by === "driver") {
+        driverId = String(ws?.user?.id || ws?.user?._id || "").trim() || null;
+      } else {
+        driverId =
+          String(data?.driverId || "").trim() ||
+          (booking?.driver ? String(booking.driver) : "") ||
+          "";
+        driverId = driverId || null;
       }
 
       const now = new Date();
 
-      // Minimal display info helper for NOTIFY payloads
-      const buildInfo = (u) => {
-        if (!u) return null;
-        const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
-        return {
-          id: String(u._id || ""),
-          name: name || u.username || "User",
-          image: u.profilePicture || u.avatarUrl || null,
-        };
-      };
-
-      // Full profile helper for ACK payloads (name, email, phone, image)
-      const buildProfile = (u) => {
-        if (!u) return null;
-        const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
-        return {
-          id: String(u._id || ""),
-          name: name || u.username || "User",
-          email: u.email || null,
-          phone: u.phoneNumber || u.phone || null,
-          image: u.profilePicture || u.avatarUrl || null,
-        };
-      };
-
-      // Route info (distance/time)
-      const pickup = booking?.pickupLocation;
-      const dropoff = booking?.dropoffLocation;
-      let route = { distanceKm: null, timeMinutes: null };
+      // Build actor/counterparty info
+      let offeredBy = null;
+      let counterparty = null;
       try {
-        const pLat = pickup?.coordinates?.[1];
-        const pLng = pickup?.coordinates?.[0];
-        const dLat = dropoff?.coordinates?.[1];
-        const dLng = dropoff?.coordinates?.[0];
-        const haveCoords = [pLat, pLng, dLat, dLng].every(
-          (v) => typeof v === "number"
-        );
-        if (haveCoords) {
-          const distanceKm = this._calcDistanceKm(
-            { lat: pLat, lng: pLng },
-            { lat: dLat, lng: dLng }
-          );
-          route.distanceKm = distanceKm;
-          try {
-            const eta = this.calculateETA(
-              { lat: pLat, lng: pLng },
-              { lat: dLat, lng: dLng }
-            );
-            route.timeMinutes = eta?.minutes ?? null;
-          } catch {}
-        }
-      } catch {}
-
-      // Vehicle display name
-      const vd = booking?.vehicleDetails || {};
-      const vehicleName =
-        vd?.name ||
-        vd?.model ||
-        vd?.make ||
-        vd?.type ||
-        vd?.vehicleType ||
-        null;
-
-      // CUSTOMER -> DRIVER offer
-      if (isCustomer) {
-        const driverId = String(data?.driverId || "").trim();
-        if (!driverId)
-          throw new Error("driverId is required for customer offer");
-
-        // offeredBy (customer) for notify
-        let offeredBy = null;
-        try {
-          const cust = booking?.user
-            ? await User.findById(booking.user)
-                .select("firstName lastName profilePicture username avatarUrl")
-                .lean()
-            : null;
-          offeredBy = buildInfo(cust);
-        } catch {}
-
-        // counterparty (driver) for ACK to customer (name, email, phone, image)
-        let counterparty = null;
-        try {
-          const drv = await User.findById(driverId)
+        if (by === "driver") {
+          const drv = await User.findById(ws?.user?.id || ws?.user?._id)
             .select(
               "firstName lastName email phoneNumber profilePicture username avatarUrl"
             )
             .lean();
-          counterparty = buildProfile(drv);
-        } catch {}
-
-        // Persist negotiation state
-        await Booking.findByIdAndUpdate(
-          bookingId,
-          {
-            $set: {
-              "fareDetails.negotiation.state": "proposed",
-              "fareDetails.negotiation.updatedAt": now,
-              "fareDetails.negotiation.proposed": {
-                by: "customer",
-                amount,
-                currency,
-                at: now,
-                bounds: {
-                  min: window.minFare,
-                  max: window.maxFare,
-                  allowedPct: window.allowedPct,
-                },
-              },
-            },
-            $push: {
-              "fareDetails.negotiation.history": {
-                action: "offer",
-                by: "customer",
-                amount,
-                currency,
-                at: now,
-                bounds: {
-                  min: window.minFare,
-                  max: window.maxFare,
-                  allowedPct: window.allowedPct,
-                },
-              },
-            },
-          },
-          { new: false }
-        );
-
-        // Notify driver (show customer’s name/image + vehicle, route)
-        this.webSocketService.sendToUser(String(driverId), {
-          event: "fare.offer",
-          bookingId,
-          data: {
-            amount,
-            currency,
-            by: "customer",
-            offeredBy,
-            vehicleName,
-            route,
-            pickupLocation: booking.pickupLocation,
-            dropoffLocation: booking.dropoffLocation,
-            minFare: window.minFare,
-            maxFare: window.maxFare,
-          },
-        });
-
-        // Ack to customer (mirror + driver profile)
-        this.emitToClient(ws, {
-          event: "fare.offer.ack",
-          bookingId,
-          data: {
-            amount,
-            currency,
-            by: "customer",
-            offeredBy,
-            vehicleName,
-            route,
-            minFare: window.minFare,
-            maxFare: window.maxFare,
-            counterparty,
-          },
-        });
-        return;
-      }
-
-      // DRIVER -> CUSTOMER offer
-      if (isDriver) {
-        const driverId = String(ws?.user?.id || ws?.user?._id || "").trim();
-        if (!driverId) throw new Error("driver identity required");
-
-        // offeredBy (driver) for notify
-        let offeredBy = null;
-        try {
-          const drv = await User.findById(driverId)
-            .select("firstName lastName profilePicture username avatarUrl")
-            .lean();
           offeredBy = buildInfo(drv);
-        } catch {}
+          if (booking?.user) {
+            const cust = await User.findById(booking.user)
+              .select(
+                "firstName lastName email phoneNumber profilePicture username avatarUrl"
+              )
+              .lean();
+            counterparty = buildProfile(cust);
+          }
+        } else {
+          if (booking?.user) {
+            const cust = await User.findById(booking.user)
+              .select(
+                "firstName lastName email phoneNumber profilePicture username avatarUrl"
+              )
+              .lean();
+            offeredBy = buildInfo(cust);
+          }
+          const targetDriverId = driverId || booking?.driver || null;
+          if (targetDriverId) {
+            const drv = await User.findById(String(targetDriverId))
+              .select(
+                "firstName lastName email phoneNumber profilePicture username avatarUrl"
+              )
+              .lean();
+            counterparty = buildProfile(drv);
+          }
+        }
+      } catch {}
 
-        // counterparty (customer) for ACK to driver (name, email, phone, image)
-        let counterparty = null;
-        try {
-          const cust = booking?.user
-            ? await User.findById(booking.user)
-                .select(
-                  "firstName lastName email phoneNumber profilePicture username avatarUrl"
-                )
-                .lean()
-            : null;
-          counterparty = buildProfile(cust);
-        } catch {}
-
-        // Persist driver proposal
-        await Booking.findByIdAndUpdate(
-          bookingId,
-          {
-            $set: {
-              "fareDetails.negotiation.state": "proposed",
-              "fareDetails.negotiation.updatedAt": now,
-              "fareDetails.negotiation.proposed": {
-                by: "driver",
-                amount,
-                currency,
-                at: now,
-                driverId,
-                bounds: {
-                  min: window.minFare,
-                  max: window.maxFare,
-                  allowedPct: window.allowedPct,
-                },
-              },
-            },
-            $push: {
-              "fareDetails.negotiation.history": {
-                action: "offer",
-                by: "driver",
-                amount,
-                currency,
-                at: now,
-                driverId,
-                bounds: {
-                  min: window.minFare,
-                  max: window.maxFare,
-                  allowedPct: window.allowedPct,
-                },
-              },
+      // If user is rejecting the offer
+      if (action === "reject") {
+        // Terminal states still allow rejecting with a soft ACK, no throws
+        const update = {
+          $set: {
+            "fareDetails.negotiation.state": "rejected",
+            "fareDetails.negotiation.lastAction": {
+              by,
+              action: "reject",
+              at: now,
             },
           },
-          { new: false }
-        );
-
-        // Notify customer (show driver’s name/image + vehicle, route)
-        if (booking.user) {
-          this.webSocketService.sendToUser(String(booking.user), {
-            event: "fare.offer",
-            bookingId,
-            data: {
-              amount,
-              currency,
-              by: "driver",
-              driverId,
-              offeredBy,
-              vehicleName,
-              route,
-              pickupLocation: booking.pickupLocation,
-              dropoffLocation: booking.dropoffLocation,
-              minFare: window.minFare,
-              maxFare: window.maxFare,
+          $push: {
+            "fareDetails.negotiation.history": {
+              action: "reject",
+              by,
+              at: now,
             },
-          });
+          },
+        };
+        try {
+          await Booking.findByIdAndUpdate(bookingId, update, { new: false });
+        } catch {
+          // Even if update fails (e.g., terminal booking), proceed with ACK notifications
         }
 
-        // Ack to driver (mirror + customer profile)
+        // ACK to caller
+        this.emitToClient(ws, {
+          event: "fare.offer.reject.ack",
+          bookingId,
+          data: {
+            status: booking.status,
+            negotiationState: "rejected",
+            by,
+            at: now,
+            offeredBy,
+            counterparty,
+          },
+        });
+
+        // Notify counterpart of rejection
+        try {
+          const toCustomer = String(booking.user || "");
+          const toDriver = String(driverId || booking.driver || "");
+          const payload = {
+            event: "fare.offer.rejected",
+            bookingId,
+            data: {
+              by,
+              at: now,
+              pickupLocation: booking.pickupLocation,
+              dropoffLocation: booking.dropoffLocation,
+              offeredBy,
+              counterparty,
+            },
+          };
+          if (by === "driver" && toCustomer)
+            this.webSocketService.sendToUser(toCustomer, payload);
+          if (by === "customer" && toDriver)
+            this.webSocketService.sendToUser(toDriver, payload);
+        } catch {}
+        return;
+      }
+
+      // Regular offer path
+      const amount =
+        toNum(data?.amount) ??
+        toNum(data?.offer) ??
+        toNum(data?.proposed?.amount);
+
+      // Tolerant flow: if booking already accepted/in_progress, don't throw on first attempt.
+      if (["accepted", "in_progress"].includes(String(booking.status))) {
+        // Soft-ACK with negotiation closed
         this.emitToClient(ws, {
           event: "fare.offer.ack",
           bookingId,
           data: {
-            amount,
-            currency,
-            by: "driver",
+            status: booking.status,
+            proposed: amount ? { amount, currency, by, at: now } : null,
+            negotiationState: "closed",
+            message: "Negotiation is closed for this booking",
             offeredBy,
-            vehicleName,
-            route,
-            minFare: window.minFare,
-            maxFare: window.maxFare,
             counterparty,
           },
         });
+        // Do not notify counterpart in closed state to avoid confusion
         return;
       }
 
-      throw new Error("Only drivers or customers can send fare offers");
+      // Validate amount only for open bookings
+      if (!amount || amount <= 0) throw new Error("Valid amount is required");
+
+      // Persist negotiation state + proposed
+      const update = {
+        $set: {
+          "fareDetails.negotiation.state":
+            booking?.fareDetails?.negotiation?.state || "open",
+          "fareDetails.negotiation.proposed": { amount, currency, by, at: now },
+        },
+        $push: {
+          "fareDetails.negotiation.history": {
+            action: "offer",
+            by,
+            amount,
+            currency,
+            at: now,
+          },
+        },
+      };
+      await Booking.findByIdAndUpdate(bookingId, update, { new: false });
+
+      // ACK to caller
+      this.emitToClient(ws, {
+        event: "fare.offer.ack",
+        bookingId,
+        data: {
+          status: booking.status,
+          proposed: { amount, currency, by, at: now },
+          negotiationState: booking?.fareDetails?.negotiation?.state || "open",
+          offeredBy,
+          counterparty,
+        },
+      });
+
+      // Notify counterpart
+      try {
+        const toCustomer = String(booking.user || "");
+        const toDriver = String(driverId || booking.driver || "");
+        const payload = {
+          event: "fare.offered",
+          bookingId,
+          data: {
+            amount,
+            currency,
+            by,
+            at: now,
+            pickupLocation: booking.pickupLocation,
+            dropoffLocation: booking.dropoffLocation,
+            offeredBy,
+          },
+        };
+        if (by === "driver" && toCustomer)
+          this.webSocketService.sendToUser(toCustomer, payload);
+        if (by === "customer" && toDriver)
+          this.webSocketService.sendToUser(toDriver, payload);
+      } catch {}
     } catch (error) {
       logger.error("Error in handleFareOffer:", error);
       this.emitToClient(ws, {
