@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-
 const bookingSchema = new mongoose.Schema({
   // Idempotent create support: unique per create request (client-provided or backend-generated)
   idempotencyKey: {
@@ -17,21 +16,23 @@ const bookingSchema = new mongoose.Schema({
     ref: "User",
     required: false,
   },
-  rejectedDrivers: [{
-    driver: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
+  rejectedDrivers: [
+    {
+      driver: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      reason: {
+        type: String,
+        default: "No reason provided",
+      },
+      rejectedAt: {
+        type: Date,
+        default: Date.now,
+      },
     },
-    reason: {
-      type: String,
-      default: "No reason provided",
-    },
-    rejectedAt: {
-      type: Date,
-      default: Date.now,
-    },
-  }],
+  ],
   acceptedAt: {
     type: Date,
     required: false,
@@ -157,7 +158,14 @@ const bookingSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ["pending", "accepted", "started", "in_progress", "completed", "cancelled"],
+    enum: [
+      "pending",
+      "accepted",
+      "started",
+      "in_progress",
+      "completed",
+      "cancelled",
+    ],
     default: "pending",
   },
   serviceType: {
@@ -342,28 +350,30 @@ const bookingSchema = new mongoose.Schema({
     type: Number,
     required: false,
   },
-  userFareIncreases: [{
-    originalFare: {
-      type: Number,
-      required: true,
+  userFareIncreases: [
+    {
+      originalFare: {
+        type: Number,
+        required: true,
+      },
+      increasedFare: {
+        type: Number,
+        required: true,
+      },
+      reason: {
+        type: String,
+        default: "No drivers responding",
+      },
+      increasedAt: {
+        type: Date,
+        default: Date.now,
+      },
+      resendAttempt: {
+        type: Number,
+        required: true,
+      },
     },
-    increasedFare: {
-      type: Number,
-      required: true,
-    },
-    reason: {
-      type: String,
-      default: "No drivers responding",
-    },
-    increasedAt: {
-      type: Date,
-      default: Date.now,
-    },
-    resendAttempt: {
-      type: Number,
-      required: true,
-    },
-  }],
+  ],
   resendAttempts: {
     type: Number,
     default: 0,
@@ -376,85 +386,89 @@ const bookingSchema = new mongoose.Schema({
     type: Date,
     required: false,
   },
-  driverOffers: [{
-    amount: {
-      type: Number,
-      required: true,
+  driverOffers: [
+    {
+      amount: {
+        type: Number,
+        required: true,
+      },
+      offeredBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      driverName: {
+        type: String,
+        required: false,
+      },
+      driverRating: {
+        type: Number,
+        required: false,
+      },
+      vehicleInfo: {
+        model: { type: String, required: false },
+        plateNumber: { type: String, required: false },
+        color: { type: String, required: false },
+      },
+      estimatedArrival: {
+        type: Number, // in minutes
+        required: false,
+      },
+      offeredAt: {
+        type: Date,
+        default: Date.now,
+      },
+      status: {
+        type: String,
+        enum: ["pending", "accepted", "rejected", "expired", "withdrawn"],
+        default: "pending",
+      },
+      userResponse: {
+        type: String,
+        enum: ["accepted", "rejected"],
+        required: false,
+      },
+      respondedAt: {
+        type: Date,
+        required: false,
+      },
+      expiresAt: {
+        type: Date,
+        required: false,
+      },
     },
-    offeredBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
+  ],
+  fareNegotiationHistory: [
+    {
+      offeredBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      amount: {
+        type: Number,
+        required: true,
+      },
+      offeredAt: {
+        type: Date,
+        default: Date.now,
+      },
+      status: {
+        type: String,
+        enum: ["pending", "accepted", "rejected", "expired"],
+        required: true,
+      },
+      userResponse: {
+        type: String,
+        enum: ["accepted", "rejected"],
+        required: false,
+      },
+      respondedAt: {
+        type: Date,
+        required: false,
+      },
     },
-    driverName: {
-      type: String,
-      required: false,
-    },
-    driverRating: {
-      type: Number,
-      required: false,
-    },
-    vehicleInfo: {
-      model: { type: String, required: false },
-      plateNumber: { type: String, required: false },
-      color: { type: String, required: false },
-    },
-    estimatedArrival: {
-      type: Number, // in minutes
-      required: false,
-    },
-    offeredAt: {
-      type: Date,
-      default: Date.now,
-    },
-    status: {
-      type: String,
-      enum: ["pending", "accepted", "rejected", "expired", "withdrawn"],
-      default: "pending",
-    },
-    userResponse: {
-      type: String,
-      enum: ["accepted", "rejected"],
-      required: false,
-    },
-    respondedAt: {
-      type: Date,
-      required: false,
-    },
-    expiresAt: {
-      type: Date,
-      required: false,
-    },
-  }],
-  fareNegotiationHistory: [{
-    offeredBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    amount: {
-      type: Number,
-      required: true,
-    },
-    offeredAt: {
-      type: Date,
-      default: Date.now,
-    },
-    status: {
-      type: String,
-      enum: ["pending", "accepted", "rejected", "expired"],
-      required: true,
-    },
-    userResponse: {
-      type: String,
-      enum: ["accepted", "rejected"],
-      required: false,
-    },
-    respondedAt: {
-      type: Date,
-      required: false,
-    },
-  }],
+  ],
   distanceInMeters: {
     type: Number,
     required: [true, "Distance in meters is required"],
@@ -466,51 +480,59 @@ const bookingSchema = new mongoose.Schema({
     required: [true, "Payment method is required"],
   },
   // Real-time messaging during ride
-  messages: [{
-    sender: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    senderType: {
-      type: String,
-      enum: ["user", "driver"],
-      required: true,
-    },
-    message: {
-      type: String,
-      required: true,
-      maxlength: 500,
-    },
-    timestamp: {
-      type: Date,
-      default: Date.now,
-    },
-    messageType: {
-      type: String,
-      enum: ["text", "location", "system"],
-      default: "text",
-    },
-    location: {
-      type: {
+  messages: [
+    {
+      sender: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      senderType: {
         type: String,
-        enum: ["Point"],
-        default: "Point",
+        enum: ["user", "driver"],
+        required: true,
       },
-      coordinates: {
-        type: [Number],
-        required: false,
+      message: {
+        type: String,
+        required: true,
+        maxlength: 500,
       },
+      timestamp: {
+        type: Date,
+        default: Date.now,
+      },
+      messageType: {
+        type: String,
+        enum: ["text", "location", "system"],
+        default: "text",
+      },
+      location: {
+        type: {
+          type: String,
+          enum: ["Point"],
+          default: "Point",
+        },
+        coordinates: {
+          type: [Number],
+          required: false,
+        },
+      },
+      language: { type: String, required: false },
+      voiceToText: { type: String, required: false },
+      attachments: [
+        {
+          url: { type: String, required: true },
+          type: {
+            type: String,
+            enum: ["image", "video", "audio", "file"],
+            default: "file",
+          },
+          mime: { type: String, required: false },
+          sizeBytes: { type: Number, required: false },
+        },
+      ],
     },
-    language: { type: String, required: false },
-    voiceToText: { type: String, required: false },
-    attachments: [{
-      url: { type: String, required: true },
-      type: { type: String, enum: ["image", "video", "audio", "file"], default: "file" },
-      mime: { type: String, required: false },
-      sizeBytes: { type: Number, required: false }
-    }]
-  }],
+  ],
   // Payment and MLM tracking
   paymentDetails: {
     totalAmount: {
@@ -630,132 +652,148 @@ const bookingSchema = new mongoose.Schema({
   fareCalculation: {
     baseFare: {
       type: Number,
-      default: 0
+      default: 0,
     },
     distanceFare: {
       type: Number,
-      default: 0
+      default: 0,
     },
     serviceFees: {
       loadingUnloading: { type: Number, default: 0 },
       packing: { type: Number, default: 0 },
       fixing: { type: Number, default: 0 },
-      helpers: { type: Number, default: 0 }
+      helpers: { type: Number, default: 0 },
     },
     locationCharges: {
       pickupStairs: { type: Number, default: 0 },
       pickupLift: { type: Number, default: 0 },
       dropoffStairs: { type: Number, default: 0 },
-      dropoffLift: { type: Number, default: 0 }
+      dropoffLift: { type: Number, default: 0 },
     },
     itemCharges: {
       type: Number,
-      default: 0
+      default: 0,
     },
     platformCharges: {
       percentage: { type: Number, default: 0 },
-      amount: { type: Number, default: 0 }
+      amount: { type: Number, default: 0 },
     },
     totalCalculatedFare: {
       type: Number,
-      default: 0
-    }
+      default: 0,
+    },
   },
   // Passenger information
   passengerCount: {
     type: Number,
     default: 1,
-    min: 1
+    min: 1,
   },
   wheelchairAccessible: {
     type: Boolean,
     default: false,
-    required: false
+    required: false,
   },
   // Driver filtering preferences
   driverFilters: {
     vehicleModel: {
       type: String,
-      required: false
+      required: false,
     },
     specificDriverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: false
+      required: false,
     },
     searchRadius: {
       type: Number,
       default: 10, // in kilometers
       min: 1,
-      max: 50
-    }
+      max: 50,
+    },
   },
   // Appointment-based service fields
   appointmentDetails: {
     isAppointmentBased: {
       type: Boolean,
-      default: false
+      default: false,
     },
     appointmentTime: {
       type: Date,
-      required: false
+      required: false,
     },
     serviceProviderLocation: {
       type: {
         type: String,
         enum: ["Point"],
-        default: "Point"
+        default: "Point",
       },
       coordinates: {
         type: [Number],
-        required: false
+        required: false,
       },
       address: {
         type: String,
-        required: false
-      }
+        required: false,
+      },
     },
     gpsCheckIn: {
       providerCheckedIn: {
         type: Boolean,
-        default: false
+        default: false,
       },
       checkInTime: {
         type: Date,
-        required: false
+        required: false,
       },
       checkInLocation: {
         type: [Number],
-        required: false
-      }
+        required: false,
+      },
     },
     confirmationSurvey: {
       customerSurvey: {
         completed: { type: Boolean, default: false },
-        experience: { type: String, enum: ["good", "bad", "didnt_visit"], required: false },
+        experience: {
+          type: String,
+          enum: ["good", "bad", "didnt_visit"],
+          required: false,
+        },
         rating: { type: Number, min: 1, max: 5, required: false },
         feedback: { type: String, required: false },
-        submittedAt: { type: Date, required: false }
+        submittedAt: { type: Date, required: false },
       },
       providerSurvey: {
         completed: { type: Boolean, default: false },
-        experience: { type: String, enum: ["good", "bad", "didnt_meet_yet"], required: false },
+        experience: {
+          type: String,
+          enum: ["good", "bad", "didnt_meet_yet"],
+          required: false,
+        },
         rating: { type: Number, min: 1, max: 5, required: false },
         feedback: { type: String, required: false },
-        submittedAt: { type: Date, required: false }
+        submittedAt: { type: Date, required: false },
       },
       finalStatus: {
         type: String,
         enum: ["successful", "unsuccessful", "pending_review"],
-        required: false
+        required: false,
       },
       adminReview: {
         required: { type: Boolean, default: false },
-        reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false },
+        reviewedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: false,
+        },
         reviewedAt: { type: Date, required: false },
-        decision: { type: String, enum: ["successful", "unsuccessful"], required: false }
-      }
-    }
+        decision: {
+          type: String,
+          enum: ["successful", "unsuccessful"],
+          required: false,
+        },
+      },
+    },
   },
   // Service-specific details
   serviceDetails: {
@@ -765,22 +803,32 @@ const bookingSchema = new mongoose.Schema({
         packing: { type: Boolean, default: false },
         fixing: { type: Boolean, default: false },
         helpers: { type: Boolean, default: false },
-        wheelchairHelper: { type: Boolean, default: false }
+        wheelchairHelper: { type: Boolean, default: false },
       },
       pickupFloorDetails: {
         floor: { type: Number, default: 0 },
         hasLift: { type: Boolean, default: true },
-        accessType: { type: String, enum: ["ground", "stairs", "lift"], default: "ground" }
+        accessType: {
+          type: String,
+          enum: ["ground", "stairs", "lift"],
+          default: "ground",
+        },
       },
       dropoffFloorDetails: {
         floor: { type: Number, default: 0 },
         hasLift: { type: Boolean, default: true },
-        accessType: { type: String, enum: ["ground", "stairs", "lift"], default: "ground" }
+        accessType: {
+          type: String,
+          enum: ["ground", "stairs", "lift"],
+          default: "ground",
+        },
       },
-      extras: [{
-        name: { type: String, required: true },
-        count: { type: Number, required: true, min: 1 }
-      }]
+      extras: [
+        {
+          name: { type: String, required: true },
+          count: { type: Number, required: true, min: 1 },
+        },
+      ],
     },
     carRecovery: {
       // Vehicle details
@@ -790,22 +838,30 @@ const bookingSchema = new mongoose.Schema({
         year: { type: Number, required: false },
         color: { type: String, required: false },
         licensePlate: { type: String, required: false },
-        vin: { type: String, required: false }
+        vin: { type: String, required: false },
       },
       // Recovery details
       issueType: {
         type: String,
-        enum: ["breakdown", "accident", "flat_tire", "battery", "out_of_fuel", "lockout", "other"],
-        required: false
+        enum: [
+          "breakdown",
+          "accident",
+          "flat_tire",
+          "battery",
+          "out_of_fuel",
+          "lockout",
+          "other",
+        ],
+        required: false,
       },
       issueDescription: {
         type: String,
-        required: false
+        required: false,
       },
       urgencyLevel: {
         type: String,
         enum: ["low", "medium", "high", "emergency"],
-        default: "medium"
+        default: "medium",
       },
       // Service options
       serviceOptions: {
@@ -815,7 +871,7 @@ const bookingSchema = new mongoose.Schema({
         fuelDelivery: { type: Boolean, default: false },
         tireChange: { type: Boolean, default: false },
         lockoutService: { type: Boolean, default: false },
-        longDistanceTowing: { type: Boolean, default: false }
+        longDistanceTowing: { type: Boolean, default: false },
       },
       // Location details
       locationDetails: {
@@ -823,7 +879,7 @@ const bookingSchema = new mongoose.Schema({
         isVehicleInGarage: { type: Boolean, default: false },
         hasSteeringLock: { type: Boolean, default: false },
         isInDangerousLocation: { type: Boolean, default: false },
-        additionalLocationInfo: { type: String, required: false }
+        additionalLocationInfo: { type: String, required: false },
       },
       // Additional services
       additionalServices: {
@@ -831,52 +887,63 @@ const bookingSchema = new mongoose.Schema({
         needMechanic: { type: Boolean, default: false },
         needFlatbed: { type: Boolean, default: false },
         needSpecialEquipment: { type: Boolean, default: false },
-        specialEquipmentDetails: { type: String, required: false }
+        specialEquipmentDetails: { type: String, required: false },
       },
       // Driver/mechanic notes
       notes: {
         driverNotes: { type: String, required: false },
         mechanicNotes: { type: String, required: false },
-        customerNotes: { type: String, required: false }
+        customerNotes: { type: String, required: false },
       },
       // Status tracking
-      statusUpdates: [{
-        status: { type: String, required: true },
-        timestamp: { type: Date, default: Date.now },
-        updatedBy: { 
-          type: mongoose.Schema.Types.ObjectId, 
-          ref: "User",
-          required: false 
+      statusUpdates: [
+        {
+          status: { type: String, required: true },
+          timestamp: { type: Date, default: Date.now },
+          updatedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: false,
+          },
+          notes: { type: String, required: false },
+          location: {
+            type: {
+              type: String,
+              enum: ["Point"],
+              default: "Point",
+            },
+            coordinates: {
+              type: [Number],
+              required: false,
+            },
+          },
         },
-        notes: { type: String, required: false },
-        location: {
+      ],
+      // Photo documentation
+      photos: [
+        {
+          url: { type: String, required: true },
           type: {
             type: String,
-            enum: ["Point"],
-            default: "Point"
+            enum: [
+              "damage",
+              "location",
+              "vehicle_condition",
+              "before_service",
+              "after_service",
+              "other",
+            ],
+            required: true,
           },
-          coordinates: {
-            type: [Number],
-            required: false
-          }
-        }
-      }],
-      // Photo documentation
-      photos: [{
-        url: { type: String, required: true },
-        type: { 
-          type: String, 
-          enum: ["damage", "location", "vehicle_condition", "before_service", "after_service", "other"],
-          required: true 
+          description: { type: String, required: false },
+          timestamp: { type: Date, default: Date.now },
         },
-        description: { type: String, required: false },
-        timestamp: { type: Date, default: Date.now }
-      }],
+      ],
       // Signature
       customerSignature: {
         url: { type: String, required: false },
         signedAt: { type: Date, required: false },
-        ipAddress: { type: String, required: false }
+        ipAddress: { type: String, required: false },
       },
       // Payment details specific to recovery
       paymentDetails: {
@@ -886,14 +953,14 @@ const bookingSchema = new mongoose.Schema({
         additionalCharges: { type: Number, default: 0 },
         discount: { type: Number, default: 0 },
         totalAmount: { type: Number, default: 0 },
-        paymentMethod: { 
-          type: String, 
+        paymentMethod: {
+          type: String,
           enum: ["cash", "card", "insurance", "other"],
-          required: false 
+          required: false,
         },
         isPaid: { type: Boolean, default: false },
         paidAt: { type: Date, required: false },
-        invoiceNumber: { type: String, required: false }
+        invoiceNumber: { type: String, required: false },
       },
       // Insurance information
       insuranceInfo: {
@@ -902,24 +969,24 @@ const bookingSchema = new mongoose.Schema({
         policyNumber: { type: String, required: false },
         claimNumber: { type: String, required: false },
         isClaimApproved: { type: Boolean, default: false },
-        insuranceNotes: { type: String, required: false }
+        insuranceNotes: { type: String, required: false },
       },
       // Driver/mechanic assignment
       serviceProvider: {
-        driverId: { 
-          type: mongoose.Schema.Types.ObjectId, 
+        driverId: {
+          type: mongoose.Schema.Types.ObjectId,
           ref: "User",
-          required: false 
+          required: false,
         },
-        mechanicId: { 
-          type: mongoose.Schema.Types.ObjectId, 
+        mechanicId: {
+          type: mongoose.Schema.Types.ObjectId,
           ref: "User",
-          required: false 
+          required: false,
         },
         assignedAt: { type: Date, required: false },
         estimatedArrival: { type: Date, required: false },
         actualArrival: { type: Date, required: false },
-        completionTime: { type: Date, required: false }
+        completionTime: { type: Date, required: false },
       },
       // Customer feedback
       feedback: {
@@ -927,7 +994,7 @@ const bookingSchema = new mongoose.Schema({
         comments: { type: String, required: false },
         submittedAt: { type: Date, required: false },
         followUpRequired: { type: Boolean, default: false },
-        followUpNotes: { type: String, required: false }
+        followUpNotes: { type: String, required: false },
       },
       // Additional metadata
       metadata: {
@@ -935,9 +1002,9 @@ const bookingSchema = new mongoose.Schema({
         requiresFollowUp: { type: Boolean, default: false },
         isRecurringCustomer: { type: Boolean, default: false },
         tags: [{ type: String, required: false }],
-        customFields: { type: Map, of: String, required: false }
-      }
-    }
+        customFields: { type: Map, of: String, required: false },
+      },
+    },
   },
   distanceInMeters: {
     type: Number,
@@ -951,6 +1018,58 @@ const bookingSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+});
+
+// ---- Final fare auto-stamping helpers ----
+
+// Terminal states
+function isTerminalStatus(status) {
+  return status === "completed" || status === "cancelled";
+}
+
+// Ensure finalFare gets stamped from current fare when terminal
+async function stampFinalFareIfNeeded(doc) {
+  try {
+    if (!doc) return;
+    const status = doc.status;
+    if (!isTerminalStatus(status)) return;
+
+    const fare = Number(doc.fare || 0);
+    const fd = doc.fareDetails || {};
+
+    // If not set or mismatched, update it
+    if (fd.finalFare == null || Number(fd.finalFare) !== fare) {
+      await mongoose.model("Booking").updateOne(
+        { _id: doc._id },
+        {
+          $set: {
+            "fareDetails.finalFare": fare,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    }
+  } catch (e) {
+    // avoid throwing from middleware
+  }
+}
+
+// When new booking is saved or updated via save()
+bookingSchema.post("save", async function (doc, next) {
+  try {
+    await stampFinalFareIfNeeded(doc);
+  } finally {
+    next && next();
+  }
+});
+
+// When booking is updated via findOneAndUpdate()
+bookingSchema.post("findOneAndUpdate", async function (doc, next) {
+  try {
+    await stampFinalFareIfNeeded(doc);
+  } finally {
+    next && next();
+  }
 });
 
 bookingSchema.index({ "pickupLocation.coordinates": "2dsphere" });
@@ -989,6 +1108,44 @@ bookingSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 
 bookingSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
+  next();
+});
+
+bookingSchema.pre("findOneAndUpdate", function (next) {
+  try {
+    const update = this.getUpdate() || {};
+    const $set = update.$set || {};
+
+    // Status being set in this update
+    const nextStatus =
+      $set.status != null
+        ? $set.status
+        : update.status != null
+        ? update.status
+        : undefined;
+
+    if (isTerminalStatus(String(nextStatus))) {
+      // Fare being set in this update (prefer $set)
+      const fareValue =
+        $set.fare != null
+          ? $set.fare
+          : update.fare != null
+          ? update.fare
+          : undefined;
+
+      if (fareValue != null) {
+        // Merge finalFare into the same update
+        const merged = { ...update };
+        merged.$set = merged.$set || {};
+        merged.$set["fareDetails.finalFare"] = Number(fareValue);
+        merged.$set.updatedAt = new Date();
+
+        this.setUpdate(merged);
+      }
+    }
+  } catch {
+    // never throw from middleware
+  }
   next();
 });
 
