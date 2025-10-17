@@ -4,52 +4,51 @@ import Vehicle from "../models/vehicleModel.js";
 import PricingConfig from "../models/pricingModel.js";
 import asyncHandler from "express-async-handler";
 import { calculateDistance } from "../utils/distanceCalculator.js";
-import mongoose from 'mongoose';
-import { webSocketService } from '../services/websocketService.js';
-
+import mongoose from "mongoose";
+import { webSocketService } from "../services/websocketService.js";
 // Car Recovery Service Types and Subcategories
 const CAR_RECOVERY_SERVICES = {
   standard: {
-    id: 'standard',
-    name: 'Standard Recovery',
-    description: 'Standard vehicle recovery service',
+    id: "standard",
+    name: "Standard Recovery",
+    description: "Standard vehicle recovery service",
     subcategories: [
       {
-        id: 'standard_basic',
-        name: 'Basic Recovery',
-        description: 'Basic vehicle recovery service',
+        id: "standard_basic",
+        name: "Basic Recovery",
+        description: "Basic vehicle recovery service",
         baseFare: 1000,
         perKmRate: 50,
         minCharge: 1000,
         maxDistance: 100,
-        vehicleTypes: ['car', 'suv', 'bike']
-      }
-    ]
+        vehicleTypes: ["car", "suv", "bike"],
+      },
+    ],
   },
   emergency: {
-    id: 'emergency',
-    name: 'Emergency Recovery',
-    description: '24/7 Emergency vehicle recovery service',
+    id: "emergency",
+    name: "Emergency Recovery",
+    description: "24/7 Emergency vehicle recovery service",
     subcategories: [
       {
-        id: 'emergency_24x7',
-        name: '24/7 Emergency',
-        description: '24/7 Emergency recovery service',
+        id: "emergency_24x7",
+        name: "24/7 Emergency",
+        description: "24/7 Emergency recovery service",
         baseFare: 2000,
         perKmRate: 75,
         minCharge: 2000,
         maxDistance: 200,
-        vehicleTypes: ['car', 'suv', 'bike', 'truck']
-      }
-    ]
-  }
+        vehicleTypes: ["car", "suv", "bike", "truck"],
+      },
+    ],
+  },
 };
 
 // Helper function to find a subcategory by ID
 const findSubcategory = (serviceType, subcategoryId) => {
   const service = CAR_RECOVERY_SERVICES[serviceType];
   if (!service) return null;
-  
+
   return service.subcategories?.find(
     (subcategory) => subcategory.id === subcategoryId
   );
@@ -61,11 +60,11 @@ const findSubcategory = (serviceType, subcategoryId) => {
 export const getCarRecoveryServices = asyncHandler(async (req, res) => {
   try {
     // Transform the services object to include only necessary fields
-    const services = Object.values(CAR_RECOVERY_SERVICES).map(service => ({
+    const services = Object.values(CAR_RECOVERY_SERVICES).map((service) => ({
       id: service.id,
       name: service.name,
       description: service.description,
-      subcategories: service.subcategories?.map(sub => ({
+      subcategories: service.subcategories?.map((sub) => ({
         id: sub.id,
         name: sub.name,
         description: sub.description,
@@ -73,14 +72,14 @@ export const getCarRecoveryServices = asyncHandler(async (req, res) => {
         perKmRate: sub.perKmRate,
         minCharge: sub.minCharge,
         maxDistance: sub.maxDistance,
-        vehicleTypes: sub.vehicleTypes
-      }))
+        vehicleTypes: sub.vehicleTypes,
+      })),
     }));
 
     res.json(services);
   } catch (error) {
-    console.error('Error getting car recovery services:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error getting car recovery services:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -98,18 +97,20 @@ export const createCarRecoveryRequest = asyncHandler(async (req, res) => {
       additionalNotes,
       paymentMethod,
       scheduledTime,
-      safetyPreferences = {}
+      safetyPreferences = {},
     } = req.body;
 
     // Validate required fields
     if (!serviceType || !pickupLocation || !vehicleDetails) {
-      return res.status(400).json({ message: 'Required fields are missing' });
+      return res.status(400).json({ message: "Required fields are missing" });
     }
 
     // Validate service type and subcategory
     const subcategory = findSubcategory(serviceType, subcategoryId);
     if (!subcategory) {
-      return res.status(400).json({ message: 'Invalid service type or subcategory' });
+      return res
+        .status(400)
+        .json({ message: "Invalid service type or subcategory" });
     }
 
     // Create new recovery request
@@ -123,21 +124,21 @@ export const createCarRecoveryRequest = asyncHandler(async (req, res) => {
       additionalNotes,
       paymentMethod,
       scheduledTime: scheduledTime || new Date(),
-      status: 'pending',
-      serviceCategory: 'car_recovery',
+      status: "pending",
+      serviceCategory: "car_recovery",
       safetyPreferences: {
         pinkCaptainRequired: safetyPreferences.pinkCaptainRequired || false,
         familyWithGuardian: safetyPreferences.familyWithGuardian || false,
         noMaleCompanion: safetyPreferences.noMaleCompanion || false,
-        emergencyContact: safetyPreferences.emergencyContact || null
+        emergencyContact: safetyPreferences.emergencyContact || null,
       },
       fareDetails: {
         baseFare: subcategory.baseFare,
         perKmRate: subcategory.perKmRate,
         estimatedDistance: 0, // Will be calculated
         estimatedFare: 0, // Will be calculated
-        currency: 'AED'
-      }
+        currency: "AED",
+      },
     });
 
     // Calculate distance and fare
@@ -146,10 +147,10 @@ export const createCarRecoveryRequest = asyncHandler(async (req, res) => {
         pickupLocation.coordinates,
         dropoffLocation.coordinates
       );
-      
+
       recoveryRequest.fareDetails.estimatedDistance = distance;
       recoveryRequest.fareDetails.estimatedFare = Math.max(
-        subcategory.baseFare + (distance * subcategory.perKmRate),
+        subcategory.baseFare + distance * subcategory.perKmRate,
         subcategory.minCharge
       );
     }
@@ -158,25 +159,24 @@ export const createCarRecoveryRequest = asyncHandler(async (req, res) => {
     await recoveryRequest.save();
 
     // Notify available drivers via WebSocket
-    webSocketService.notifyDrivers('new_recovery_request', {
+    webSocketService.notifyDrivers("new_recovery_request", {
       requestId: recoveryRequest._id,
       pickupLocation: recoveryRequest.pickupLocation,
       vehicleType: recoveryRequest.vehicleDetails.type,
-      estimatedFare: recoveryRequest.fareDetails.estimatedFare
+      estimatedFare: recoveryRequest.fareDetails.estimatedFare,
     });
 
     res.status(201).json({
       success: true,
       data: recoveryRequest,
-      message: 'Recovery request created successfully'
+      message: "Recovery request created successfully",
     });
-
   } catch (error) {
-    console.error('Error creating recovery request:', error);
+    console.error("Error creating recovery request:", error);
     res.status(500).json({
       success: false,
-      message: 'Error creating recovery request',
-      error: error.message
+      message: "Error creating recovery request",
+      error: error.message,
     });
   }
 });
@@ -188,23 +188,20 @@ export const getCarRecoveryRequest = asyncHandler(async (req, res) => {
   try {
     const request = await Booking.findOne({
       _id: req.params.id,
-      serviceCategory: 'car_recovery',
-      $or: [
-        { user: req.user._id },
-        { driver: req.user._id }
-      ]
+      serviceCategory: "car_recovery",
+      $or: [{ user: req.user._id }, { driver: req.user._id }],
     })
-    .populate('user', 'firstName lastName phoneNumber')
-    .populate('driver', 'firstName lastName phoneNumber');
+      .populate("user", "firstName lastName phoneNumber")
+      .populate("driver", "firstName lastName phoneNumber");
 
     if (!request) {
-      return res.status(404).json({ message: 'Recovery request not found' });
+      return res.status(404).json({ message: "Recovery request not found" });
     }
 
     res.json(request);
   } catch (error) {
-    console.error('Error getting recovery request:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error getting recovery request:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -214,9 +211,9 @@ export const getCarRecoveryRequest = asyncHandler(async (req, res) => {
 export const getUserCarRecoveryRequests = asyncHandler(async (req, res) => {
   try {
     const { status } = req.query;
-    const query = { 
+    const query = {
       user: req.user._id,
-      serviceCategory: 'car_recovery'
+      serviceCategory: "car_recovery",
     };
 
     if (status) {
@@ -225,12 +222,12 @@ export const getUserCarRecoveryRequests = asyncHandler(async (req, res) => {
 
     const requests = await Booking.find(query)
       .sort({ createdAt: -1 })
-      .populate('driver', 'firstName lastName phoneNumber');
+      .populate("driver", "firstName lastName phoneNumber");
 
     res.json(requests);
   } catch (error) {
-    console.error('Error getting user recovery requests:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error getting user recovery requests:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -240,9 +237,9 @@ export const getUserCarRecoveryRequests = asyncHandler(async (req, res) => {
 export const getDriverCarRecoveryRequests = asyncHandler(async (req, res) => {
   try {
     const { status } = req.query;
-    const query = { 
+    const query = {
       driver: req.user._id,
-      serviceCategory: 'car_recovery'
+      serviceCategory: "car_recovery",
     };
 
     if (status) {
@@ -251,12 +248,12 @@ export const getDriverCarRecoveryRequests = asyncHandler(async (req, res) => {
 
     const requests = await Booking.find(query)
       .sort({ createdAt: -1 })
-      .populate('user', 'firstName lastName phoneNumber');
+      .populate("user", "firstName lastName phoneNumber");
 
     res.json(requests);
   } catch (error) {
-    console.error('Error getting driver recovery requests:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error getting driver recovery requests:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -270,16 +267,22 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
 
     const booking = await Booking.findOne({
       _id: id,
-      serviceCategory: 'car_recovery'
+      serviceCategory: "car_recovery",
     });
 
     if (!booking) {
-      return res.status(404).json({ message: 'Recovery request not found' });
+      return res.status(404).json({ message: "Recovery request not found" });
     }
 
     // Authorization check - only the assigned driver or admin can update status
-    if (booking.driver && booking.driver.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to update this request' });
+    if (
+      booking.driver &&
+      booking.driver.toString() !== req.user._id.toString() &&
+      req.user.role !== "admin"
+    ) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to update this request" });
     }
 
     // Update status and driver if provided
@@ -291,17 +294,17 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
     // Update timestamps based on status
     const now = new Date();
     switch (status) {
-      case 'accepted':
+      case "accepted":
         booking.acceptedAt = now;
         break;
-      case 'started':
+      case "started":
         booking.startedAt = now;
         break;
-      case 'completed':
+      case "completed":
         booking.completedAt = now;
         booking.fareDetails.finalFare = booking.fareDetails.estimatedFare; // Can be adjusted later
         break;
-      case 'cancelled':
+      case "cancelled":
         booking.cancelledAt = now;
         booking.cancelledBy = req.user._id;
         break;
@@ -311,22 +314,22 @@ export const updateBookingStatus = asyncHandler(async (req, res) => {
 
     // Notify user about status update
     if (booking.user) {
-      webSocketService.notifyUser(booking.user, 'recovery_status_update', {
+      webSocketService.notifyUser(booking.user, "recovery_status_update", {
         requestId: booking._id,
         status: booking.status,
         driver: booking.driver,
-        updatedAt: now
+        updatedAt: now,
       });
     }
 
     res.json({
       success: true,
       data: booking,
-      message: 'Recovery request status updated successfully'
+      message: "Recovery request status updated successfully",
     });
   } catch (error) {
-    console.error('Error updating recovery request status:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error updating recovery request status:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -339,36 +342,42 @@ export const cancelCarRecoveryRequest = asyncHandler(async (req, res) => {
     const booking = await Booking.findOne({
       _id: req.params.id,
       user: req.user._id,
-      serviceCategory: 'car_recovery',
-      status: { $in: ['pending', 'accepted'] }
+      serviceCategory: "car_recovery",
+      status: { $in: ["pending", "accepted"] },
     });
 
     if (!booking) {
-      return res.status(404).json({ message: 'Recovery request not found or cannot be cancelled' });
+      return res
+        .status(404)
+        .json({ message: "Recovery request not found or cannot be cancelled" });
     }
 
-    booking.status = 'cancelled';
+    booking.status = "cancelled";
     booking.cancelledAt = new Date();
-    booking.cancellationReason = reason || 'User cancelled';
+    booking.cancellationReason = reason || "User cancelled";
     booking.cancelledBy = req.user._id;
 
     await booking.save();
 
     // Notify driver if assigned
     if (booking.driver) {
-      webSocketService.notifyUser(booking.driver, 'recovery_request_cancelled', {
-        requestId: booking._id,
-        reason: booking.cancellationReason
-      });
+      webSocketService.notifyUser(
+        booking.driver,
+        "recovery_request_cancelled",
+        {
+          requestId: booking._id,
+          reason: booking.cancellationReason,
+        }
+      );
     }
 
     res.json({
       success: true,
-      message: 'Recovery request cancelled successfully'
+      message: "Recovery request cancelled successfully",
     });
   } catch (error) {
-    console.error('Error cancelling recovery request:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error cancelling recovery request:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -381,35 +390,35 @@ export const updateDriverLocation = asyncHandler(async (req, res) => {
     const booking = await Booking.findOne({
       _id: req.params.id,
       driver: req.user._id,
-      serviceCategory: 'car_recovery'
+      serviceCategory: "car_recovery",
     });
 
     if (!booking) {
-      return res.status(404).json({ message: 'Recovery request not found' });
+      return res.status(404).json({ message: "Recovery request not found" });
     }
 
     // Update current location
     booking.currentLocation = {
-      type: 'Point',
-      coordinates: [coordinates.longitude, coordinates.latitude]
+      type: "Point",
+      coordinates: [coordinates.longitude, coordinates.latitude],
     };
 
     await booking.save();
 
     // Notify user about driver's location
-    webSocketService.notifyUser(booking.user, 'driver_location_update', {
+    webSocketService.notifyUser(booking.user, "driver_location_update", {
       requestId: booking._id,
       location: booking.currentLocation,
-      updatedAt: new Date()
+      updatedAt: new Date(),
     });
 
     res.json({
       success: true,
-      message: 'Location updated successfully'
+      message: "Location updated successfully",
     });
   } catch (error) {
-    console.error('Error updating driver location:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error updating driver location:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -421,21 +430,18 @@ export const sendMessage = asyncHandler(async (req, res) => {
     const { id } = req.params;
     const { message, senderType } = req.body;
 
-    if (!['user', 'driver'].includes(senderType)) {
-      return res.status(400).json({ message: 'Invalid sender type' });
+    if (!["user", "driver"].includes(senderType)) {
+      return res.status(400).json({ message: "Invalid sender type" });
     }
 
     const booking = await Booking.findOne({
       _id: id,
-      $or: [
-        { user: req.user._id },
-        { driver: req.user._id }
-      ],
-      serviceCategory: 'car_recovery'
+      $or: [{ user: req.user._id }, { driver: req.user._id }],
+      serviceCategory: "car_recovery",
     });
 
     if (!booking) {
-      return res.status(404).json({ message: 'Recovery request not found' });
+      return res.status(404).json({ message: "Recovery request not found" });
     }
 
     // Add message to chat
@@ -443,7 +449,7 @@ export const sendMessage = asyncHandler(async (req, res) => {
       sender: req.user._id,
       senderType,
       message,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
     if (!booking.messages) {
@@ -453,22 +459,22 @@ export const sendMessage = asyncHandler(async (req, res) => {
     await booking.save();
 
     // Notify the other party
-    const recipient = senderType === 'user' ? booking.driver : booking.user;
+    const recipient = senderType === "user" ? booking.driver : booking.user;
     if (recipient) {
-      webSocketService.notifyUser(recipient, 'new_message', {
+      webSocketService.notifyUser(recipient, "new_message", {
         requestId: booking._id,
-        message: newMessage
+        message: newMessage,
       });
     }
 
     res.status(201).json({
       success: true,
       data: newMessage,
-      message: 'Message sent successfully'
+      message: "Message sent successfully",
     });
   } catch (error) {
-    console.error('Error sending message:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error sending message:", error);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -479,22 +485,124 @@ export const getMessages = asyncHandler(async (req, res) => {
   try {
     const booking = await Booking.findOne({
       _id: req.params.id,
-      $or: [
-        { user: req.user._id },
-        { driver: req.user._id }
-      ],
-      serviceCategory: 'car_recovery'
+      $or: [{ user: req.user._id }, { driver: req.user._id }],
+      serviceCategory: "car_recovery",
     })
-    .select('messages')
-    .populate('messages.sender', 'firstName lastName');
+      .select("messages")
+      .populate("messages.sender", "firstName lastName");
 
     if (!booking) {
-      return res.status(404).json({ message: 'Recovery request not found' });
+      return res.status(404).json({ message: "Recovery request not found" });
     }
 
     res.json(booking.messages || []);
   } catch (error) {
-    console.error('Error getting messages:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("Error getting messages:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// @desc    Get car recovery history stats by user/driver id
+// @route   GET /api/car-recovery/history?id=...&role=customer|driver&limit=20&page=1
+// @access  Private
+export const getCarRecoveryHistoryStats = asyncHandler(async (req, res) => {
+  try {
+    const { id, role, limit = 20, page = 1 } = req.query;
+
+    // Resolve target ID: prefer explicit id, fallback to authenticated user
+    const targetId = String(id || req.user?._id || "").trim();
+    if (!targetId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "id is required" });
+    }
+
+    let objectId;
+    try {
+      objectId = new mongoose.Types.ObjectId(targetId);
+    } catch {
+      return res.status(400).json({ success: false, message: "invalid id" });
+    }
+
+    // Perspective: driver vs customer (default: customer)
+    const perspective =
+      String(role || "customer").toLowerCase() === "driver"
+        ? "driver"
+        : "customer";
+
+    // Car recovery filter: include both modern and legacy values in DB
+    const carRecoveryCategories = [
+      "towing services",
+      "winching services",
+      "roadside assistance",
+      "specialized/heavy recovery",
+      "car_recovery", // legacy in some controllers
+    ];
+
+    const baseMatch = {
+      $and: [
+        {
+          $or: [
+            { serviceType: "car recovery" },
+            { serviceCategory: { $in: carRecoveryCategories } },
+          ],
+        },
+        perspective === "driver" ? { driver: objectId } : { user: objectId },
+      ],
+    };
+
+    // Count totals per status
+    const grouped = await Booking.aggregate([
+      { $match: baseMatch },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]);
+
+    const byStatus = grouped.reduce((acc, cur) => {
+      acc[cur._id] = cur.count;
+      return acc;
+    }, {});
+
+    const total = await Booking.countDocuments(baseMatch);
+
+    const totals = {
+      total,
+      pending: byStatus["pending"] || 0,
+      accepted: byStatus["accepted"] || 0,
+      started: byStatus["started"] || 0,
+      in_progress: byStatus["in_progress"] || 0,
+      completed: byStatus["completed"] || 0,
+      cancelled: byStatus["cancelled"] || 0,
+    };
+
+    // Active not terminal
+    const active =
+      totals.pending + totals.accepted + totals.started + totals.in_progress;
+
+    // Paged recent list
+    const pageNum = Math.max(1, Number(page));
+    const pageLimit = Math.min(100, Math.max(1, Number(limit)));
+    const skip = (pageNum - 1) * pageLimit;
+
+    const recent = await Booking.find(baseMatch)
+      .select(
+        "status serviceType serviceCategory user driver fare fareDetails createdAt completedAt cancelledAt distance distanceInMeters"
+      )
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(pageLimit)
+      .lean();
+
+    return res.json({
+      success: true,
+      role: perspective, // "customer" | "driver"
+      id: String(objectId),
+      totals: { ...totals, active },
+      breakdownByStatus: totals,
+      pagination: { page: pageNum, limit: pageLimit },
+      recent,
+    });
+  } catch (error) {
+    console.error("Error getting car recovery history stats:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
