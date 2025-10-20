@@ -17,6 +17,7 @@ import driverStatusRoutes from ".//driverStatusRoutes.js";
 import qualifiedDriversRoutes from ".//qualifiedDriversRoutes.js";
 import offerRoutes from ".//offerRoutes.js";
 import supportTicketRoutes from ".//supportTicketRoutes.js";
+import analyticsRoutes from "./analyticsRoutes.js"; // Added analytics routes
 import errorHandler from "../middlewares/errorMiddleware.js";
 import adminAuthRoutes from ".//adminAuthRoutes.js";
 import adminUserRoutes from "./adminUserRoutes.js";
@@ -45,6 +46,7 @@ export function initRoutes(app) {
   app.use("/api/support", supportTicketRoutes);
 
   app.use("/api/admin/users", adminUserRoutes);
+  app.use("/api/analytics", analyticsRoutes); // Added analytics routes
 
   app.use(errorHandler);
 }
