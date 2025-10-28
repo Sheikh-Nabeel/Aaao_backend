@@ -783,7 +783,7 @@ class RecoveryHandler {
         },
       });
 
-      // Discover nearby drivers
+      // Discover nearby drivers (kept as-is; not used for direct sends anymore)
       const searchRadiusKm = Math.max(
         1,
         Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 15))
@@ -842,7 +842,7 @@ class RecoveryHandler {
         }
       }
 
-      // Emit available drivers list to requester
+      // Emit available drivers list to requester (unchanged)
       this.emitToClient(ws, {
         event: "carRecovery:driversAvailable",
         bookingId,
@@ -854,116 +854,20 @@ class RecoveryHandler {
         },
       });
 
-      // Notify targeted preferred driver (both event names) + min/max fare
       try {
-        if (preferredDriverId) {
-          const driverPayloadNew = {
-            event: "recovery.requested",
-            bookingId,
-            data: {
-              serviceType,
-              serviceCategory,
-              pickupLocation: insertDoc.pickupLocation,
-              dropoffLocation: insertDoc.dropoffLocation,
-              distance: distanceKm,
-              estimatedFare,
-              minFare,
-              maxFare,
-              currency: currencyFromConfig,
-              vehicleType:
-                data?.vehicleType ||
-                data?.vehicleDetails?.type ||
-                data?.vehicleDetails?.vehicleType ||
-                null,
-              customer: customerProfile,
-              at: now,
-            },
-          };
-          const driverPayloadLegacy = {
-            event: "newRecoveryRequest",
-            bookingId,
-            data: {
-              bookingId,
-              serviceType,
-              serviceCategory,
-              pickupLocation: insertDoc.pickupLocation,
-              dropoffLocation: insertDoc.dropoffLocation,
-              distanceKm: distanceKmInt,
-              estimatedFare,
-              minFare,
-              maxFare,
-              customer: customerProfile,
-              at: now.toISOString(),
-            },
-          };
-          this.webSocketService.sendToUser(
-            String(preferredDriverId),
-            driverPayloadNew
-          );
-          this.webSocketService.sendToUser(
-            String(preferredDriverId),
-            driverPayloadLegacy
-          );
-        }
-      } catch {}
+        const baseRoom = `svc:${normKey("car recovery")}`;
+        const categoryRoom = `svc:${normKey("car recovery")}:${normKey(
+          serviceCategory
+        )}`;
+        const subKey = subServiceNormalized
+          ? normKey(subServiceNormalized)
+          : null;
+        const subCategoryRoom = subKey
+          ? `svc:${normKey("car recovery")}:${normKey(
+              serviceCategory
+            )}:${subKey}`
+          : null;
 
-      // Notify each discovered driver (direct ping) with both event names + min/max fare
-      try {
-        const targets = (nearbyDrivers || [])
-          .map((d) => String(d.id || d._id || "").trim())
-          .filter(Boolean);
-
-        for (const drvId of targets) {
-          this.webSocketService.sendToUser(String(drvId), {
-            event: "recovery.requested",
-            bookingId,
-            data: {
-              serviceType,
-              serviceCategory,
-              pickupLocation: insertDoc.pickupLocation,
-              dropoffLocation: insertDoc.dropoffLocation,
-              distance: distanceKm,
-              estimatedFare,
-              minFare,
-              maxFare,
-              currency: currencyFromConfig,
-              vehicleType:
-                data?.vehicleType ||
-                data?.vehicleDetails?.type ||
-                data?.vehicleDetails?.vehicleType ||
-                null,
-              customer: customerProfile,
-              at: now,
-            },
-          });
-          this.webSocketService.sendToUser(String(drvId), {
-            event: "newRecoveryRequest",
-            bookingId,
-            data: {
-              bookingId,
-              serviceType,
-              serviceCategory,
-              pickupLocation: insertDoc.pickupLocation,
-              dropoffLocation: insertDoc.dropoffLocation,
-              distanceKm,
-              estimatedFare,
-              minFare,
-              maxFare,
-              customer: customerProfile,
-              at: now.toISOString(),
-            },
-          });
-        }
-      } catch (e) {
-        logger.warn(
-          "Direct notify to discovered drivers failed:",
-          e?.message || e
-        );
-      }
-
-      // Broadcast to room (both event names) + min/max fare
-      try {
-        const roomName = `svc:${normKey("car recovery")}`;
         const newEventPayload = {
           event: "recovery.requested",
           bookingId,
@@ -1004,9 +908,22 @@ class RecoveryHandler {
             at: now.toISOString(),
           },
         };
+
         if (this.webSocketService?.sendToRoom) {
-          this.webSocketService.sendToRoom(roomName, newEventPayload);
-          this.webSocketService.sendToRoom(roomName, legacyEventPayload);
+          // base service room
+          this.webSocketService.sendToRoom(baseRoom, newEventPayload);
+          this.webSocketService.sendToRoom(baseRoom, legacyEventPayload);
+          // service category room
+          this.webSocketService.sendToRoom(categoryRoom, newEventPayload);
+          this.webSocketService.sendToRoom(categoryRoom, legacyEventPayload);
+          // sub-category room (if present)
+          if (subCategoryRoom) {
+            this.webSocketService.sendToRoom(subCategoryRoom, newEventPayload);
+            this.webSocketService.sendToRoom(
+              subCategoryRoom,
+              legacyEventPayload
+            );
+          }
         }
       } catch {}
     } catch (error) {
@@ -1613,6 +1530,33 @@ class RecoveryHandler {
             driverId: String(booking.driver || ""),
             pickupLocation: booking.pickupLocation,
             dropoffLocation: booking.dropoffLocation,
+            // If caller is driver, include customer for convenience
+            ...(isDriver
+              ? {
+                  customer: await (async () => {
+                    try {
+                      const cust = await User.findById(String(booking.user))
+                        .select(
+                          "firstName lastName email phoneNumber selfieImage username avatarUrl"
+                        )
+                        .lean();
+                      if (!cust) return null;
+                      const name = `${cust.firstName ?? ""} ${
+                        cust.lastName ?? ""
+                      }`.trim();
+                      return {
+                        id: String(cust._id || ""),
+                        name: name || cust.username || "User",
+                        email: cust.email || null,
+                        phone: cust.phoneNumber || cust.phone || null,
+                        image: cust.selfieImage || cust.avatarUrl || null,
+                      };
+                    } catch {
+                      return null;
+                    }
+                  })(),
+                }
+              : {}),
           },
         });
         return;
@@ -1694,7 +1638,28 @@ class RecoveryHandler {
       });
       this.activeRecoveries.set(bookingId, rec);
 
+      // Build customer profile for driver notification
+      let customerProfile = null;
+      try {
+        const cust = await User.findById(String(booking.user))
+          .select(
+            "firstName lastName email phoneNumber selfieImage username avatarUrl"
+          )
+          .lean();
+        if (cust) {
+          const name = `${cust.firstName ?? ""} ${cust.lastName ?? ""}`.trim();
+          customerProfile = {
+            id: String(cust._id || ""),
+            name: name || cust.username || "User",
+            email: cust.email || null,
+            phone: cust.phoneNumber || cust.phone || null,
+            image: cust.selfieImage || cust.avatarUrl || null,
+          };
+        }
+      } catch {}
+
       // Notify both sides that service started
+      // ACK to caller (include customer if the caller is the driver)
       this.emitToClient(ws, {
         event: "recovery.started",
         bookingId,
@@ -1704,9 +1669,11 @@ class RecoveryHandler {
           driverId,
           pickupLocation: booking.pickupLocation,
           dropoffLocation: booking.dropoffLocation,
+          ...(isDriver ? { customer: customerProfile } : {}),
         },
       });
       try {
+        // Notify customer
         const toCustomer = String(booking.user || "");
         if (toCustomer) {
           this.webSocketService.sendToUser(toCustomer, {
@@ -1721,6 +1688,8 @@ class RecoveryHandler {
             },
           });
         }
+
+        // Notify driver (includes customer info)
         this.webSocketService.sendToUser(String(driverId), {
           event: "recovery.started",
           bookingId,
@@ -1730,6 +1699,7 @@ class RecoveryHandler {
             driverId,
             pickupLocation: booking.pickupLocation,
             dropoffLocation: booking.dropoffLocation,
+            customer: customerProfile,
           },
         });
       } catch {}
@@ -2121,21 +2091,71 @@ class RecoveryHandler {
       return;
     }
 
+    // Idempotency: prevent concurrent/duplicate cancellation executions
+    let lockAcquired = false;
+    const lockKey = `booking:cancel:lock:${bookingId}`;
     try {
-      // Optional: authorization check – only booking owner or assigned driver
+      // Acquire a 15s lock; if exists, drop duplicate calls
+      lockAcquired = await redis.set(lockKey, "1", { NX: true, EX: 15 });
+      if (!lockAcquired) {
+        // Someone else is processing this cancel right now or just did
+        this.emitToClient(ws, {
+          event: "cancel.ack",
+          bookingId,
+          data: {
+            status: "cancel_in_progress",
+            reason,
+          },
+        });
+        return;
+      }
+    } catch {
+      // If locking fails, proceed (best-effort). Status check below still prevents duplicates.
+    }
+
+    try {
+      // Authorization: only booking owner or assigned/pending driver
       const viewerId = String(ws?.user?._id || ws?.user?.id || "").trim();
       const booking = await Booking.findById(bookingId)
-        .select("user driver status")
+        .select(
+          "user driver status pendingAssignment pickupLocation dropoffLocation fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
+        )
         .lean();
       if (!booking) throw new Error("Booking not found");
 
       const isParticipant =
         (booking.user && String(booking.user) === viewerId) ||
-        (booking.driver && String(booking.driver) === viewerId);
-
-      // You can relax this if needed (e.g., admins)
+        (booking.driver && String(booking.driver) === viewerId) ||
+        (booking?.pendingAssignment?.driverId &&
+          String(booking.pendingAssignment.driverId) === viewerId);
       if (!isParticipant)
         throw new Error("Not authorized to cancel this booking");
+
+      // If already cancelled/completed, ack once and stop (do not spam events)
+      if (["cancelled", "completed"].includes(booking.status)) {
+        this.emitToClient(ws, {
+          event: "cancel.ack",
+          bookingId,
+          data: {
+            status: booking.status,
+            alreadyCancelled: true,
+            reason:
+              booking.status === "cancelled"
+                ? booking.cancellationReason || reason
+                : undefined,
+            finalFare: Number(
+              (typeof booking?.fareDetails?.finalFare === "object"
+                ? booking?.fareDetails?.finalFare?.amount
+                : booking?.fareDetails?.finalFare) ??
+                booking?.fare ??
+                0
+            ),
+            currency: booking?.fareDetails?.currency || "AED",
+            breakdown: booking?.fareDetails?.breakdown || {},
+          },
+        });
+        return;
+      }
 
       // Recompute to include cancellation charges and persist fare details
       const now = new Date();
@@ -2155,7 +2175,7 @@ class RecoveryHandler {
         fallbackFare = Number(b?.fare || 0);
       }
 
-      // Atomic update with status + fare triggers pre('findOneAndUpdate') to stamp finalFare
+      // Atomic update with status + fare
       await Booking.findByIdAndUpdate(
         bookingId,
         {
@@ -2170,7 +2190,7 @@ class RecoveryHandler {
         { new: false }
       );
 
-      // Clear in-memory cache entry if you keep one
+      // Update in-memory cache
       const rec = this.activeRecoveries.get(bookingId) || {};
       rec.status = "cancelled";
       rec.cancelledAt = now;
@@ -2182,10 +2202,10 @@ class RecoveryHandler {
       });
       this.activeRecoveries.set(bookingId, rec);
 
-      // Reload to include finalFare for outbound payload
+      // Reload minimal for outbound payload and recipients
       const after = await Booking.findById(bookingId)
         .select(
-          "user driver fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
+          "user driver pendingAssignment fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
         )
         .lean();
 
@@ -2208,29 +2228,58 @@ class RecoveryHandler {
         },
       };
 
-      // Notify both parties
+      // Notify customer
       if (after?.user)
         this.webSocketService.sendToUser(String(after.user), cancelPayload);
-      if (after?.driver)
-        this.webSocketService.sendToUser(String(after.driver), cancelPayload);
 
-      // Also broadcast to a room if you use one
+      // Notify driver (assigned, started, or pending assignment)
+      const driverTargets = [];
+      if (after?.driver) driverTargets.push(String(after.driver));
+      else if (after?.pendingAssignment?.driverId)
+        driverTargets.push(String(after.pendingAssignment.driverId));
+      Array.from(new Set(driverTargets))
+        .filter(Boolean)
+        .forEach((drvId) =>
+          this.webSocketService.sendToUser(drvId, cancelPayload)
+        );
+
+      // Optional broadcast to booking room (kept)
       if (this.webSocketService?.sendToRoom) {
         this.webSocketService.sendToRoom(`booking:${bookingId}`, cancelPayload);
       }
 
-      // ACK to requester
+      // Ack to requester
       this.emitToClient(ws, {
         event: "cancel.ack",
         bookingId,
         data: cancelPayload.data,
       });
+
+      // Optional: also mark request unavailable in service room (unchanged)
+      try {
+        const norm = (s) =>
+          String(s || "")
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, "_");
+        const st = norm("car recovery");
+        const roomName = `svc:${st}`;
+        if (this.webSocketService?.sendToRoom) {
+          this.webSocketService.sendToRoom(roomName, {
+            event: "recovery.unavailable",
+            bookingId,
+            data: { reason: "cancelled" },
+          });
+        }
+      } catch {}
     } catch (error) {
       this.emitToClient(ws, {
         event: "error",
         bookingId,
         error: { code: "CANCEL_ERROR", message: error.message },
       });
+    } finally {
+      // Nothing
     }
   }
 
@@ -4726,65 +4775,110 @@ class RecoveryHandler {
           },
         });
 
+        // Build driver profile + vehicle for downstream events
+        let driverProfile = null;
+        let vehicleDetails = null;
+        try {
+          if (booking.driver) {
+            const d = await User.findById(booking.driver).select(
+              "firstName lastName email phoneNumber selfieImage"
+            );
+            driverProfile = d
+              ? {
+                  id: String(d._id),
+                  name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
+                  email: d.email || null,
+                  phone: d.phoneNumber || null,
+                  image: d.selfieImage || null,
+                }
+              : null;
+
+            const v = await Vehicle.findOne({
+              userId: String(booking.driver),
+              isActive: true,
+              status: "approved",
+              serviceType: "car recovery",
+            })
+              .select(
+                "vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate serviceType serviceCategory vehicleType wheelchair packingHelper loadingUnloadingHelper fixingHelper"
+              )
+              .lean();
+
+            if (v) {
+              vehicleDetails = {
+                id: String(v._id || ""),
+                vehicleRegistrationCard: v.vehicleRegistrationCard || null,
+                roadAuthorityCertificate: v.roadAuthorityCertificate || null,
+                insuranceCertificate: v.insuranceCertificate || null,
+                vehicleImages: Array.isArray(v.vehicleImages)
+                  ? v.vehicleImages
+                  : [],
+                vehicleOwnerName: v.vehicleOwnerName || null,
+                companyName: v.companyName || null,
+                vehiclePlateNumber: v.vehiclePlateNumber || null,
+                vehicleMakeModel: v.vehicleMakeModel || null,
+                chassisNumber: v.chassisNumber || null,
+                vehicleColor: v.vehicleColor || null,
+                registrationExpiryDate: v.registrationExpiryDate || null,
+                serviceType: v.serviceType || null,
+                serviceCategory: v.serviceCategory || null,
+                vehicleType: v.vehicleType || null,
+                wheelchair: !!v.wheelchair,
+                packingHelper: !!v.packingHelper,
+                loadingUnloadingHelper: !!v.loadingUnloadingHelper,
+                fixingHelper: !!v.fixingHelper,
+              };
+            }
+          }
+        } catch {}
+
+        // Emit driver.assigned and recovery.accepted in idempotent path as well
+        try {
+          const toCustomer = String(booking.user || "");
+          if (toCustomer) {
+            this.webSocketService.sendToUser(toCustomer, {
+              event: "driver.assigned",
+              bookingId,
+              data: {
+                driver: driverProfile,
+                vehicleDetails,
+                acceptedAt: booking?.acceptedAt || null,
+                startedAt: booking?.startedAt || null,
+              },
+            });
+            this.webSocketService.sendToUser(toCustomer, {
+              event: "recovery.accepted",
+              bookingId,
+              data: {
+                status: "accepted",
+                driverId: String(booking.driver || ""),
+                acceptedAt: booking?.acceptedAt || null,
+              },
+            });
+          }
+          this.webSocketService.sendToUser(String(booking.driver || ""), {
+            event: "driver.assigned",
+            bookingId,
+            data: {
+              driver: driverProfile,
+              vehicleDetails,
+              acceptedAt: booking?.acceptedAt || null,
+              startedAt: booking?.startedAt || null,
+            },
+          });
+          this.webSocketService.sendToUser(String(booking.driver || ""), {
+            event: "recovery.accepted",
+            bookingId,
+            data: {
+              status: "accepted",
+              driverId: String(booking.driver || ""),
+              acceptedAt: booking?.acceptedAt || null,
+            },
+          });
+        } catch {}
+
         // If already started, also echo started with enriched driver + vehicle
         if (booking.status === "in_progress") {
-          let driverProfile = null;
-          let vehicleDetails = null;
-          try {
-            if (booking.driver) {
-              const d = await User.findById(booking.driver).select(
-                "firstName lastName email phoneNumber selfieImage"
-              );
-              driverProfile = d
-                ? {
-                    id: String(d._id),
-                    name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
-                    email: d.email || null,
-                    phone: d.phoneNumber || null,
-                    image: d.selfieImage || null,
-                  }
-                : null;
-
-              const v = await Vehicle.findOne({
-                userId: String(booking.driver),
-                isActive: true,
-                status: "approved",
-                serviceType: "car recovery",
-              })
-                .select(
-                  "vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate serviceType serviceCategory vehicleType wheelchair packingHelper loadingUnloadingHelper fixingHelper"
-                )
-                .lean();
-
-              if (v) {
-                vehicleDetails = {
-                  id: String(v._id || ""),
-                  vehicleRegistrationCard: v.vehicleRegistrationCard || null,
-                  roadAuthorityCertificate: v.roadAuthorityCertificate || null,
-                  insuranceCertificate: v.insuranceCertificate || null,
-                  vehicleImages: Array.isArray(v.vehicleImages)
-                    ? v.vehicleImages
-                    : [],
-                  vehicleOwnerName: v.vehicleOwnerName || null,
-                  companyName: v.companyName || null,
-                  vehiclePlateNumber: v.vehiclePlateNumber || null,
-                  vehicleMakeModel: v.vehicleMakeModel || null,
-                  chassisNumber: v.chassisNumber || null,
-                  vehicleColor: v.vehicleColor || null,
-                  registrationExpiryDate: v.registrationExpiryDate || null,
-                  serviceType: v.serviceType || null,
-                  serviceCategory: v.serviceCategory || null,
-                  vehicleType: v.vehicleType || null,
-                  wheelchair: !!v.wheelchair,
-                  packingHelper: !!v.packingHelper,
-                  loadingUnloadingHelper: !!v.loadingUnloadingHelper,
-                  fixingHelper: !!v.fixingHelper,
-                };
-              }
-            }
-          } catch {}
-
-          // Echo enriched started to caller
           this.emitToClient(ws, {
             event: "recovery.started",
             bookingId,
@@ -4865,7 +4959,7 @@ class RecoveryHandler {
         bookingId,
         {
           $set: {
-            status: "in_progress", // if your current code sets in_progress on accept
+            status: "in_progress", // stays as your current flow
             driver: driverId,
             acceptedAt: now,
             startedAt: now,
@@ -4978,7 +5072,7 @@ class RecoveryHandler {
         },
       });
 
-      // NEW: Driver assigned with full driver + vehicle details
+      // 1) Driver assigned (to both)
       try {
         const toCustomer = String(booking.user || "");
         if (toCustomer) {
@@ -5007,7 +5101,24 @@ class RecoveryHandler {
         });
       } catch {}
 
-      // Started notifications to both (include driver + vehicle so customer UI has it)
+      // 2) Recovery accepted (to both)
+      try {
+        const toCustomer = String(booking.user || "");
+        const acceptedPayload = {
+          event: "recovery.accepted",
+          bookingId,
+          data: {
+            status: "accepted",
+            driverId,
+            acceptedAt: now,
+          },
+        };
+        if (toCustomer)
+          this.webSocketService.sendToUser(toCustomer, acceptedPayload);
+        this.webSocketService.sendToUser(String(driverId), acceptedPayload);
+      } catch {}
+
+      // 3) Started notifications to both (include driver + vehicle so customer UI has it)
       try {
         const startedPayload = {
           event: "recovery.started",
@@ -5621,7 +5732,34 @@ class RecoveryHandler {
       };
       await Booking.findByIdAndUpdate(bookingId, update, { new: false });
 
-      // ACK to caller
+      // Fetch admin allowedPercentage for min/max computation
+      let cfg = null;
+      try {
+        cfg = await ComprehensivePricing.findOne({ isActive: true })
+          .select(
+            "serviceTypes.carRecovery.adjustmentSettings adjustmentSettings"
+          )
+          .lean();
+      } catch {}
+      const allowedPercentage =
+        Number(
+          cfg?.serviceTypes?.carRecovery?.adjustmentSettings
+            ?.allowedPercentage ??
+            cfg?.adjustmentSettings?.allowedPercentage ??
+            3
+        ) || 3;
+
+      // Compute min/max around offered amount
+      const minFare = Math.max(
+        0,
+        Math.round(amount * (1 - allowedPercentage / 100) * 100) / 100
+      );
+      const maxFare = Math.max(
+        0,
+        Math.round(amount * (1 + allowedPercentage / 100) * 100) / 100
+      );
+
+      // ACK to caller (include min/max band)
       this.emitToClient(ws, {
         event: "fare.offer.ack",
         bookingId,
@@ -5631,10 +5769,13 @@ class RecoveryHandler {
           negotiationState: booking?.fareDetails?.negotiation?.state || "open",
           offeredBy,
           counterparty,
+          minFare,
+          maxFare,
+          allowedPercentage,
         },
       });
 
-      // Notify counterpart
+      // Notify counterpart (include min/max band)
       try {
         const toCustomer = String(booking.user || "");
         const toDriver = String(driverId || booking.driver || "");
@@ -5649,6 +5790,9 @@ class RecoveryHandler {
             pickupLocation: booking.pickupLocation,
             dropoffLocation: booking.dropoffLocation,
             offeredBy,
+            minFare,
+            maxFare,
+            allowedPercentage,
           },
         };
         if (by === "driver" && toCustomer)

@@ -637,6 +637,46 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     });
   }
 
+  // Helper to evaluate admin-configured night time window
+  const isNowWithinNightWindow = async () => {
+    try {
+      const cfg = await ComprehensivePricing.findOne({ isActive: true })
+        .select("serviceTypes.carRecovery.nightCharges nightCharges")
+        .lean();
+      const crNight = cfg?.serviceTypes?.carRecovery?.nightCharges;
+      const topNight = cfg?.nightCharges;
+      const nightCfg =
+        (crNight && crNight.enabled ? crNight : null) || topNight;
+      if (!nightCfg || nightCfg.enabled !== true) return false;
+
+      const start = String(nightCfg.start || "").trim(); // e.g., "22:00"
+      const end = String(nightCfg.end || "").trim(); // e.g., "06:00"
+      if (!start || !end) return false;
+
+      const toMinutes = (hhmm) => {
+        const [h, m] = hhmm.split(":").map((v) => Number(v));
+        if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+        return h * 60 + m;
+      };
+      const startMin = toMinutes(start);
+      const endMin = toMinutes(end);
+      if (startMin == null || endMin == null) return false;
+
+      const now = new Date();
+      const minutesNow = now.getHours() * 60 + now.getMinutes();
+
+      if (startMin <= endMin) {
+        // Same day window, e.g., 20:00-23:00
+        return minutesNow >= startMin && minutesNow <= endMin;
+      } else {
+        // Wraps midnight, e.g., 22:00-06:00
+        return minutesNow >= startMin || minutesNow <= endMin;
+      }
+    } catch {
+      return false;
+    }
+  };
+
   // Branch A: requestId path (generic, works for any module with a Booking). When provided, KYC requirement is bypassed after auth.
   if (requestId) {
     try {
@@ -678,33 +718,6 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       const avgSpeedKmh = 30;
       const durationMinutes = Math.ceil((distanceKm / avgSpeedKmh) * 60);
 
-      // Map car recovery categories to calculator serviceType
-      const mapToCalcType = (cat) => {
-        const v = String(cat || "")
-          .toLowerCase()
-          .trim();
-        // Exact flow labels
-        if (v === "towing services" || v === "towing") return "towing";
-        if (v === "winching services" || v === "winching") return "winching";
-        if (
-          v === "roadside assistance" ||
-          v === "roadside_assistance" ||
-          v === "roadside"
-        )
-          return "roadside_assistance";
-        if (
-          v === "specialized/heavy recovery" ||
-          v.includes("specialized") ||
-          v.includes("heavy")
-        )
-          return "specialized_recovery";
-        // Fallbacks
-        if (v.includes("towing")) return "towing";
-        if (v.includes("winching")) return "winching";
-        if (v.includes("roadside")) return "roadside_assistance";
-        if (v.includes("key")) return "key_unlock";
-        return "specialized_recovery";
-      };
       let fareResult;
       let estimatedFare;
       let dynamic = {
@@ -736,6 +749,9 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           booking.vehicleType ||
           null;
 
+        // Night window check from admin config
+        const nightNow = await isNowWithinNightWindow();
+
         // COMPREHENSIVE CALCULATOR for car recovery
         fareResult = await calculateComprehensiveFare({
           serviceType: "car recovery",
@@ -746,6 +762,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           waitingMinutes: Number(
             req.body?.options?.waitingTime || req.body.waitingMinutes || 0
           ),
+          isNightTime: nightNow === true, // enforce night if in admin window
         });
         estimatedFare = Number(fareResult?.totalFare || 0);
 
@@ -807,17 +824,48 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           })();
           dynamic.demand = ds.demand;
           dynamic.supply = ds.supply;
-          // Continuous surge: factor = clamp(1 + 0.15*(ratio-1), 0.85, 1.15), where ratio = demand/supply
-          const ratioA = (ds.demand || 0) / Math.max(1, ds.supply || 0);
-          const rawFactorA = 1 + 0.15 * (ratioA - 1); // linear around 1.0
-          const factorA = Math.max(0.85, Math.min(1.15, rawFactorA));
-          dynamic.surgePercent = Math.round((factorA - 1) * 100);
-          dynamic.surgeType =
-            dynamic.surgePercent > 0
-              ? "increase"
-              : dynamic.surgePercent < 0
+
+          // Admin-configurable supply/demand percent (+/-)
+          let cfgSD = null;
+          try {
+            cfgSD = await ComprehensivePricing.findOne({ isActive: true })
+              .select(
+                "serviceTypes.carRecovery adjustmentSettings supplyDemand"
+              )
+              .lean();
+          } catch {}
+          const allowedPercentageAdmin =
+            Number(
+              cfgSD?.serviceTypes?.carRecovery?.adjustmentSettings
+                ?.allowedPercentage ??
+                cfgSD?.adjustmentSettings?.allowedPercentage ??
+                3
+            ) || 3;
+          const supplyDemandPercent =
+            Number(
+              cfgSD?.serviceTypes?.carRecovery?.supplyDemand?.percent ??
+                cfgSD?.supplyDemand?.percent ??
+                allowedPercentageAdmin
+            ) || allowedPercentageAdmin;
+
+          // Decide increase/decrease based on counts
+          const adjustmentType =
+            (ds.supply || 0) > (ds.demand || 0)
               ? "decrease"
+              : (ds.supply || 0) < (ds.demand || 0)
+              ? "increase"
               : "none";
+
+          dynamic.surgePercent =
+            adjustmentType === "increase"
+              ? supplyDemandPercent
+              : adjustmentType === "decrease"
+              ? -supplyDemandPercent
+              : 0;
+          dynamic.surgeType =
+            adjustmentType === "none" ? "none" : adjustmentType;
+
+          // Apply on top of computed total
           if (dynamic.surgePercent !== 0) {
             const mult = 1 + dynamic.surgePercent / 100;
             estimatedFare = Math.max(
@@ -865,12 +913,18 @@ const getFareEstimation = asyncHandler(async (req, res) => {
       // Fare adjustment settings
       const fareSettings = await getFareAdjustmentSettings(booking.serviceType);
       const adjustmentPercentage = fareSettings.allowedAdjustmentPercentage;
-      const minFare = estimatedFare * (1 - adjustmentPercentage / 100);
-      const maxFare = estimatedFare * (1 + adjustmentPercentage / 100);
+
+      // Compute range around FINAL total (not estimated fare)
+      const finalTotalForRangeA = Number(
+        fareResult?.totalFare ?? estimatedFare ?? 0
+      );
+      const minFare = finalTotalForRangeA * (1 - adjustmentPercentage / 100);
+      const maxFare = finalTotalForRangeA * (1 + adjustmentPercentage / 100);
 
       // Prepare response
       const responseData = {
-        estimatedFare: safeNumber(Math.round(estimatedFare * 100) / 100, 0),
+        // estimatedFare removed; use totalFare instead
+        totalFare: safeNumber(Math.round(finalTotalForRangeA * 100) / 100, 0),
         currency: fareResult.currency || "AED",
         adjustmentSettings: {
           allowedPercentage: adjustmentPercentage,
@@ -1073,6 +1127,9 @@ const getFareEstimation = asyncHandler(async (req, res) => {
         vehicleType ||
         null;
 
+      // Night window check from admin config
+      const nightNow = await isNowWithinNightWindow();
+
       fareResult = await calculateComprehensiveFare({
         serviceType: "car recovery",
         vehicleType: recoveryVehicleType,
@@ -1083,6 +1140,7 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           Math.ceil((computedDistanceMeters / 1000 / 40) * 60),
         waitingMinutes:
           req.body.options?.waitingTime || req.body.waitingMinutes || 0,
+        isNightTime: nightNow === true, // enforce night if in admin window
       });
       estimatedFare = fareResult.totalFare || 0;
 
@@ -1157,17 +1215,47 @@ const getFareEstimation = asyncHandler(async (req, res) => {
           }).length;
           dynamic.demand = demand;
           dynamic.supply = supply;
-          // Continuous surge: factor = clamp(1 + 0.15*(ratio-1), 0.85, 1.15), where ratio = demand/supply
-          const ratioB = (demand || 0) / Math.max(1, supply || 0);
-          const rawFactorB = 1 + 0.15 * (ratioB - 1);
-          const factorB = Math.max(0.85, Math.min(1.15, rawFactorB));
-          dynamic.surgePercent = Math.round((factorB - 1) * 100);
-          dynamic.surgeType =
-            dynamic.surgePercent > 0
-              ? "increase"
-              : dynamic.surgePercent < 0
+
+          // Admin-configurable supply/demand percent (+/-)
+          let cfgSD = null;
+          try {
+            cfgSD = await ComprehensivePricing.findOne({ isActive: true })
+              .select(
+                "serviceTypes.carRecovery adjustmentSettings supplyDemand"
+              )
+              .lean();
+          } catch {}
+          const allowedPercentageAdmin =
+            Number(
+              cfgSD?.serviceTypes?.carRecovery?.adjustmentSettings
+                ?.allowedPercentage ??
+                cfgSD?.adjustmentSettings?.allowedPercentage ??
+                3
+            ) || 3;
+          const supplyDemandPercent =
+            Number(
+              cfgSD?.serviceTypes?.carRecovery?.supplyDemand?.percent ??
+                cfgSD?.supplyDemand?.percent ??
+                allowedPercentageAdmin
+            ) || allowedPercentageAdmin;
+
+          // Decide increase/decrease based on counts
+          const adjustmentType =
+            (supply || 0) > (demand || 0)
               ? "decrease"
+              : (supply || 0) < (demand || 0)
+              ? "increase"
               : "none";
+
+          dynamic.surgePercent =
+            adjustmentType === "increase"
+              ? supplyDemandPercent
+              : adjustmentType === "decrease"
+              ? -supplyDemandPercent
+              : 0;
+          dynamic.surgeType =
+            adjustmentType === "none" ? "none" : adjustmentType;
+
           if (dynamic.surgePercent !== 0) {
             const mult = 1 + dynamic.surgePercent / 100;
             estimatedFare = Math.max(
@@ -1218,10 +1306,13 @@ const getFareEstimation = asyncHandler(async (req, res) => {
     // Get fare adjustment settings
     const fareSettings = await getFareAdjustmentSettings(serviceType);
 
-    // Calculate adjustment range
+    // Compute range around FINAL total (not estimated fare)
+    const finalTotalForRangeB = Number(
+      fareResult?.totalFare ?? estimatedFare ?? 0
+    );
     const adjustmentPercentage = fareSettings.allowedAdjustmentPercentage;
-    const minFare = estimatedFare * (1 - adjustmentPercentage / 100);
-    const maxFare = estimatedFare * (1 + adjustmentPercentage / 100);
+    const minFare = finalTotalForRangeB * (1 - adjustmentPercentage / 100);
+    const maxFare = finalTotalForRangeB * (1 + adjustmentPercentage / 100);
 
     // Find qualified drivers and vehicles for the estimation
     const qualifiedDrivers = await findQualifiedDriversForEstimation(
@@ -1233,7 +1324,8 @@ const getFareEstimation = asyncHandler(async (req, res) => {
 
     // Prepare response data
     const responseData = {
-      estimatedFare: safeNumber(Math.round(estimatedFare * 100) / 100, 0),
+      // estimatedFare removed; use totalFare instead
+      totalFare: safeNumber(Math.round(finalTotalForRangeB * 100) / 100, 0),
       currency: fareResult.currency || "AED",
       adjustmentSettings: {
         allowedPercentage: adjustmentPercentage,

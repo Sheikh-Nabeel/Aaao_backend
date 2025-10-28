@@ -606,3 +606,222 @@ export const getCarRecoveryHistoryStats = asyncHandler(async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+
+export const estimateCarRecoveryFare = asyncHandler(async (req, res) => {
+  try {
+    const {
+      pickupLocation,
+      dropoffLocation,
+      distanceInMeters,
+      serviceType = "car recovery",
+      serviceCategory = "towing",
+      subService, // use as vehicleType for car recovery sub-service
+      routeType = "one_way",
+      helper = false,
+      options = {},
+      paymentMethod,
+    } = req.body || {};
+
+    if (!pickupLocation?.coordinates && !distanceInMeters) {
+      return res.status(400).json({
+        success: false,
+        message: "pickupLocation.coordinates or distanceInMeters is required",
+      });
+    }
+
+    // 1) Distance (km)
+    let distanceKm = 0;
+    if (typeof distanceInMeters === "number") {
+      distanceKm = Math.max(0, Number(distanceInMeters) / 1000);
+    } else if (pickupLocation?.coordinates && dropoffLocation?.coordinates) {
+      distanceKm = await calculateDistance(
+        pickupLocation.coordinates,
+        dropoffLocation.coordinates
+      );
+    }
+
+    // 2) Admin config for allowed range and supply/demand percent
+    // Try PricingConfig first (present in this controller), else fallback to ComprehensivePricing
+    let cfg = await PricingConfig.findOne({ isActive: true }).lean();
+    if (!cfg) {
+      try {
+        const { default: ComprehensivePricing } = await import(
+          "../models/comprehensivePricingModel.js"
+        );
+        cfg = await ComprehensivePricing.findOne({ isActive: true }).lean();
+      } catch {}
+    }
+
+    const allowedPercentage =
+      Number(
+        cfg?.adjustmentSettings?.allowedPercentage ??
+          cfg?.serviceTypes?.carRecovery?.adjustmentSettings
+            ?.allowedPercentage ??
+          3
+      ) || 3;
+
+    const supplyDemandPercent =
+      Number(
+        cfg?.serviceTypes?.carRecovery?.supplyDemand?.percent ??
+          cfg?.supplyDemand?.percent ??
+          allowedPercentage
+      ) || allowedPercentage;
+
+    // 3) Supply/Demand: drivers vs nearby pending passengers
+    const [lng, lat] = Array.isArray(pickupLocation?.coordinates)
+      ? pickupLocation.coordinates
+      : [pickupLocation?.coordinates?.lng, pickupLocation?.coordinates?.lat];
+
+    let qualifiedDrivers = [];
+    try {
+      if (typeof lat === "number" && typeof lng === "number") {
+        qualifiedDrivers = await User.find({
+          role: "driver",
+          kycLevel: { $gte: 2 },
+          kycStatus: "approved",
+          isActive: true,
+          "currentLocation.coordinates": { $exists: true },
+          currentLocation: {
+            $near: {
+              $geometry: { type: "Point", coordinates: [lng, lat] },
+              $maxDistance: 3000, // 3km
+            },
+          },
+        })
+          .limit(10)
+          .select(
+            "_id firstName lastName email phoneNumber currentLocation driverStatus gender"
+          )
+          .lean();
+      }
+    } catch {}
+
+    const driversCount = qualifiedDrivers.length;
+
+    let nearbyPassengersCount = 0;
+    try {
+      nearbyPassengersCount = await Booking.countDocuments({
+        status: "pending",
+        serviceType: "car recovery",
+        createdAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) }, // last 10 min
+        pickupLocation: {
+          $near: {
+            $geometry: { type: "Point", coordinates: [lng, lat] },
+            $maxDistance: 3000,
+          },
+        },
+      });
+    } catch {}
+
+    // 4) Map supply/demand to demandRatio multiplier
+    let adjustmentType = "neutral"; // increase | decrease | neutral
+    if (driversCount > nearbyPassengersCount) adjustmentType = "decrease";
+    else if (driversCount < nearbyPassengersCount) adjustmentType = "increase";
+
+    const surgePercent = adjustmentType === "neutral" ? 0 : supplyDemandPercent;
+
+    const demandRatio =
+      adjustmentType === "increase"
+        ? 1 + surgePercent / 100
+        : adjustmentType === "decrease"
+        ? Math.max(0.1, 1 - surgePercent / 100)
+        : 1;
+
+    // 5) Compute comprehensive fare (night/surge/waiting handled there)
+    const { calculateComprehensiveFare } = await import(
+      "../utils/comprehensiveFareCalculator.js"
+    );
+    const comp = await calculateComprehensiveFare({
+      serviceType,
+      vehicleType: subService || null,
+      distance: distanceKm,
+      routeType,
+      demandRatio,
+      waitingMinutes: Number(options?.waitingTime || 0),
+      helper: !!helper,
+    });
+
+    const currency = comp?.currency || "AED";
+    const totalFare = Number(comp?.totalFare || comp?.total || 0);
+
+    // 6) Range around total (admin allowedPercentage)
+    const minFare = Math.max(
+      0,
+      Math.round(totalFare * (1 - allowedPercentage / 100) * 100) / 100
+    );
+    const maxFare =
+      Math.round(totalFare * (1 + allowedPercentage / 100) * 100) / 100;
+
+    // 7) Driver payload (basic)
+    const driversPayload = qualifiedDrivers.map((d) => ({
+      id: String(d._id),
+      name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
+      email: d.email || null,
+      phoneNumber: d.phoneNumber || null,
+      rating: 0,
+      totalRides: 0,
+      gender: d.gender || "Male",
+      currentLocation: {
+        coordinates: Array.isArray(d.currentLocation?.coordinates)
+          ? d.currentLocation.coordinates
+          : null,
+      },
+      distance: 0,
+      estimatedArrival: 0,
+    }));
+
+    // 8) Response (no estimatedFare field)
+    return res.json({
+      success: true,
+      message: "Fare estimation calculated successfully",
+      data: {
+        totalFare,
+        currency,
+        adjustmentSettings: {
+          allowedPercentage,
+          minFare,
+          maxFare,
+          canAdjustFare: true,
+        },
+        qualifiedDrivers: driversPayload,
+        driversCount,
+        onlineDriversCount: driversCount,
+        nearbyPassengersCount,
+        dynamicAdjustment: {
+          surgePercent:
+            surgePercent === 0
+              ? 0
+              : adjustmentType === "increase"
+              ? surgePercent
+              : -surgePercent,
+          type: adjustmentType,
+        },
+        tripDetails: {
+          distance: `${distanceKm.toFixed(2)} km`,
+          serviceType,
+          serviceCategory,
+          routeType,
+          paymentMethod: paymentMethod || "cash",
+        },
+        validatedVehicleType: null,
+        fareBreakdown: {
+          baseFare: Number(comp?.baseFare || 0),
+          distanceFare: Number(comp?.distanceFare || 0),
+          platformFee: Number(comp?.platformFee || 0),
+          nightCharges: Number(comp?.nightCharges || 0),
+          surgeCharges: Number(comp?.surgeCharges || 0),
+          waitingCharges: Number(comp?.waitingCharges || 0),
+          vatAmount: Number(comp?.vatAmount || 0),
+          subtotal: Number(comp?.subtotal || 0),
+          totalFare,
+          breakdown: comp?.breakdown || {},
+        },
+      },
+    });
+  } catch (e) {
+    console.error("estimateCarRecoveryFare error:", e);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to calculate fare estimation" });
+  }
+});
