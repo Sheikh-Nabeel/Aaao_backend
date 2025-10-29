@@ -297,13 +297,11 @@ class RecoveryHandler {
       return null;
     };
     const normalizeCoords = (c) => {
-      // Accept [lng, lat]
       if (Array.isArray(c) && c.length >= 2) {
         const lng = toNum(c[0]);
         const lat = toNum(c[1]);
         if (lng != null && lat != null) return [lng, lat];
       }
-      // Accept { lng, lat } or { longitude, latitude }
       if (c && typeof c === "object") {
         const lng = toNum(c.lng ?? c.longitude);
         const lat = toNum(c.lat ?? c.latitude);
@@ -316,6 +314,11 @@ class RecoveryHandler {
         .trim()
         .toLowerCase()
         .replace(/\s+/g, "_");
+    const normKeyLoose = (t) =>
+      String(t || "")
+        .toLowerCase()
+        .trim()
+        .replace(/[_-]+/g, " ");
     const buildCustomerProfile = (u) => {
       if (!u) return null;
       const name = `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim();
@@ -343,59 +346,40 @@ class RecoveryHandler {
     ).trim();
 
     try {
-      // Validate presence
+      // Validate
       if (!data || !data.pickupLocation || !data.dropoffLocation) {
         throw new Error(
           "Missing required fields: pickupLocation and dropoffLocation are required"
         );
       }
 
-      // Normalize coordinates
+      // Coordinates
       const pickArr = normalizeCoords(data.pickupLocation?.coordinates);
       const dropArr = normalizeCoords(data.dropoffLocation?.coordinates);
       if (!pickArr || !dropArr) {
         throw new Error(
-          "pickupLocation.coordinates and dropoffLocation.coordinates must be arrays [lng, lat] or objects {lng,lat}"
+          "pickupLocation.coordinates and dropoffLocation.coordinates must be [lng,lat] or {lng,lat}"
         );
       }
-
-      // Derive zones with defaults (schema requires zone)
       const pickupZone = data?.pickupLocation?.zone || "general";
       const dropoffZone = data?.dropoffLocation?.zone || "general";
 
-      // Service typing: keep a valid serviceType and separate category
-      const serviceType = "car recovery"; // valid enum value
+      // Service typing
+      const serviceType = "car recovery";
 
-      const normKeyLoose = (t) =>
-        String(t || "")
-          .toLowerCase()
-          .trim()
-          .replace(/[_-]+/g, " ");
-
+      // Derive category/subcategory/vehicleType
       const deriveCategory = (t, sub) => {
         const v = normKeyLoose(t);
         const s = normKeyLoose(sub);
-
-        // Towing
-        if (
-          v.includes("tow") ||
-          v.includes("towing") ||
-          v.includes("towing services")
-        )
-          return "towing services";
+        if (v.includes("towing")) return "towing services";
         if (
           s.includes("tow") ||
           s.includes("flatbed") ||
           s.includes("wheel lift")
         )
           return "towing services";
-
-        // Winching
-        if (v.includes("winch") || v.includes("winching"))
-          return "winching services";
+        if (v.includes("winch")) return "winching services";
         if (s.includes("winch")) return "winching services";
-
-        // Roadside
         if (
           v.includes("roadside") ||
           v.includes("battery") ||
@@ -410,15 +394,10 @@ class RecoveryHandler {
           s.includes("jump")
         )
           return "roadside assistance";
-
-        // Default
         return "specialized/heavy recovery";
       };
-
       const deriveSubcategoryVehicleType = (sub) => {
         const s = normKeyLoose(sub);
-
-        // Map to Booking.vehicleType enum values
         if (s.includes("flatbed")) return "flatbed towing";
         if (s.includes("wheel lift")) return "wheel lift towing";
         if (s.includes("on road winch") || s.includes("on road winching"))
@@ -427,25 +406,8 @@ class RecoveryHandler {
           return "off-road winching";
         if (s.includes("battery")) return "battery jump start";
         if (s.includes("fuel")) return "fuel delivery";
-
-        return null; // unknown -> leave null
+        return null;
       };
-
-      const serviceCategory = deriveCategory(
-        data?.serviceType || data?.subService,
-        data?.subService
-      );
-      const subServiceNormalized = normKeyLoose(data?.subService || "");
-
-      const rawVehicleType =
-        data?.vehicleType ||
-        data?.vehicleDetails?.type ||
-        data?.vehicleDetails?.vehicleType ||
-        null;
-
-      const derivedFromSub = deriveSubcategoryVehicleType(data?.subService);
-
-      // Accept only Booking.vehicleType enum values
       const isValidVehicleType = (s) => {
         const v = String(s || "")
           .toLowerCase()
@@ -464,22 +426,30 @@ class RecoveryHandler {
         ].includes(v);
       };
 
+      const serviceCategory = deriveCategory(
+        data?.serviceType || data?.subService,
+        data?.subService
+      );
+      const subServiceNormalized = normKeyLoose(data?.subService || "");
+      const rawVehicleType =
+        data?.vehicleType ||
+        data?.vehicleDetails?.type ||
+        data?.vehicleDetails?.vehicleType ||
+        null;
+      const derivedFromSub = deriveSubcategoryVehicleType(data?.subService);
       const vehicleTypeDerived = isValidVehicleType(rawVehicleType)
         ? rawVehicleType
         : derivedFromSub && isValidVehicleType(derivedFromSub)
         ? derivedFromSub
         : null;
 
-      // Compute distanc
+      // Distance
       let distanceKm =
         this._calcDistanceKm(
           { lat: pickArr[1], lng: pickArr[0] },
           { lat: dropArr[1], lng: dropArr[0] }
         ) || 0;
-
-      // If zero, try from payload or waypoints
       if (distanceKm === 0) {
-        // Prefer explicit distance fields if client sent one
         const provided = toNum(
           data?.distanceKm ??
             data?.distance ??
@@ -492,66 +462,48 @@ class RecoveryHandler {
           Array.isArray(data?.waypoints) &&
           data.waypoints.length > 1
         ) {
-          // Sum segment distances over waypoints if available
           let acc = 0;
           for (let i = 1; i < data.waypoints.length; i++) {
             const a = normalizeCoords(data.waypoints[i - 1]?.coordinates);
             const b = normalizeCoords(data.waypoints[i]?.coordinates);
-            if (a && b) {
+            if (a && b)
               acc += this._calcDistanceKm(
                 { lat: a[1], lng: a[0] },
                 { lat: b[1], lng: b[0] }
               );
-            }
           }
           if (acc > 0) distanceKm = acc;
         }
-
-        // Warn if pickup and dropoff are identical
-        if (
-          distanceKm === 0 &&
-          pickArr &&
-          dropArr &&
-          pickArr[0] === dropArr[0] &&
-          pickArr[1] === dropArr[1]
-        ) {
-          logger.warn(
-            "Pickup and dropoff coordinates are identical; distance = 0. Check client payload.",
-            {
-              pickup: pickArr,
-              dropoff: dropArr,
-              addressPick: data?.pickupLocation?.address,
-              addressDrop: data?.dropoffLocation?.address,
-            }
-          );
-        }
       }
-
       const distanceKmInt = Math.round(distanceKm);
       const distanceInMeters = Math.round(distanceKm * 1000);
 
-      // Estimate fare
-      let computed;
+      // Compute comprehensive fare (fills components)
+      let comp;
       try {
-        computed = await calculateComprehensiveFare({
+        comp = await calculateComprehensiveFare({
           serviceType: "car recovery",
           vehicleType:
             data?.vehicleType ||
             data?.vehicleDetails?.type ||
             data?.vehicleDetails?.vehicleType ||
             null,
-          distance: Number(distanceKm || 0), // km
+          distance: Number(distanceKm || 0),
           routeType: data?.routeType || "one_way",
           estimatedDuration: Number(data?.estimatedDuration || 0),
           waitingMinutes: Number(data?.options?.waitingTime || 0),
           demandRatio: Number(data?.demandRatio || 1),
-          // Cancellation flags not used at request time
           tripProgress: 0,
           isCancelled: false,
           cancellationReason: null,
+          // Optional flags if your calc supports them:
+          isNightTime: data?.options?.isNightTime ?? undefined,
+          roundTrip: data?.options?.roundTrip ?? undefined,
+          helper: data?.options?.helper ?? undefined,
+          subService: subServiceNormalized || undefined,
         });
       } catch (e) {
-        computed = {
+        comp = {
           totalFare: 0,
           currency: "AED",
           baseFare: 0,
@@ -567,91 +519,146 @@ class RecoveryHandler {
           alerts: [],
         };
       }
+      if (
+        comp &&
+        comp.breakdown &&
+        (comp.breakdown.total == null || isNaN(comp.breakdown.total))
+      ) {
+        comp.breakdown.total = Number(comp?.totalFare ?? comp?.total ?? 0);
+      }
 
-      // Estimated fare (Comprehensive totalFare already includes VAT, platform, etc.)
-      const estimatedFare = Number(computed?.totalFare ?? computed?.total ?? 0);
-      const currencyFromConfig = computed?.currency || "AED";
+      // Respect client-sent estimate if provided (authoritative for request)
+      const clientEstimated =
+        toNum(data?.estimatedFare) ?? toNum(data?.estimated?.amount);
+      const computedEstimated = Number(comp?.totalFare ?? comp?.total ?? 0);
+      const currencyFromConfig = comp?.currency || "AED";
 
-      // Build a base payload (reuse the inputs you just used)
-      const basePayload = {
-        serviceType: "car recovery",
-        vehicleType:
-          data?.vehicleType ||
-          data?.vehicleDetails?.type ||
-          data?.vehicleDetails?.vehicleType ||
-          null,
-        distance: Number(distanceKm || 0), // km
-        routeType: data?.routeType || "one_way",
-        estimatedDuration: Number(data?.estimatedDuration || 0),
-        // Note: demand/waiting will be varied per scenario below
-        tripProgress: 0,
-        isCancelled: false,
-        cancellationReason: null,
-      };
+      const estimatedFare =
+        clientEstimated && clientEstimated > 0
+          ? clientEstimated
+          : computedEstimated;
 
-      // Min scenario: no surge, no waiting, no night
+      // Adjustment settings and min/max (from config, but aligned with REST)
+      let cfg = null;
+      try {
+        cfg = await ComprehensivePricing.findOne({ isActive: true }).lean();
+      } catch {}
+      const allowedPercentage =
+        Number(
+          cfg?.serviceTypes?.carRecovery?.adjustmentSettings
+            ?.allowedPercentage ??
+            cfg?.adjustmentSettings?.allowedPercentage ??
+            3
+        ) || 3;
+
+      // Compute min/max scenarios via calculator (more accurate than +/- % here)
       let minFare = estimatedFare;
       try {
         const minComp = await calculateComprehensiveFare({
-          ...basePayload,
-          demandRatio: 1,
+          serviceType: "car recovery",
+          vehicleType:
+            data?.vehicleType ||
+            data?.vehicleDetails?.type ||
+            data?.vehicleDetails?.vehicleType ||
+            null,
+          distance: Number(distanceKm || 0),
+          routeType: data?.routeType || "one_way",
+          estimatedDuration: Number(data?.estimatedDuration || 0),
           waitingMinutes: 0,
+          demandRatio: 1,
+          tripProgress: 0,
+          isCancelled: false,
+          cancellationReason: null,
           isNightTime: false,
+          subService: subServiceNormalized || undefined,
         });
         minFare = Number(minComp?.totalFare ?? minFare);
       } catch {}
-
-      // Max scenario: highest configured surge + current waiting + force night if enabled
       let maxFare = estimatedFare;
       try {
-        // Read active comprehensive config to find the highest surge level
-        const cfg = await ComprehensivePricing.findOne({
-          isActive: true,
-        }).lean();
-
-        // Prefer carRecovery surge config, fallback to top-level
         const surgeLevels =
           cfg?.serviceTypes?.carRecovery?.surgePricing?.levels ??
           cfg?.surgePricing?.levels ??
           [];
-
-        // Highest demandRatio threshold in config (used by calculateSurgeMultiplier)
-        const maxDemandRatioFromCfg = surgeLevels.length
+        const maxDemandRatio = surgeLevels.length
           ? Math.max(
               ...surgeLevels
                 .map((l) => Number(l?.demandRatio || 1))
                 .filter((n) => Number.isFinite(n) && n >= 1)
             )
           : Number(data?.demandRatio || 1);
-
-        // Night: enable if the feature is enabled in config (lets calc add night charges)
         const nightEnabled =
           (cfg?.serviceTypes?.carRecovery?.nightCharges?.enabled ??
             cfg?.nightCharges?.enabled) === true;
 
         const maxComp = await calculateComprehensiveFare({
-          ...basePayload,
-          demandRatio: maxDemandRatioFromCfg,
+          serviceType: "car recovery",
+          vehicleType:
+            data?.vehicleType ||
+            data?.vehicleDetails?.type ||
+            data?.vehicleDetails?.vehicleType ||
+            null,
+          distance: Number(distanceKm || 0),
+          routeType: data?.routeType || "one_way",
+          estimatedDuration: Number(data?.estimatedDuration || 0),
           waitingMinutes: Number(data?.options?.waitingTime || 0),
+          demandRatio: maxDemandRatio,
+          tripProgress: 0,
+          isCancelled: false,
+          cancellationReason: null,
           isNightTime: nightEnabled ? true : false,
+          subService: subServiceNormalized || undefined,
         });
         maxFare = Number(maxComp?.totalFare ?? maxFare);
       } catch {}
-
-      // Ensure sane ordering
       if (maxFare < minFare) maxFare = minFare;
 
-      // Required schema fields (fare/offeredFare)
-      const clientEstimated =
-        (typeof data?.estimatedFare === "number" ? data.estimatedFare : null) ??
-        (typeof data?.estimated?.amount === "number"
-          ? data.estimated.amount
-          : null);
-      const offeredFare = toNum(clientEstimated) ?? estimatedFare;
-      const fare = estimatedFare;
+      // Dynamic adjustment summary
+      const surgePercent = Number(comp?.dynamicAdjustment?.surgePercent ?? 0);
+      const dynamicAdjustment = {
+        surgePercent,
+        type:
+          surgePercent > 0
+            ? "increase"
+            : surgePercent < 0
+            ? "decrease"
+            : "none",
+      };
 
-      // Build document
+      // Trip details (REST-aligned)
+      const tripDetails = {
+        distance: `${Number(distanceKm || 0).toFixed(2)} km`,
+        serviceType: "car recovery",
+        serviceCategory: serviceCategory?.includes("towing")
+          ? "towing"
+          : serviceCategory,
+        routeType: data?.routeType || "one_way",
+        paymentMethod: data?.paymentMethod || "cash",
+      };
+
+      // Fare breakdown (keep calculator components; force total to authoritative estimatedFare)
+      const fareBreakdown = {
+        baseFare: Number(comp?.baseFare || 0),
+        distanceFare: Number(comp?.distanceFare || 0),
+        platformFee: Number(comp?.platformFee || 0),
+        nightCharges: Number(comp?.nightCharges || 0),
+        surgeCharges: Number(comp?.surgeCharges || 0),
+        waitingCharges: Number(comp?.waitingCharges || 0),
+        vatAmount: Number(comp?.vatAmount || 0),
+        subtotal: Number(comp?.subtotal || 0),
+        totalFare: Number(estimatedFare || 0),
+        breakdown: {
+          ...(typeof comp?.breakdown === "object" ? comp.breakdown : {}),
+          total: Number(estimatedFare || 0),
+        },
+      };
+
+      // Final fare fields for DB
+      const offeredFare = estimatedFare;
+      const fare = estimatedFare;
       const now = new Date();
+
+      // Build DB doc
       const insertDoc = {
         status: "pending",
         user: userId || null,
@@ -664,61 +671,61 @@ class RecoveryHandler {
         pickupLocation: {
           address: data?.pickupLocation?.address || null,
           zone: pickupZone,
-          coordinates: pickArr, // [lng, lat]
+          coordinates: pickArr,
         },
         dropoffLocation: {
           address: data?.dropoffLocation?.address || null,
           zone: dropoffZone,
-          coordinates: dropArr, // [lng, lat]
+          coordinates: dropArr,
         },
         waypoints: Array.isArray(data?.waypoints) ? data.waypoints : [],
-        // Required distance fields
         distance: distanceKmInt,
         distanceInMeters,
-        // Required fare fields
         fare,
         offeredFare,
-        // Detailed fareDetails (mapped from Comprehensive)
         fareDetails: {
           currency: currencyFromConfig,
-          routeType: data?.routeType || undefined,
-          estimatedDistance: distanceKm,
-          estimatedDuration: Number(data?.estimatedDuration || 0), // add
-          waitingMinutes: Number(data?.options?.waitingTime || 0), // add
+          routeType: data?.routeType || "one_way",
+          estimatedDistance: Number(distanceKm || 0),
+          estimatedDuration: Number(data?.estimatedDuration || 0),
+          waitingMinutes: Number(data?.options?.waitingTime || 0),
           demandRatio: Number(data?.demandRatio || 1),
           tripProgress: 0,
-          estimatedFare: estimatedFare,
+          estimatedFare: Number(estimatedFare || 0),
           estimatedRange: { min: minFare, max: maxFare },
-          baseFare: Number(computed?.baseFare || 0),
-          distanceFare: Number(computed?.distanceFare || 0),
-          platformFee: Number(computed?.platformFee || 0),
-          nightCharges: Number(computed?.nightCharges || 0),
-          surgeCharges: Number(computed?.surgeCharges || 0),
-          waitingCharges: Number(computed?.waitingCharges || 0),
-          cancellationCharges: Number(computed?.cancellationCharges || 0),
-          vatAmount: Number(computed?.vatAmount || 0),
-          subtotal: Number(computed?.subtotal || 0),
-          breakdown: computed?.breakdown || {},
-          alerts: computed?.alerts || [],
-          negotiation: {
-            state: "open",
-            proposed: null,
-            history: [],
+          baseFare: fareBreakdown.baseFare,
+          distanceFare: fareBreakdown.distanceFare,
+          platformFee: fareBreakdown.platformFee,
+          nightCharges: fareBreakdown.nightCharges,
+          surgeCharges: fareBreakdown.surgeCharges,
+          waitingCharges: fareBreakdown.waitingCharges,
+          cancellationCharges: Number(comp?.cancellationCharges || 0),
+          vatAmount: fareBreakdown.vatAmount,
+          subtotal: fareBreakdown.subtotal,
+          breakdown: fareBreakdown.breakdown,
+          alerts: Array.isArray(comp?.alerts) ? comp.alerts : [],
+          negotiation: { state: "open", proposed: null, history: [] },
+          adjustmentSettings: {
+            allowedPercentage,
+            minFare,
+            maxFare,
+            canAdjustFare: true,
           },
         },
       };
 
-      // Targeted driver preference (optional)
-      const preferredDriverId = String(data?.driverId || "").trim();
-      if (preferredDriverId) {
+      // Optional targeted driver
+      const preferredDriverId = String(
+        data?.preferredDispatch?.driverId || data?.driverId || ""
+      ).trim();
+      if (preferredDriverId)
         insertDoc.pendingAssignment = { driverId: preferredDriverId, at: now };
-      }
 
-      // Persist booking
+      // Persist
       const booking = await Booking.create(insertDoc);
       const bookingId = String(booking._id);
 
-      // Build customer profile once for all driver notifications
+      // Customer profile
       let customerProfile = null;
       try {
         if (userId) {
@@ -739,14 +746,14 @@ class RecoveryHandler {
         userId,
         pickupLocation: insertDoc.pickupLocation,
         dropoffLocation: insertDoc.dropoffLocation,
-        estimatedFare,
+        estimatedFare: Number(estimatedFare || 0),
         currency: currencyFromConfig,
         freeStay: {},
         statusHistory: [{ status: "pending", timestamp: now }],
       };
       this.activeRecoveries.set(bookingId, rec);
 
-      // ACK to requester
+      // ACK to requester (REST-aligned sections included)
       this.emitToClient(ws, {
         event: "request.created",
         bookingId,
@@ -761,11 +768,11 @@ class RecoveryHandler {
           dropoffLocation: insertDoc.dropoffLocation,
           distance: distanceKmInt,
           distanceInMeters,
-          fare: { estimated: { customer: estimatedFare } },
+          fare: { estimated: { customer: Number(estimatedFare || 0) } },
           fareDetails: {
             currency: currencyFromConfig,
-            estimatedDistance: distanceKmInt,
-            estimatedFare,
+            estimatedDistance: Number(distanceKm || 0),
+            estimatedFare: Number(estimatedFare || 0),
             baseFare: insertDoc.fareDetails.baseFare,
             distanceFare: insertDoc.fareDetails.distanceFare,
             platformFee: insertDoc.fareDetails.platformFee,
@@ -775,56 +782,53 @@ class RecoveryHandler {
             cancellationCharges: insertDoc.fareDetails.cancellationCharges,
             vatAmount: insertDoc.fareDetails.vatAmount,
             subtotal: insertDoc.fareDetails.subtotal,
-            breakdown: insertDoc.fareDetails.breakdown,
+            breakdown: insertDoc.fareDetails.breakdown, // includes total forced to estimatedFare
             alerts: insertDoc.fareDetails.alerts,
             negotiation: insertDoc.fareDetails.negotiation,
           },
+          adjustmentSettings: {
+            allowedPercentage,
+            minFare,
+            maxFare,
+            canAdjustFare: true,
+          },
+          dynamicAdjustment,
+          tripDetails: {
+            ...tripDetails,
+          },
+          fareBreakdown, // includes totalFare forced to estimatedFare
           createdAt: now,
         },
       });
 
-      // Discover nearby drivers (kept as-is; not used for direct sends anymore)
+      // Discover drivers (unchanged)
       const searchRadiusKm = Math.max(
         1,
         Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 15))
       );
       let discoveryFilters = {
-        pinkCaptainOnly: !!(
-          data?.pinkCaptainOnly || data?.preferences?.pinkCaptainOnly
-        ),
+        pinkCaptainOnly: !!data?.preferences?.pinkCaptainOnly,
         safety: {
           familyWithGuardianMale: !!data?.preferences?.familyWithGuardianMale,
           noMaleCompanion: !!data?.preferences?.noMaleCompanion,
           maleWithoutFemale: !!data?.preferences?.maleWithoutFemale,
         },
         preferredDispatch: {
-          mode:
-            data?.dispatchPreference ||
-            data?.preferredDispatch?.mode ||
-            data?.preferences?.dispatchMode ||
-            null,
-          driverId:
-            data?.pinnedDriverId ||
-            data?.preferredDispatch?.driverId ||
-            data?.preferences?.pinnedDriverId ||
-            null,
+          mode: data?.preferredDispatch?.mode || null,
+          driverId: data?.preferredDispatch?.driverId || null,
         },
       };
-
       const pickupGeoForDiscovery = {
         type: "Point",
         coordinates: [pickArr[0], pickArr[1]],
         address: insertDoc.pickupLocation.address || "Unknown",
         zone: pickupZone,
       };
-
       let nearbyDrivers = await this.getAvailableDrivers(
         pickupGeoForDiscovery,
         searchRadiusKm,
         discoveryFilters
       );
-
-      // Second pass if none found
       if (!nearbyDrivers || nearbyDrivers.length === 0) {
         const widerRadius = Math.min(50, Math.ceil(searchRadiusKm * 1.5));
         nearbyDrivers = await this.getAvailableDrivers(
@@ -842,7 +846,7 @@ class RecoveryHandler {
         }
       }
 
-      // Emit available drivers list to requester (unchanged)
+      // Emit available drivers list to requester (kept)
       this.emitToClient(ws, {
         event: "carRecovery:driversAvailable",
         bookingId,
@@ -854,6 +858,7 @@ class RecoveryHandler {
         },
       });
 
+      // Broadcast to service rooms
       try {
         const baseRoom = `svc:${normKey("car recovery")}`;
         const categoryRoom = `svc:${normKey("car recovery")}:${normKey(
@@ -876,16 +881,12 @@ class RecoveryHandler {
             serviceCategory,
             pickupLocation: insertDoc.pickupLocation,
             dropoffLocation: insertDoc.dropoffLocation,
-            distance: distanceKm,
-            estimatedFare,
+            distance: Number(distanceKm || 0),
+            estimatedFare: Number(estimatedFare || 0),
             minFare,
             maxFare,
             currency: currencyFromConfig,
-            vehicleType:
-              data?.vehicleType ||
-              data?.vehicleDetails?.type ||
-              data?.vehicleDetails?.vehicleType ||
-              null,
+            vehicleType: vehicleTypeDerived,
             customer: customerProfile,
             at: now,
           },
@@ -899,8 +900,8 @@ class RecoveryHandler {
             serviceCategory,
             pickupLocation: insertDoc.pickupLocation,
             dropoffLocation: insertDoc.dropoffLocation,
-            distance: distanceKm,
-            estimatedFare,
+            distance: Number(distanceKm || 0),
+            estimatedFare: Number(estimatedFare || 0),
             minFare,
             maxFare,
             currency: currencyFromConfig,
@@ -910,13 +911,10 @@ class RecoveryHandler {
         };
 
         if (this.webSocketService?.sendToRoom) {
-          // base service room
           this.webSocketService.sendToRoom(baseRoom, newEventPayload);
           this.webSocketService.sendToRoom(baseRoom, legacyEventPayload);
-          // service category room
           this.webSocketService.sendToRoom(categoryRoom, newEventPayload);
           this.webSocketService.sendToRoom(categoryRoom, legacyEventPayload);
-          // sub-category room (if present)
           if (subCategoryRoom) {
             this.webSocketService.sendToRoom(subCategoryRoom, newEventPayload);
             this.webSocketService.sendToRoom(
@@ -1638,7 +1636,7 @@ class RecoveryHandler {
       });
       this.activeRecoveries.set(bookingId, rec);
 
-      // Build customer profile for driver notification
+      // Build customer profile (for driver notification and consistency)
       let customerProfile = null;
       try {
         const cust = await User.findById(String(booking.user))
@@ -1659,7 +1657,7 @@ class RecoveryHandler {
       } catch {}
 
       // Notify both sides that service started
-      // ACK to caller (include customer if the caller is the driver)
+      // ACK to caller (always include customer for consistency)
       this.emitToClient(ws, {
         event: "recovery.started",
         bookingId,
@@ -1669,11 +1667,12 @@ class RecoveryHandler {
           driverId,
           pickupLocation: booking.pickupLocation,
           dropoffLocation: booking.dropoffLocation,
-          ...(isDriver ? { customer: customerProfile } : {}),
+          customer: customerProfile,
         },
       });
+
       try {
-        // Notify customer
+        // Notify customer (include customer info for consistency)
         const toCustomer = String(booking.user || "");
         if (toCustomer) {
           this.webSocketService.sendToUser(toCustomer, {
@@ -1685,6 +1684,7 @@ class RecoveryHandler {
               driverId,
               pickupLocation: booking.pickupLocation,
               dropoffLocation: booking.dropoffLocation,
+              customer: customerProfile,
             },
           });
         }
@@ -2118,7 +2118,7 @@ class RecoveryHandler {
       const viewerId = String(ws?.user?._id || ws?.user?.id || "").trim();
       const booking = await Booking.findById(bookingId)
         .select(
-          "user driver status pendingAssignment pickupLocation dropoffLocation fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
+          "user driver status pendingAssignment pickupLocation dropoffLocation fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown cancellationReason cancelledAt"
         )
         .lean();
       if (!booking) throw new Error("Booking not found");
@@ -2131,29 +2131,100 @@ class RecoveryHandler {
       if (!isParticipant)
         throw new Error("Not authorized to cancel this booking");
 
-      // If already cancelled/completed, ack once and stop (do not spam events)
+      // If already cancelled/completed, send single notifications and ack (avoid reprocessing)
       if (["cancelled", "completed"].includes(booking.status)) {
+        const alreadyData = {
+          status: booking.status,
+          alreadyCancelled: booking.status === "cancelled",
+          reason:
+            booking.status === "cancelled"
+              ? booking.cancellationReason || reason
+              : undefined,
+          finalFare: Number(
+            (typeof booking?.fareDetails?.finalFare === "object"
+              ? booking?.fareDetails?.finalFare?.amount
+              : booking?.fareDetails?.finalFare) ??
+              booking?.fare ??
+              0
+          ),
+          currency: booking?.fareDetails?.currency || "AED",
+          breakdown: booking?.fareDetails?.breakdown || {},
+          cancelledAt:
+            booking.status === "cancelled"
+              ? booking?.cancelledAt || new Date()
+              : undefined,
+        };
+
+        // If status is 'cancelled', ensure both sides receive recovery.cancelled once
+        if (booking.status === "cancelled") {
+          const cancelPayload = {
+            event: "recovery.cancelled",
+            bookingId,
+            data: {
+              status: "cancelled",
+              cancelledAt: alreadyData.cancelledAt,
+              reason: alreadyData.reason || "cancelled",
+              finalFare: alreadyData.finalFare,
+              currency: alreadyData.currency,
+              breakdown: alreadyData.breakdown,
+            },
+          };
+
+          // Notify customer
+          if (booking?.user)
+            this.webSocketService.sendToUser(
+              String(booking.user),
+              cancelPayload
+            );
+
+          // Notify driver (assigned or pending assignment)
+          const driverTargets = [];
+          if (booking?.driver) driverTargets.push(String(booking.driver));
+          else if (booking?.pendingAssignment?.driverId)
+            driverTargets.push(String(booking.pendingAssignment.driverId));
+          Array.from(new Set(driverTargets))
+            .filter(Boolean)
+            .forEach((drvId) =>
+              this.webSocketService.sendToUser(drvId, cancelPayload)
+            );
+
+          // Optional broadcast to booking room
+          if (this.webSocketService?.sendToRoom) {
+            this.webSocketService.sendToRoom(
+              `booking:${bookingId}`,
+              cancelPayload
+            );
+          }
+        }
+
+        // Ack to requester (single)
         this.emitToClient(ws, {
           event: "cancel.ack",
           bookingId,
-          data: {
-            status: booking.status,
-            alreadyCancelled: true,
-            reason:
-              booking.status === "cancelled"
-                ? booking.cancellationReason || reason
-                : undefined,
-            finalFare: Number(
-              (typeof booking?.fareDetails?.finalFare === "object"
-                ? booking?.fareDetails?.finalFare?.amount
-                : booking?.fareDetails?.finalFare) ??
-                booking?.fare ??
-                0
-            ),
-            currency: booking?.fareDetails?.currency || "AED",
-            breakdown: booking?.fareDetails?.breakdown || {},
-          },
+          data: alreadyData,
         });
+
+        // Optional: also mark request unavailable in service room (only if cancelled)
+        try {
+          if (
+            booking.status === "cancelled" &&
+            this.webSocketService?.sendToRoom
+          ) {
+            const norm = (s) =>
+              String(s || "")
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, "_");
+            const st = norm("car recovery");
+            const roomName = `svc:${st}`;
+            this.webSocketService.sendToRoom(roomName, {
+              event: "recovery.unavailable",
+              bookingId,
+              data: { reason: "cancelled" },
+            });
+          }
+        } catch {}
+
         return;
       }
 
@@ -2279,7 +2350,10 @@ class RecoveryHandler {
         error: { code: "CANCEL_ERROR", message: error.message },
       });
     } finally {
-      // Nothing
+      // Release idempotency lock
+      try {
+        if (lockAcquired) await redis.del(lockKey);
+      } catch {}
     }
   }
 
@@ -2423,193 +2497,7 @@ class RecoveryHandler {
    * Complete service, finalize fare  and push billing + booking details
    */
   async handleServiceComplete(ws, message) {
-    // Local builders (avoid missing class methods)
-    const toNum = (v) => {
-      if (typeof v === "number") return Number.isFinite(v) ? v : null;
-      if (typeof v === "string" && v.trim() !== "") {
-        const n = Number(v);
-        return Number.isFinite(n) ? n : null;
-      }
-      return null;
-    };
-    const pickFirstPositive = (...c) => {
-      for (const x of c) {
-        const n = toNum(x);
-        if (n && n > 0) return n;
-      }
-      return null;
-    };
-    const buildBillingPayload = (bk) => {
-      const fd = bk?.fareDetails || {};
-      const currency =
-        fd?.finalFare?.currency ||
-        fd?.estimatedFare?.currency ||
-        fd?.currency ||
-        "AED";
-
-      const unwrapAmount = (v) =>
-        typeof v === "number"
-          ? v
-          : typeof v === "object" && v !== null
-          ? Number(v.amount || v.total || 0)
-          : Number(v || 0);
-
-      // Totals from either object or numeric fields; fallback to persisted top-level fare if needed
-      const totalAmount =
-        unwrapAmount(fd?.finalFare) ||
-        Number(fd?.breakdown?.total || 0) ||
-        unwrapAmount(fd?.estimatedFare) ||
-        Number(bk?.fare || 0) ||
-        0;
-
-      // Map comprehensive fields to simple numbers
-      const vat = Number(fd?.vatAmount ?? fd?.vat?.amount ?? 0) || null;
-      const surge = Number(fd?.surgeCharges ?? fd?.surge?.amount ?? 0) || null;
-      const platformFees =
-        fd?.platformFee != null
-          ? { amount: Number(fd.platformFee || 0), currency }
-          : null;
-      const waitingCharges =
-        fd?.waitingCharges != null
-          ? { amount: Number(fd.waitingCharges || 0), currency }
-          : null;
-
-      const pickup = bk?.pickupLocation || null;
-      const dropoff = bk?.dropoffLocation || null;
-
-      return {
-        status: String(bk?.status || "completed"),
-        acceptedAt: bk?.acceptedAt || null,
-        startedAt: bk?.startedAt || null,
-        completedAt: bk?.completedAt || null,
-        total: { amount: totalAmount, currency },
-        pickup: pickup
-          ? {
-              address: pickup?.address || null,
-              zone: pickup?.zone || null,
-              coordinates: pickup?.coordinates || null,
-            }
-          : null,
-        dropoff: dropoff
-          ? {
-              address: dropoff?.address || null,
-              zone: dropoff?.zone || null,
-              coordinates: dropoff?.coordinates || null,
-            }
-          : null,
-        finalFare:
-          typeof fd?.finalFare === "object" && fd?.finalFare !== null
-            ? fd.finalFare
-            : fd?.finalFare != null
-            ? { amount: Number(fd.finalFare || 0), currency }
-            : null,
-        estimatedFare:
-          typeof fd?.estimatedFare === "object" && fd?.estimatedFare !== null
-            ? fd.estimatedFare
-            : fd?.estimatedFare != null
-            ? { amount: Number(fd.estimatedFare || 0), currency }
-            : null,
-        breakdown: fd?.breakdown || {
-          baseFare: Number(fd?.baseFare || 0),
-          distanceFare: Number(fd?.distanceFare || 0),
-          subtotal: Number(fd?.subtotal || 0),
-          nightCharges: Number(fd?.nightCharges || 0),
-          surgeCharges: Number(fd?.surgeCharges || 0),
-          waitingCharges: Number(fd?.waitingCharges || 0),
-          cancellationCharges: Number(fd?.cancellationCharges || 0),
-          platformFee: Number(fd?.platformFee || 0),
-          vatAmount: Number(fd?.vatAmount || 0),
-        },
-        vat: vat != null ? { amount: vat, currency } : null,
-        surge: surge != null ? { amount: surge, currency } : null,
-        platformFees,
-        waitingCharges,
-        extras: fd?.extras ?? null,
-      };
-    };
-    const buildBookingDetailsPayload = (bk) => {
-      const fd = bk?.fareDetails || {};
-      const currency =
-        fd?.finalFare?.currency ||
-        fd?.estimatedFare?.currency ||
-        fd?.currency ||
-        "AED";
-
-      const unwrapAmount = (v) =>
-        typeof v === "number"
-          ? v
-          : typeof v === "object" && v !== null
-          ? Number(v.amount || v.total || 0)
-          : Number(v || 0);
-
-      const totalAmount =
-        unwrapAmount(fd?.finalFare) ||
-        Number(fd?.breakdown?.total || 0) ||
-        unwrapAmount(fd?.estimatedFare) ||
-        Number(bk?.fare || 0) ||
-        0;
-
-      const pickup = bk?.pickupLocation || null;
-      const dropoff = bk?.dropoffLocation || null;
-
-      return {
-        status: String(bk?.status || "completed"),
-        acceptedAt: bk?.acceptedAt || null,
-        startedAt: bk?.startedAt || null,
-        completedAt: bk?.completedAt || null,
-        pickup: pickup
-          ? {
-              address: pickup?.address || null,
-              zone: pickup?.zone || null,
-              coordinates: pickup?.coordinates || null,
-            }
-          : null,
-        dropoff: dropoff
-          ? {
-              address: dropoff?.address || null,
-              zone: dropoff?.zone || null,
-              coordinates: dropoff?.coordinates || null,
-            }
-          : null,
-        finalFare:
-          typeof fd?.finalFare === "object" && fd?.finalFare !== null
-            ? fd.finalFare
-            : fd?.finalFare != null
-            ? { amount: Number(fd.finalFare || 0), currency }
-            : { amount: totalAmount, currency },
-        estimatedFare:
-          typeof fd?.estimatedFare === "object" && fd?.estimatedFare !== null
-            ? fd.estimatedFare
-            : fd?.estimatedFare != null
-            ? { amount: Number(fd.estimatedFare || 0), currency }
-            : null,
-        total: { amount: totalAmount, currency },
-        breakdown: fd?.breakdown || {
-          baseFare: Number(fd?.baseFare || 0),
-          distanceFare: Number(fd?.distanceFare || 0),
-          subtotal: Number(fd?.subtotal || 0),
-          nightCharges: Number(fd?.nightCharges || 0),
-          surgeCharges: Number(fd?.surgeCharges || 0),
-          waitingCharges: Number(fd?.waitingCharges || 0),
-          cancellationCharges: Number(fd?.cancellationCharges || 0),
-          platformFee: Number(fd?.platformFee || 0),
-          vatAmount: Number(fd?.vatAmount || 0),
-        },
-        vat: fd?.vat || null,
-        surge: fd?.surge || null,
-        platformFees:
-          fd?.platformFee != null
-            ? { amount: Number(fd.platformFee || 0), currency }
-            : null,
-        waitingCharges:
-          fd?.waitingCharges != null
-            ? { amount: Number(fd.waitingCharges || 0), currency }
-            : null,
-        extras: fd?.extras || null,
-      };
-    };
-
-    // Normalize incoming message
+    // Normalize
     let msg = message || {};
     if (typeof msg === "string") {
       try {
@@ -2618,90 +2506,145 @@ class RecoveryHandler {
         msg = { raw: message };
       }
     }
-
-    // Accept bookingId under common shapes
     const data = msg?.data || {};
-    const idCand = [
-      data?.bookingId,
-      data?.id,
-      msg?.bookingId,
-      msg?.id,
-      msg?.booking_id,
-    ]
-      .map((v) => String(v || "").trim())
-      .find((s) => !!s);
-    const bookingId = idCand || "";
+    const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
+
+    // Small local helpers
+    const toNum = (v) => {
+      if (typeof v === "number") return Number.isFinite(v) ? v : null;
+      if (typeof v === "string" && v.trim() !== "") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (v && typeof v === "object") {
+        const n = Number(v.amount ?? v.total ?? 0);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+    const unwrapAmount = (v) =>
+      typeof v === "number"
+        ? v
+        : typeof v === "object" && v !== null
+        ? Number(v.amount || v.total || 0)
+        : Number(v || 0);
+    const buildCurrency = (fd) =>
+      fd?.finalFare?.currency || fd?.currency || "AED";
+
+    const coalesceBreakdown = (fd) => {
+      const b = fd?.breakdown || {};
+      const out = {
+        baseFare: Number((b.baseFare ?? fd?.baseFare) || 0),
+        distanceFare: Number((b.distanceFare ?? fd?.distanceFare) || 0),
+        subtotal: Number((b.subtotal ?? fd?.subtotal) || 0),
+        nightCharges: Number((b.nightCharges ?? fd?.nightCharges) || 0),
+        surgeCharges: Number((b.surgeCharges ?? fd?.surgeCharges) || 0),
+        waitingCharges: Number((b.waitingCharges ?? fd?.waitingCharges) || 0),
+        cancellationCharges: Number(
+          (b.cancellationCharges ?? fd?.cancellationCharges) || 0
+        ),
+        platformFee: Number((b.platformFee ?? fd?.platformFee) || 0),
+        vatAmount: Number((b.vatAmount ?? fd?.vatAmount) || 0),
+      };
+      if (fd?.breakdown) {
+        for (const [k, v] of Object.entries(fd.breakdown)) {
+          if (!(k in out) && k !== "total") out[k] = v;
+        }
+      }
+      return out;
+    };
+    const needsRebuild = (bk, breakdown) => {
+      if (!bk) return false;
+      const keys = [
+        "baseFare",
+        "distanceFare",
+        "subtotal",
+        "nightCharges",
+        "surgeCharges",
+        "waitingCharges",
+        "cancellationCharges",
+        "platformFee",
+        "vatAmount",
+      ];
+      const sum = keys.reduce((acc, k) => acc + Number(breakdown[k] || 0), 0);
+      return sum === 0;
+    };
+    const rebuildFromCalculator = async (bk) => {
+      const fd = bk?.fareDetails || {};
+      const distance = toNum(fd?.estimatedDistance) ?? toNum(bk?.distance) ?? 0;
+      const routeType = fd?.routeType || "one_way";
+      const estimatedDuration = toNum(fd?.estimatedDuration) ?? 0;
+      const waitingMinutes = toNum(fd?.waitingMinutes) ?? 0;
+      const demandRatio = toNum(fd?.demandRatio) ?? 1;
+      const vehicleType = bk?.vehicleType || null;
+
+      try {
+        const comp = await calculateComprehensiveFare({
+          serviceType: "car recovery",
+          vehicleType,
+          distance: Number(distance || 0),
+          routeType,
+          estimatedDuration: Number(estimatedDuration || 0),
+          waitingMinutes: Number(waitingMinutes || 0),
+          demandRatio: Number(demandRatio || 1),
+          tripProgress: 1,
+          isCancelled: false,
+          cancellationReason: null,
+        });
+        const breakdown = {
+          baseFare: Number(comp?.baseFare || 0),
+          distanceFare: Number(comp?.distanceFare || 0),
+          subtotal: Number(comp?.subtotal || 0),
+          nightCharges: Number(comp?.nightCharges || 0),
+          surgeCharges: Number(comp?.surgeCharges || 0),
+          waitingCharges: Number(comp?.waitingCharges || 0),
+          cancellationCharges: Number(comp?.cancellationCharges || 0),
+          platformFee: Number(comp?.platformFee || 0),
+          vatAmount: Number(comp?.vatAmount || 0),
+          ...(comp?.breakdown && typeof comp.breakdown === "object"
+            ? Object.fromEntries(
+                Object.entries(comp.breakdown).filter(
+                  ([k]) =>
+                    ![
+                      "baseFare",
+                      "distanceFare",
+                      "subtotal",
+                      "nightCharges",
+                      "surgeCharges",
+                      "waitingCharges",
+                      "cancellationCharges",
+                      "platformFee",
+                      "vatAmount",
+                      "total",
+                    ].includes(k)
+                )
+              )
+            : {}),
+        };
+        const currency = comp?.currency || fd?.currency || "AED";
+        return { breakdown, currency };
+      } catch {
+        return { breakdown: null, currency: fd?.currency || "AED" };
+      }
+    };
 
     try {
       if (!bookingId) throw new Error("bookingId is required");
 
+      // Load booking
+      const booking = await Booking.findById(bookingId).select(
+        "status user driver vehicleType pickupLocation dropoffLocation acceptedAt startedAt fareDetails fare distance"
+      );
+      if (!booking) throw new Error("Booking not found");
+
+      // Authorization
       const role = String(ws?.user?.role || "").toLowerCase();
       const isDriver = role === "driver";
       const isCustomer =
         role === "user" || role === "customer" || role === "client";
-
-      // Load booking with fare + locations
-      const booking = await Booking.findById(bookingId).select(
-        "status user driver pickupLocation dropoffLocation acceptedAt startedAt completedAt fareDetails"
-      );
-      if (!booking) throw new Error("Booking not found");
-      if (["cancelled"].includes(booking.status)) {
-        throw new Error(`Cannot complete a ${booking.status} booking`);
-      }
-
-      // Idempotent: already completed -> resend billing + booking.details
-      if (booking.status === "completed") {
-        const bill = buildBillingPayload(booking);
-        const details = buildBookingDetailsPayload(booking);
-
-        // To caller
-        this.emitToClient(ws, {
-          event: "billing.details",
-          bookingId,
-          data: bill,
-        });
-        this.emitToClient(ws, {
-          event: "booking.details",
-          bookingId,
-          data: details,
-        });
-
-        // To both parties
-        try {
-          const toCustomer = String(booking.user || "");
-          if (toCustomer) {
-            this.webSocketService.sendToUser(toCustomer, {
-              event: "billing.details",
-              bookingId,
-              data: bill,
-            });
-            this.webSocketService.sendToUser(toCustomer, {
-              event: "booking.details",
-              bookingId,
-              data: details,
-            });
-          }
-          if (booking.driver) {
-            this.webSocketService.sendToUser(String(booking.driver), {
-              event: "billing.details",
-              bookingId,
-              data: bill,
-            });
-            this.webSocketService.sendToUser(String(booking.driver), {
-              event: "booking.details",
-              bookingId,
-              data: details,
-            });
-          }
-        } catch {}
-        return;
-      }
-
-      // Authorization: only assigned driver or customer
       let driverId = String(booking.driver || "") || null;
       if (!driverId)
         throw new Error("No assigned driver found on this booking");
-
       if (isDriver) {
         const authDriverId = String(ws?.user?.id || ws?.user?._id || "").trim();
         if (!authDriverId || authDriverId !== driverId) {
@@ -2722,30 +2665,23 @@ class RecoveryHandler {
         );
       }
 
-      // Recompute latest comprehensive total
+      // Authoritative final amount: from DB only (finalFare if present, else top-level fare)
+      const fd = booking?.fareDetails || {};
+      const currency = buildCurrency(fd);
+      const existingFinal = toNum(fd?.finalFare);
       const now = new Date();
-      const recomputed = await this._recomputeAndPersistFare(bookingId, {
-        tripProgress: 1,
-      });
-      const totalFareLatest =
-        recomputed && recomputed.totalFare != null
-          ? recomputed.totalFare
-          : null;
+      let finalAmount =
+        existingFinal != null && existingFinal > 0
+          ? existingFinal
+          : Number(booking?.fare || 0);
 
-      // Fallback to current stored fare if recompute didn't return
-      let fallbackFare = null;
-      if (totalFareLatest == null) {
-        const b = await Booking.findById(bookingId).select("fare").lean();
-        fallbackFare = Number(b?.fare || 0);
-      }
-
-      // Atomic update with status + fare triggers pre('findOneAndUpdate') to stamp finalFare
+      // Persist completion (do not overwrite fareDetails.finalFare if already exists)
       await Booking.findByIdAndUpdate(
         bookingId,
         {
           $set: {
             status: "completed",
-            fare: totalFareLatest != null ? totalFareLatest : fallbackFare,
+            fare: Number(finalAmount || 0),
             completedAt: now,
             updatedAt: now,
           },
@@ -2753,27 +2689,104 @@ class RecoveryHandler {
         { new: false }
       );
 
-      // Update cache
-      let rec = this.activeRecoveries.get(bookingId) || {};
-      rec.status = "completed";
-      rec.completedAt = now;
-      rec.statusHistory = rec.statusHistory || [];
-      rec.statusHistory.push({
-        status: "completed",
-        timestamp: now,
-        driverId,
-        message: "Service completed",
-      });
-      this.activeRecoveries.set(bookingId, rec);
-
-      // Reload persisted booking for billing/details
+      // Reload for outbound payloads
       const finalDoc = await Booking.findById(bookingId).select(
-        "status user driver pickupLocation dropoffLocation acceptedAt startedAt completedAt fareDetails"
+        "status user driver vehicleType pickupLocation dropoffLocation acceptedAt startedAt completedAt fareDetails fare distance"
       );
+      const fd2 = finalDoc?.fareDetails || {};
 
-      // Build payloads
-      const billing = buildBillingPayload(finalDoc);
-      const details = buildBookingDetailsPayload(finalDoc);
+      // Rebuild breakdown if needed (for display), but DO NOT use it to compute total
+      let breakdown2 = coalesceBreakdown(fd2);
+      if (needsRebuild(finalDoc, breakdown2)) {
+        const rebuilt = await rebuildFromCalculator(finalDoc);
+        if (rebuilt.breakdown) breakdown2 = rebuilt.breakdown;
+      }
+
+      // Totals strictly from DB
+      const totalAmount2 =
+        toNum(fd2?.finalFare) ?? Number(finalDoc?.fare || 0) ?? 0;
+
+      const billing = {
+        status: String(finalDoc?.status || "completed"),
+        acceptedAt: finalDoc?.acceptedAt || null,
+        startedAt: finalDoc?.startedAt || null,
+        completedAt: finalDoc?.completedAt || null,
+        total: {
+          amount: Number(totalAmount2 || 0),
+          currency: buildCurrency(fd2),
+        },
+        pickup: finalDoc?.pickupLocation
+          ? {
+              address: finalDoc.pickupLocation.address || null,
+              zone: finalDoc.pickupLocation.zone || null,
+              coordinates: finalDoc.pickupLocation.coordinates || null,
+            }
+          : null,
+        dropoff: finalDoc?.dropoffLocation
+          ? {
+              address: finalDoc.dropoffLocation.address || null,
+              zone: finalDoc.dropoffLocation.zone || null,
+              coordinates: finalDoc.dropoffLocation.coordinates || null,
+            }
+          : null,
+        finalFare: (() => {
+          const cur = buildCurrency(fd2);
+          const fromFinal = toNum(fd2?.finalFare);
+          const amount =
+            fromFinal != null && fromFinal > 0
+              ? fromFinal
+              : Number(finalDoc?.fare || 0);
+          return { amount: Number(amount || 0), currency: cur };
+        })(),
+        estimatedFare:
+          typeof fd2?.estimatedFare === "object" && fd2?.estimatedFare !== null
+            ? fd2.estimatedFare
+            : fd2?.estimatedFare != null
+            ? {
+                amount: Number(fd2.estimatedFare || 0),
+                currency: buildCurrency(fd2),
+              }
+            : null,
+        breakdown: breakdown2,
+        vat:
+          breakdown2.vatAmount > 0
+            ? { amount: breakdown2.vatAmount, currency: buildCurrency(fd2) }
+            : null,
+        surge:
+          breakdown2.surgeCharges > 0
+            ? { amount: breakdown2.surgeCharges, currency: buildCurrency(fd2) }
+            : null,
+        platformFees:
+          breakdown2.platformFee > 0
+            ? { amount: breakdown2.platformFee, currency: buildCurrency(fd2) }
+            : null,
+        waitingCharges:
+          breakdown2.waitingCharges > 0
+            ? {
+                amount: breakdown2.waitingCharges,
+                currency: buildCurrency(fd2),
+              }
+            : null,
+        extras: fd2?.extras ?? null,
+      };
+
+      const details = {
+        status: String(finalDoc?.status || "completed"),
+        acceptedAt: finalDoc?.acceptedAt || null,
+        startedAt: finalDoc?.startedAt || null,
+        completedAt: finalDoc?.completedAt || null,
+        pickup: billing.pickup,
+        dropoff: billing.dropoff,
+        finalFare: billing.finalFare,
+        estimatedFare: billing.estimatedFare,
+        total: billing.total,
+        breakdown: billing.breakdown,
+        vat: fd2?.vat || null,
+        surge: fd2?.surge || null,
+        platformFees: billing.platformFees,
+        waitingCharges: billing.waitingCharges,
+        extras: fd2?.extras || null,
+      };
 
       // Ack to caller
       this.emitToClient(ws, {
@@ -2782,7 +2795,7 @@ class RecoveryHandler {
         data: { status: "completed", completedAt: now },
       });
 
-      // Recovery completed events (optional)
+      // Completed summary to both (use DB-only totals)
       try {
         const toCustomer = String(finalDoc.user || "");
         const after = await Booking.findById(bookingId)
@@ -2791,20 +2804,21 @@ class RecoveryHandler {
           )
           .lean();
 
+        const ccy =
+          after?.fareDetails?.finalFare?.currency ||
+          after?.fareDetails?.currency ||
+          "AED";
+        const completedAmount =
+          toNum(after?.fareDetails?.finalFare) ?? Number(after?.fare || 0);
+
         const completedPayload = {
           event: "recovery.completed",
           bookingId,
           data: {
             status: "completed",
             completedAt: now,
-            finalFare: Number(
-              (typeof after?.fareDetails?.finalFare === "object"
-                ? after?.fareDetails?.finalFare?.amount
-                : after?.fareDetails?.finalFare) ??
-                after?.fare ??
-                0
-            ),
-            currency: after?.fareDetails?.currency || "AED",
+            finalFare: Number(completedAmount || 0),
+            currency: ccy,
             breakdown: after?.fareDetails?.breakdown || {},
           },
         };
@@ -2813,7 +2827,7 @@ class RecoveryHandler {
         this.webSocketService.sendToUser(String(driverId), completedPayload);
       } catch {}
 
-      // Billing details to both
+      // Billing to both (DB-only totals)
       try {
         const toCustomer = String(finalDoc.user || "");
         if (toCustomer) {
@@ -4570,21 +4584,248 @@ class RecoveryHandler {
     const { bookingId } = message || {};
     const id = bookingId;
 
+    const toNum = (v) => {
+      if (typeof v === "number") return Number.isFinite(v) ? v : null;
+      if (typeof v === "string" && v.trim() !== "") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (v && typeof v === "object") {
+        const n = Number(v.amount ?? v.total ?? 0);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+    const unwrapAmount = (v) =>
+      typeof v === "number"
+        ? v
+        : typeof v === "object" && v !== null
+        ? Number(v.amount || v.total || 0)
+        : Number(v || 0);
+
+    const buildCurrency = (fd) =>
+      fd?.finalFare?.currency ||
+      fd?.estimatedFare?.currency ||
+      fd?.currency ||
+      "AED";
+
+    const coalesceBreakdown = (fd) => {
+      const b = fd?.breakdown || {};
+      const out = {
+        baseFare: Number((b.baseFare ?? fd?.baseFare) || 0),
+        distanceFare: Number((b.distanceFare ?? fd?.distanceFare) || 0),
+        subtotal: Number((b.subtotal ?? fd?.subtotal) || 0),
+        nightCharges: Number((b.nightCharges ?? fd?.nightCharges) || 0),
+        surgeCharges: Number((b.surgeCharges ?? fd?.surgeCharges) || 0),
+        waitingCharges: Number((b.waitingCharges ?? fd?.waitingCharges) || 0),
+        cancellationCharges: Number(
+          (b.cancellationCharges ?? fd?.cancellationCharges) || 0
+        ),
+        platformFee: Number((b.platformFee ?? fd?.platformFee) || 0),
+        vatAmount: Number((b.vatAmount ?? fd?.vatAmount) || 0),
+      };
+      if (fd?.breakdown) {
+        for (const [k, v] of Object.entries(fd.breakdown)) {
+          if (!(k in out) && k !== "total") out[k] = v;
+        }
+      }
+      return out;
+    };
+
+    const needsRebuild = (breakdown) => {
+      const keys = [
+        "baseFare",
+        "distanceFare",
+        "subtotal",
+        "nightCharges",
+        "surgeCharges",
+        "waitingCharges",
+        "cancellationCharges",
+        "platformFee",
+        "vatAmount",
+      ];
+      const sum = keys.reduce((acc, k) => acc + Number(breakdown[k] || 0), 0);
+      return sum === 0;
+    };
+
+    const rebuildFromCalculator = async (bk) => {
+      const fd = bk?.fareDetails || {};
+      const distance = toNum(fd?.estimatedDistance) ?? toNum(bk?.distance) ?? 0;
+      const routeType = fd?.routeType || "one_way";
+      const estimatedDuration = toNum(fd?.estimatedDuration) ?? 0;
+      const waitingMinutes = toNum(fd?.waitingMinutes) ?? 0;
+      const demandRatio = toNum(fd?.demandRatio) ?? 1;
+      const vehicleType = bk?.vehicleType || null;
+
+      try {
+        const comp = await calculateComprehensiveFare({
+          serviceType: "car recovery",
+          vehicleType,
+          distance: Number(distance || 0),
+          routeType,
+          estimatedDuration: Number(estimatedDuration || 0),
+          waitingMinutes: Number(waitingMinutes || 0),
+          demandRatio: Number(demandRatio || 1),
+          tripProgress: 1,
+          isCancelled: false,
+          cancellationReason: null,
+        });
+
+        const breakdown = {
+          baseFare: Number(comp?.baseFare || 0),
+          distanceFare: Number(comp?.distanceFare || 0),
+          subtotal: Number(comp?.subtotal || 0),
+          nightCharges: Number(comp?.nightCharges || 0),
+          surgeCharges: Number(comp?.surgeCharges || 0),
+          waitingCharges: Number(comp?.waitingCharges || 0),
+          cancellationCharges: Number(comp?.cancellationCharges || 0),
+          platformFee: Number(comp?.platformFee || 0),
+          vatAmount: Number(comp?.vatAmount || 0),
+          ...(comp?.breakdown && typeof comp.breakdown === "object"
+            ? Object.fromEntries(
+                Object.entries(comp.breakdown).filter(
+                  ([k]) =>
+                    ![
+                      "baseFare",
+                      "distanceFare",
+                      "subtotal",
+                      "nightCharges",
+                      "surgeCharges",
+                      "waitingCharges",
+                      "cancellationCharges",
+                      "platformFee",
+                      "vatAmount",
+                      "total",
+                    ].includes(k)
+                )
+              )
+            : {}),
+        };
+        const currency = comp?.currency || bk?.fareDetails?.currency || "AED";
+        return { breakdown, currency };
+      } catch {
+        return {
+          breakdown: null,
+          currency: bk?.fareDetails?.currency || "AED",
+        };
+      }
+    };
+
     try {
       const booking = await Booking.findById(id).select(
-        "receipt fareDetails paymentDetails completedAt"
+        "receipt fareDetails paymentDetails completedAt pickupLocation dropoffLocation status acceptedAt startedAt fare distance vehicleType"
       );
       if (!booking) throw new Error("Booking not found");
+
+      const fd = booking.fareDetails || {};
+      let breakdown = coalesceBreakdown(fd);
+
+      if (needsRebuild(breakdown)) {
+        const rebuilt = await rebuildFromCalculator(booking);
+        if (rebuilt.breakdown) {
+          breakdown = rebuilt.breakdown;
+        }
+      }
+
+      const currency = buildCurrency(fd);
+
+      // Totals strictly from DB: finalFare (if present) else top-level fare
+      const totalAmount =
+        toNum(fd?.finalFare) ?? Number(booking?.fare || 0) ?? 0;
+
+      const billing = {
+        status: String(booking?.status || "completed"),
+        acceptedAt: booking?.acceptedAt || null,
+        startedAt: booking?.startedAt || null,
+        completedAt: booking?.completedAt || null,
+        total: { amount: Number(totalAmount || 0), currency },
+        pickup: booking?.pickupLocation
+          ? {
+              address: booking.pickupLocation.address || null,
+              zone: booking.pickupLocation.zone || null,
+              coordinates: booking.pickupLocation.coordinates || null,
+            }
+          : null,
+        dropoff: booking?.dropoffLocation
+          ? {
+              address: booking.dropoffLocation.address || null,
+              zone: booking.dropoffLocation.zone || null,
+              coordinates: booking.dropoffLocation.coordinates || null,
+            }
+          : null,
+        finalFare:
+          fd?.finalFare != null
+            ? typeof fd.finalFare === "object"
+              ? fd.finalFare
+              : { amount: Number(fd.finalFare || 0), currency }
+            : { amount: Number(booking?.fare || 0), currency },
+        estimatedFare:
+          typeof fd?.estimatedFare === "object" && fd?.estimatedFare !== null
+            ? fd.estimatedFare
+            : fd?.estimatedFare != null
+            ? { amount: Number(fd.estimatedFare || 0), currency }
+            : null,
+        breakdown,
+        vat:
+          breakdown.vatAmount > 0
+            ? { amount: breakdown.vatAmount, currency }
+            : null,
+        surge:
+          breakdown.surgeCharges > 0
+            ? { amount: breakdown.surgeCharges, currency }
+            : null,
+        platformFees:
+          breakdown.platformFee > 0
+            ? { amount: breakdown.platformFee, currency }
+            : null,
+        waitingCharges:
+          breakdown.waitingCharges > 0
+            ? { amount: breakdown.waitingCharges, currency }
+            : null,
+        extras: fd?.extras ?? null,
+      };
+
+      // Emit to caller
       this.emitToClient(ws, {
         event: "billing.details",
         bookingId: id,
-        data: {
-          receipt: booking.receipt || null,
-          fareDetails: booking.fareDetails || {},
-          paymentDetails: booking.paymentDetails || {},
-          completedAt: booking.completedAt || null,
-        },
+        data: billing,
       });
+
+      // Optionally also mirror booking.details for convenience (unchanged behavior)
+      const details = {
+        status: String(booking?.status || "completed"),
+        acceptedAt: booking?.acceptedAt || null,
+        startedAt: booking?.startedAt || null,
+        completedAt: booking?.completedAt || null,
+        pickup: billing.pickup,
+        dropoff: billing.dropoff,
+        finalFare: billing.finalFare,
+        estimatedFare: billing.estimatedFare,
+        total: billing.total,
+        breakdown: billing.breakdown,
+        vat: fd?.vat || null,
+        surge: fd?.surge || null,
+        platformFees: billing.platformFees,
+        waitingCharges: billing.waitingCharges,
+        extras: fd?.extras || null,
+      };
+
+      const toCustomer = String(booking.user || "");
+      if (toCustomer) {
+        this.webSocketService.sendToUser(toCustomer, {
+          event: "booking.details",
+          bookingId: id,
+          data: details,
+        });
+      }
+      if (booking.driver) {
+        this.webSocketService.sendToUser(String(booking.driver), {
+          event: "booking.details",
+          bookingId: id,
+          data: details,
+        });
+      }
     } catch (error) {
       this.emitToClient(ws, {
         event: "error",
@@ -4756,144 +4997,11 @@ class RecoveryHandler {
       if (!bookingId) throw new Error("bookingId is required");
 
       const booking = await Booking.findById(bookingId).select(
-        "status user driver pendingAssignment fareDetails pickupLocation dropoffLocation"
+        "status user driver pendingAssignment fareDetails pickupLocation dropoffLocation acceptedAt startedAt"
       );
       if (!booking) throw new Error("Booking not found");
       if (["cancelled", "completed"].includes(booking.status)) {
         throw new Error(`Cannot accept fare on a ${booking.status} booking`);
-      }
-
-      // If already accepted or started, return idempotent ack
-      if (["accepted", "in_progress"].includes(booking.status)) {
-        this.emitToClient(ws, {
-          event: "fare.accept.ack",
-          bookingId,
-          data: {
-            status: booking.status,
-            driverId: String(booking.driver || ""),
-            alreadyAccepted: true,
-          },
-        });
-
-        // Build driver profile + vehicle for downstream events
-        let driverProfile = null;
-        let vehicleDetails = null;
-        try {
-          if (booking.driver) {
-            const d = await User.findById(booking.driver).select(
-              "firstName lastName email phoneNumber selfieImage"
-            );
-            driverProfile = d
-              ? {
-                  id: String(d._id),
-                  name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
-                  email: d.email || null,
-                  phone: d.phoneNumber || null,
-                  image: d.selfieImage || null,
-                }
-              : null;
-
-            const v = await Vehicle.findOne({
-              userId: String(booking.driver),
-              isActive: true,
-              status: "approved",
-              serviceType: "car recovery",
-            })
-              .select(
-                "vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate serviceType serviceCategory vehicleType wheelchair packingHelper loadingUnloadingHelper fixingHelper"
-              )
-              .lean();
-
-            if (v) {
-              vehicleDetails = {
-                id: String(v._id || ""),
-                vehicleRegistrationCard: v.vehicleRegistrationCard || null,
-                roadAuthorityCertificate: v.roadAuthorityCertificate || null,
-                insuranceCertificate: v.insuranceCertificate || null,
-                vehicleImages: Array.isArray(v.vehicleImages)
-                  ? v.vehicleImages
-                  : [],
-                vehicleOwnerName: v.vehicleOwnerName || null,
-                companyName: v.companyName || null,
-                vehiclePlateNumber: v.vehiclePlateNumber || null,
-                vehicleMakeModel: v.vehicleMakeModel || null,
-                chassisNumber: v.chassisNumber || null,
-                vehicleColor: v.vehicleColor || null,
-                registrationExpiryDate: v.registrationExpiryDate || null,
-                serviceType: v.serviceType || null,
-                serviceCategory: v.serviceCategory || null,
-                vehicleType: v.vehicleType || null,
-                wheelchair: !!v.wheelchair,
-                packingHelper: !!v.packingHelper,
-                loadingUnloadingHelper: !!v.loadingUnloadingHelper,
-                fixingHelper: !!v.fixingHelper,
-              };
-            }
-          }
-        } catch {}
-
-        // Emit driver.assigned and recovery.accepted in idempotent path as well
-        try {
-          const toCustomer = String(booking.user || "");
-          if (toCustomer) {
-            this.webSocketService.sendToUser(toCustomer, {
-              event: "driver.assigned",
-              bookingId,
-              data: {
-                driver: driverProfile,
-                vehicleDetails,
-                acceptedAt: booking?.acceptedAt || null,
-                startedAt: booking?.startedAt || null,
-              },
-            });
-            this.webSocketService.sendToUser(toCustomer, {
-              event: "recovery.accepted",
-              bookingId,
-              data: {
-                status: "accepted",
-                driverId: String(booking.driver || ""),
-                acceptedAt: booking?.acceptedAt || null,
-              },
-            });
-          }
-          this.webSocketService.sendToUser(String(booking.driver || ""), {
-            event: "driver.assigned",
-            bookingId,
-            data: {
-              driver: driverProfile,
-              vehicleDetails,
-              acceptedAt: booking?.acceptedAt || null,
-              startedAt: booking?.startedAt || null,
-            },
-          });
-          this.webSocketService.sendToUser(String(booking.driver || ""), {
-            event: "recovery.accepted",
-            bookingId,
-            data: {
-              status: "accepted",
-              driverId: String(booking.driver || ""),
-              acceptedAt: booking?.acceptedAt || null,
-            },
-          });
-        } catch {}
-
-        // If already started, also echo started with enriched driver + vehicle
-        if (booking.status === "in_progress") {
-          this.emitToClient(ws, {
-            event: "recovery.started",
-            bookingId,
-            data: {
-              status: "in_progress",
-              alreadyStarted: true,
-              driverId: String(booking.driver || ""),
-              pickupLocation: booking.pickupLocation,
-              dropoffLocation: booking.dropoffLocation,
-              driverProfile,
-              vehicleDetails,
-            },
-          });
-        }
-        return;
       }
 
       // Resolve/ensure driverId
@@ -4937,7 +5045,7 @@ class RecoveryHandler {
         throw new Error("Driver is not in a valid state to accept");
       }
 
-      // Determine final amount (keep your logic)
+      // Determine final amount from payload/negotiation/estimate
       const proposed = booking?.fareDetails?.negotiation?.proposed || {};
       const lastAmount =
         typeof data?.amount === "number" &&
@@ -4954,13 +5062,13 @@ class RecoveryHandler {
 
       const now = new Date();
 
-      // Persist: keep your flow (assign driver, mark accepted/in_progress as you do)
+      // Persist: assign driver and advance state (in_progress on accept)
       await Booking.findByIdAndUpdate(
         bookingId,
         {
           $set: {
-            status: "in_progress", // stays as your current flow
-            driver: driverId,
+            status: "in_progress",
+            driver: driverId, // ensure driver is assigned
             acceptedAt: now,
             startedAt: now,
             "fareDetails.finalFare": {
@@ -4986,7 +5094,7 @@ class RecoveryHandler {
         { new: false }
       );
 
-      // Update cache (unchanged)
+      // Update cache
       let rec = this.activeRecoveries.get(bookingId) || {};
       rec.status = "in_progress";
       rec.acceptedAt = now;
@@ -5031,7 +5139,6 @@ class RecoveryHandler {
             "vehicleRegistrationCard roadAuthorityCertificate insuranceCertificate vehicleImages vehicleOwnerName companyName vehiclePlateNumber vehicleMakeModel chassisNumber vehicleColor registrationExpiryDate serviceType serviceCategory vehicleType wheelchair packingHelper loadingUnloadingHelper fixingHelper"
           )
           .lean();
-
         if (vehicle) {
           vehicleDetails = {
             id: String(vehicle._id || ""),
@@ -5059,7 +5166,31 @@ class RecoveryHandler {
         }
       } catch {}
 
-      // Ack to caller (unchanged)
+      // Build customer profile (so recovery.started includes customer info)
+      let customerProfile = null;
+      try {
+        if (booking?.user) {
+          const cust = await User.findById(String(booking.user))
+            .select(
+              "firstName lastName email phoneNumber selfieImage username avatarUrl"
+            )
+            .lean();
+          if (cust) {
+            const name = `${cust.firstName ?? ""} ${
+              cust.lastName ?? ""
+            }`.trim();
+            customerProfile = {
+              id: String(cust._id || ""),
+              name: name || cust.username || "User",
+              email: cust.email || null,
+              phone: cust.phoneNumber || cust.phone || null,
+              image: cust.selfieImage || cust.avatarUrl || null,
+            };
+          }
+        }
+      } catch {}
+
+      // Ack to caller
       this.emitToClient(ws, {
         event: "fare.accept.ack",
         bookingId,
@@ -5072,7 +5203,7 @@ class RecoveryHandler {
         },
       });
 
-      // 1) Driver assigned (to both)
+      // 1) driver.assigned (both)
       try {
         const toCustomer = String(booking.user || "");
         if (toCustomer) {
@@ -5101,7 +5232,7 @@ class RecoveryHandler {
         });
       } catch {}
 
-      // 2) Recovery accepted (to both)
+      // 2) recovery.accepted (both)
       try {
         const toCustomer = String(booking.user || "");
         const acceptedPayload = {
@@ -5118,7 +5249,7 @@ class RecoveryHandler {
         this.webSocketService.sendToUser(String(driverId), acceptedPayload);
       } catch {}
 
-      // 3) Started notifications to both (include driver + vehicle so customer UI has it)
+      // 3) recovery.started (both) — include customer info
       try {
         const startedPayload = {
           event: "recovery.started",
@@ -5131,16 +5262,16 @@ class RecoveryHandler {
             dropoffLocation: booking.dropoffLocation,
             driverProfile,
             vehicleDetails,
+            customer: customerProfile, // <-- added
           },
         };
-
         const toCustomer = String(booking.user || "");
         if (toCustomer)
           this.webSocketService.sendToUser(toCustomer, startedPayload);
         this.webSocketService.sendToUser(String(driverId), startedPayload);
       } catch {}
 
-      // Optional broadcast to hide from other drivers (unchanged)
+      // Optional broadcast to hide from other drivers (kept)
       try {
         const norm = (s) =>
           String(s || "")
