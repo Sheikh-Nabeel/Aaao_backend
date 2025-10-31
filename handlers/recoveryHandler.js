@@ -1410,13 +1410,14 @@ class RecoveryHandler {
     const id = bookingId;
 
     try {
+      // Keep in-memory state if you rely on it elsewhere
       const recoveryRequest = this.activeRecoveries.get(id);
       if (!recoveryRequest) {
         throw new Error("Recovery request not found");
       }
 
-      // Update waiting time and charge
-      const waitingTime = data.waitingTime || 0;
+      // Update waiting time and charge (using configured rules)
+      const waitingTime = Number(data?.waitingTime || 0);
       const waitingCharge = await this.calculateWaitingCharge(
         waitingTime,
         recoveryRequest
@@ -1425,41 +1426,29 @@ class RecoveryHandler {
       recoveryRequest.waitingTime = waitingTime;
       recoveryRequest.waitingCharge = waitingCharge;
 
-      // Step 3: notify when 5 minutes remaining of free stay (round-trips only)
-      try {
-        if (recoveryRequest?.freeStay?.totalMinutes) {
-          const remaining = Math.max(
-            0,
-            recoveryRequest.freeStay.totalMinutes - waitingTime
-          );
-          if (remaining <= 5 && !recoveryRequest.freeStay.lastNotified5) {
-            recoveryRequest.freeStay.lastNotified5 = true;
-            this.emitToClient(ws, {
-              event: "freeStay.remaining",
-              bookingId: id,
-              data: { minutes: Math.ceil(remaining) },
-            });
-          }
-          // Emit popup when free stay fully ends (once)
-          if (remaining <= 0 && !recoveryRequest.freeStay.endedNotified) {
-            recoveryRequest.freeStay.endedNotified = true;
-            this.emitToClient(ws, {
-              event: "freeStay.ended",
-              bookingId: id,
-              data: {
-                title: "Free Stay Time Ended – Select Action",
-                options: [
-                  {
-                    action: "continue_no_overtime",
-                    label: "Continue – No Overtime Charges",
-                  },
-                  { action: "start_overtime", label: "Start Overtime Charges" },
-                ],
-              },
-            });
-          }
-        }
-      } catch {}
+      // Persist into DB: adjust booking.fare by replacing old waitingCharges
+      const booking = await Booking.findById(id).select(
+        "fare fareDetails status"
+      );
+      if (!booking) throw new Error("Booking not found");
+
+      const fd = booking.fareDetails || {};
+      const prevWaiting = Number(fd?.waitingCharges || 0);
+      const currentFare = Number(booking.fare || 0);
+      const newFare = currentFare - prevWaiting + Number(waitingCharge || 0);
+
+      await Booking.findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            fare: Number(newFare || 0),
+            "fareDetails.waitingMinutes": waitingTime,
+            "fareDetails.waitingCharges": Number(waitingCharge || 0),
+            updatedAt: new Date(),
+          },
+        },
+        { new: false }
+      );
 
       // Notify client
       this.emitToClient(ws, {
@@ -1468,6 +1457,7 @@ class RecoveryHandler {
         data: {
           waitingTime,
           waitingCharge,
+          fare: Number(newFare || 0),
           updatedAt: new Date(),
         },
       });
@@ -2522,14 +2512,11 @@ class RecoveryHandler {
       }
       return null;
     };
-    const unwrapAmount = (v) =>
-      typeof v === "number"
-        ? v
-        : typeof v === "object" && v !== null
-        ? Number(v.amount || v.total || 0)
-        : Number(v || 0);
     const buildCurrency = (fd) =>
-      fd?.finalFare?.currency || fd?.currency || "AED";
+      fd?.finalFare?.currency ||
+      fd?.estimatedFare?.currency ||
+      fd?.currency ||
+      "AED";
 
     const coalesceBreakdown = (fd) => {
       const b = fd?.breakdown || {};
@@ -2571,11 +2558,25 @@ class RecoveryHandler {
     };
     const rebuildFromCalculator = async (bk) => {
       const fd = bk?.fareDetails || {};
-      const distance = toNum(fd?.estimatedDistance) ?? toNum(bk?.distance) ?? 0;
+      const toNumLocal = (v) => {
+        if (typeof v === "number") return Number.isFinite(v) ? v : null;
+        if (typeof v === "string" && v.trim() !== "") {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : null;
+        }
+        if (v && typeof v === "object") {
+          const n = Number(v.amount ?? v.total ?? 0);
+          return Number.isFinite(n) ? n : null;
+        }
+        return null;
+      };
+
+      const distance =
+        toNumLocal(fd?.estimatedDistance) ?? toNumLocal(bk?.distance) ?? 0;
       const routeType = fd?.routeType || "one_way";
-      const estimatedDuration = toNum(fd?.estimatedDuration) ?? 0;
-      const waitingMinutes = toNum(fd?.waitingMinutes) ?? 0;
-      const demandRatio = toNum(fd?.demandRatio) ?? 1;
+      const estimatedDuration = toNumLocal(fd?.estimatedDuration) ?? 0;
+      const waitingMinutes = toNumLocal(fd?.waitingMinutes) ?? 0;
+      const demandRatio = toNumLocal(fd?.demandRatio) ?? 1;
       const vehicleType = bk?.vehicleType || null;
 
       try {
@@ -2591,6 +2592,7 @@ class RecoveryHandler {
           isCancelled: false,
           cancellationReason: null,
         });
+
         const breakdown = {
           baseFare: Number(comp?.baseFare || 0),
           distanceFare: Number(comp?.distanceFare || 0),
@@ -2665,17 +2667,13 @@ class RecoveryHandler {
         );
       }
 
-      // Authoritative final amount: from DB only (finalFare if present, else top-level fare)
+      // Authoritative total strictly from DB: booking.fare (accepted fare)
       const fd = booking?.fareDetails || {};
       const currency = buildCurrency(fd);
-      const existingFinal = toNum(fd?.finalFare);
       const now = new Date();
-      let finalAmount =
-        existingFinal != null && existingFinal > 0
-          ? existingFinal
-          : Number(booking?.fare || 0);
+      const finalAmount = Number(booking?.fare || 0);
 
-      // Persist completion (do not overwrite fareDetails.finalFare if already exists)
+      // Persist completion (keep fare as-is; do not re-derive from calculator here)
       await Booking.findByIdAndUpdate(
         bookingId,
         {
@@ -2702,9 +2700,8 @@ class RecoveryHandler {
         if (rebuilt.breakdown) breakdown2 = rebuilt.breakdown;
       }
 
-      // Totals strictly from DB
-      const totalAmount2 =
-        toNum(fd2?.finalFare) ?? Number(finalDoc?.fare || 0) ?? 0;
+      // Totals strictly from DB top-level fare
+      const totalAmount2 = Number(finalDoc?.fare || 0);
 
       const billing = {
         status: String(finalDoc?.status || "completed"),
@@ -2729,15 +2726,10 @@ class RecoveryHandler {
               coordinates: finalDoc.dropoffLocation.coordinates || null,
             }
           : null,
-        finalFare: (() => {
-          const cur = buildCurrency(fd2);
-          const fromFinal = toNum(fd2?.finalFare);
-          const amount =
-            fromFinal != null && fromFinal > 0
-              ? fromFinal
-              : Number(finalDoc?.fare || 0);
-          return { amount: Number(amount || 0), currency: cur };
-        })(),
+        finalFare: {
+          amount: Number(totalAmount2 || 0),
+          currency: buildCurrency(fd2),
+        },
         estimatedFare:
           typeof fd2?.estimatedFare === "object" && fd2?.estimatedFare !== null
             ? fd2.estimatedFare
@@ -2795,77 +2787,41 @@ class RecoveryHandler {
         data: { status: "completed", completedAt: now },
       });
 
-      // Completed summary to both (use DB-only totals)
+      // Completed summary to both (use DB-only totals based on top-level fare)
       try {
         const toCustomer = String(finalDoc.user || "");
         const after = await Booking.findById(bookingId)
-          .select(
-            "fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
-          )
+          .select("fare fareDetails.currency")
           .lean();
 
-        const ccy =
-          after?.fareDetails?.finalFare?.currency ||
-          after?.fareDetails?.currency ||
-          "AED";
-        const completedAmount =
-          toNum(after?.fareDetails?.finalFare) ?? Number(after?.fare || 0);
+        const ccy = after?.fareDetails?.currency || "AED";
+        const completedAmount = Number(after?.fare || 0);
 
         const completedPayload = {
           event: "recovery.completed",
           bookingId,
           data: {
             status: "completed",
-            completedAt: now,
-            finalFare: Number(completedAmount || 0),
-            currency: ccy,
-            breakdown: after?.fareDetails?.breakdown || {},
+            total: { amount: Number(completedAmount || 0), currency: ccy },
+            details,
           },
         };
-        if (toCustomer)
-          this.webSocketService.sendToUser(toCustomer, completedPayload);
-        this.webSocketService.sendToUser(String(driverId), completedPayload);
-      } catch {}
 
-      // Billing to both (DB-only totals)
-      try {
-        const toCustomer = String(finalDoc.user || "");
-        if (toCustomer) {
-          this.webSocketService.sendToUser(toCustomer, {
-            event: "billing.details",
-            bookingId,
-            data: billing,
-          });
-        }
-        this.webSocketService.sendToUser(String(driverId), {
-          event: "billing.details",
-          bookingId,
-          data: billing,
-        });
-      } catch {}
-
-      // Booking details to both
-      try {
-        const toCustomer = String(finalDoc.user || "");
-        if (toCustomer) {
-          this.webSocketService.sendToUser(toCustomer, {
-            event: "booking.details",
-            bookingId,
-            data: details,
-          });
-        }
-        this.webSocketService.sendToUser(String(driverId), {
-          event: "booking.details",
-          bookingId,
-          data: details,
-        });
+        // Send to customer and driver
+        const toDriver = String(finalDoc.driver || "");
+        this.webSocketService.sendToUsers(
+          [toCustomer, toDriver],
+          completedPayload
+        );
       } catch {}
     } catch (error) {
-      logger.error("Error in handleServiceComplete:", error);
       this.emitToClient(ws, {
         event: "error",
-        bookingId: bookingId || null,
-        error: { code: "SERVICE_COMPLETE_ERROR", message: error.message },
+        bookingId,
+        error: {
+          code: "SERVICE_COMPLETE_ERROR",
+          message: error.message || "Failed to complete service",
+        },
       });
     }
   }
@@ -4729,9 +4685,8 @@ class RecoveryHandler {
 
       const currency = buildCurrency(fd);
 
-      // Totals strictly from DB: finalFare (if present) else top-level fare
-      const totalAmount =
-        toNum(fd?.finalFare) ?? Number(booking?.fare || 0) ?? 0;
+      // Total strictly from DB top-level fare (accepted fare / current fare)
+      const totalAmount = Number(booking?.fare || 0) ?? 0;
 
       const billing = {
         status: String(booking?.status || "completed"),
@@ -4753,12 +4708,7 @@ class RecoveryHandler {
               coordinates: booking.dropoffLocation.coordinates || null,
             }
           : null,
-        finalFare:
-          fd?.finalFare != null
-            ? typeof fd.finalFare === "object"
-              ? fd.finalFare
-              : { amount: Number(fd.finalFare || 0), currency }
-            : { amount: Number(booking?.fare || 0), currency },
+        finalFare: { amount: Number(totalAmount || 0), currency },
         estimatedFare:
           typeof fd?.estimatedFare === "object" && fd?.estimatedFare !== null
             ? fd.estimatedFare
@@ -4785,47 +4735,11 @@ class RecoveryHandler {
         extras: fd?.extras ?? null,
       };
 
-      // Emit to caller
       this.emitToClient(ws, {
         event: "billing.details",
         bookingId: id,
         data: billing,
       });
-
-      // Optionally also mirror booking.details for convenience (unchanged behavior)
-      const details = {
-        status: String(booking?.status || "completed"),
-        acceptedAt: booking?.acceptedAt || null,
-        startedAt: booking?.startedAt || null,
-        completedAt: booking?.completedAt || null,
-        pickup: billing.pickup,
-        dropoff: billing.dropoff,
-        finalFare: billing.finalFare,
-        estimatedFare: billing.estimatedFare,
-        total: billing.total,
-        breakdown: billing.breakdown,
-        vat: fd?.vat || null,
-        surge: fd?.surge || null,
-        platformFees: billing.platformFees,
-        waitingCharges: billing.waitingCharges,
-        extras: fd?.extras || null,
-      };
-
-      const toCustomer = String(booking.user || "");
-      if (toCustomer) {
-        this.webSocketService.sendToUser(toCustomer, {
-          event: "booking.details",
-          bookingId: id,
-          data: details,
-        });
-      }
-      if (booking.driver) {
-        this.webSocketService.sendToUser(String(booking.driver), {
-          event: "booking.details",
-          bookingId: id,
-          data: details,
-        });
-      }
     } catch (error) {
       this.emitToClient(ws, {
         event: "error",
@@ -4888,44 +4802,118 @@ class RecoveryHandler {
     try {
       if (!id || !data) throw new Error("bookingId and data are required");
       const { role, stars, text } = data;
+      const roleStr = String(role || "").toLowerCase();
       const actorId = ws?.user?.id || ws?.user?._id;
-      const booking = await Booking.findById(id).select("messages");
+
+      // Load booking with fields needed for validation and updates
+      const booking = await Booking.findById(id)
+        .select("user driver status rating")
+        .populate("user", "firstName lastName phoneNumber")
+        .lean(false); // need a document to mutate/save
       if (!booking) throw new Error("Booking not found");
 
+      // Normalize and validate stars
       const s = Math.max(1, Math.min(5, Number(stars || 0)));
-      booking.ratings = booking.ratings || {};
+      if (!Number.isFinite(s) || s < 1 || s > 5) {
+        throw new Error("stars must be an integer between 1 and 5");
+      }
 
-      if (String(role).toLowerCase() === "customer") {
+      // Enforce: only after completion
+      if (String(booking.status) !== "completed") {
+        throw new Error("You can rate only after the service is completed");
+      }
+
+      // Ensure rating container exists with correct shape
+      booking.rating = booking.rating || {};
+      booking.rating.userRating = booking.rating.userRating || {};
+      booking.rating.driverRating = booking.rating.driverRating || {};
+
+      if (roleStr === "customer") {
         // Only the customer linked to the booking can submit this
         if (String(actorId) !== String(booking.user))
           throw new Error("Unauthorized");
-        booking.ratings.customer = {
+
+        // Prevent duplicate customer rating
+        if (booking.rating?.userRating?.stars) {
+          throw new Error("You have already rated this booking");
+        }
+
+        // 1) Save on booking (customer rates driver)
+        booking.rating.userRating = {
           stars: s,
-          text: text || "",
-          at: new Date(),
+          comment: typeof text === "string" ? text.slice(0, 500) : undefined,
+          ratedAt: new Date(),
         };
         await booking.save();
-        // Notify driver
+
+        // 2) Aggregate into driver's profile
         if (booking.driver) {
-          this.webSocketService.sendToUser(String(booking.driver), {
-            event: "rating.received",
-            bookingId: id,
-            data: { from: "customer", stars: s },
-          });
+          const driver = await User.findById(booking.driver)
+            .select("driverRating firstName lastName phoneNumber")
+            .lean(false);
+          if (driver) {
+            if (!driver.driverRating) {
+              driver.driverRating = { average: 0, count: 0, reviews: [] };
+            }
+
+            const prevAvg = Number(driver.driverRating.average || 0);
+            const prevCnt = Number(driver.driverRating.count || 0);
+            const newCnt = prevCnt + 1;
+            const newAvg = (prevAvg * prevCnt + s) / newCnt;
+
+            driver.driverRating.average = Number(newAvg.toFixed(2));
+            driver.driverRating.count = newCnt;
+
+            const customerName =
+              (booking.user?.firstName || "") +
+              (booking.user?.lastName ? ` ${booking.user.lastName}` : "");
+
+            driver.driverRating.reviews = driver.driverRating.reviews || [];
+            driver.driverRating.reviews.push({
+              booking: booking._id,
+              customer: booking.user?._id || booking.user,
+              stars: s,
+              comment:
+                typeof text === "string" ? text.slice(0, 500) : undefined,
+              customerInfo: {
+                name: customerName.trim() || undefined,
+                phoneNumber: booking.user?.phoneNumber || undefined,
+              },
+              createdAt: new Date(),
+            });
+
+            await driver.save();
+
+            // Notify driver
+            if (this.webSocketService?.sendToUser) {
+              this.webSocketService.sendToUser(String(booking.driver), {
+                event: "rating.received",
+                bookingId: id,
+                data: { from: "customer", stars: s },
+              });
+            }
+          }
         }
-      } else if (String(role).toLowerCase() === "driver") {
+      } else if (roleStr === "driver") {
         // Only the driver linked to the booking can submit this
         if (String(actorId) !== String(booking.driver))
           throw new Error("Unauthorized");
-        booking.ratings.driver = {
+
+        // Prevent duplicate driver rating
+        if (booking.rating?.driverRating?.stars) {
+          throw new Error("You have already rated this booking");
+        }
+
+        // Save on booking (driver rates customer)
+        booking.rating.driverRating = {
           stars: s,
-          text: text || "",
-          at: new Date(),
+          comment: typeof text === "string" ? text.slice(0, 500) : undefined,
+          ratedAt: new Date(),
         };
         await booking.save();
 
         // Notify customer
-        if (booking.user) {
+        if (booking.user && this.webSocketService?.sendToUser) {
           this.webSocketService.sendToUser(String(booking.user), {
             event: "rating.received",
             bookingId: id,
@@ -4940,7 +4928,7 @@ class RecoveryHandler {
       this.emitToClient(ws, {
         event: "rating.submitted",
         bookingId: id,
-        data: { role: String(role).toLowerCase(), stars: s },
+        data: { role: roleStr, stars: s },
       });
 
       // Optional: notify admins on very low ratings
@@ -4949,11 +4937,7 @@ class RecoveryHandler {
           this.webSocketService.broadcastToAdmins({
             event: "admin.rating.low",
             bookingId: id,
-            data: {
-              role: String(role).toLowerCase(),
-              stars: s,
-              at: new Date(),
-            },
+            data: { role: roleStr, stars: s, at: new Date() },
           });
         }
       } catch (adminRateErr) {
@@ -5045,9 +5029,9 @@ class RecoveryHandler {
         throw new Error("Driver is not in a valid state to accept");
       }
 
-      // Determine final amount from payload/negotiation/estimate
+      // Determine accepted amount from payload/negotiation/estimate
       const proposed = booking?.fareDetails?.negotiation?.proposed || {};
-      const lastAmount =
+      const acceptedAmount =
         typeof data?.amount === "number" &&
         Number.isFinite(data.amount) &&
         data.amount > 0
@@ -5062,7 +5046,7 @@ class RecoveryHandler {
 
       const now = new Date();
 
-      // Persist: assign driver and advance state (in_progress on accept)
+      // Persist: assign driver, set accepted fare as current fare, transition to in_progress
       await Booking.findByIdAndUpdate(
         bookingId,
         {
@@ -5071,12 +5055,17 @@ class RecoveryHandler {
             driver: driverId, // ensure driver is assigned
             acceptedAt: now,
             startedAt: now,
-            "fareDetails.finalFare": {
-              amount: lastAmount,
+
+            // Persist accepted fare in DB
+            fare: Number(acceptedAmount || 0),
+            "fareDetails.acceptedFare": {
+              amount: acceptedAmount,
               currency,
               by: isDriver ? "driver" : "customer",
               at: now,
             },
+
+            // Update negotiation state
             "fareDetails.negotiation.state": "accepted",
             "fareDetails.negotiation.endedAt": now,
           },
@@ -5084,12 +5073,13 @@ class RecoveryHandler {
             "fareDetails.negotiation.history": {
               action: "accept",
               by: isDriver ? "driver" : "customer",
-              amount: lastAmount,
+              amount: acceptedAmount,
               currency,
               at: now,
             },
           },
-          $unset: { pendingAssignment: "" },
+          // Do not keep any stale final fare here; final will be set at billing/completion
+          $unset: { pendingAssignment: "", "fareDetails.finalFare": "" },
         },
         { new: false }
       );
@@ -5199,11 +5189,11 @@ class RecoveryHandler {
           acceptedAt: now,
           startedAt: now,
           driverId,
-          finalFare: { amount: lastAmount, currency },
+          acceptedFare: { amount: acceptedAmount, currency },
         },
       });
 
-      // 1) driver.assigned (both)
+      // 1) driver.assigned (both) — include acceptedFare
       try {
         const toCustomer = String(booking.user || "");
         if (toCustomer) {
@@ -5215,7 +5205,7 @@ class RecoveryHandler {
               vehicleDetails,
               acceptedAt: now,
               startedAt: now,
-              finalFare: { amount: lastAmount, currency },
+              acceptedFare: { amount: acceptedAmount, currency },
             },
           });
         }
@@ -5227,7 +5217,7 @@ class RecoveryHandler {
             vehicleDetails,
             acceptedAt: now,
             startedAt: now,
-            finalFare: { amount: lastAmount, currency },
+            acceptedFare: { amount: acceptedAmount, currency },
           },
         });
       } catch {}
@@ -5242,6 +5232,7 @@ class RecoveryHandler {
             status: "accepted",
             driverId,
             acceptedAt: now,
+            acceptedFare: { amount: acceptedAmount, currency },
           },
         };
         if (toCustomer)
@@ -5249,7 +5240,7 @@ class RecoveryHandler {
         this.webSocketService.sendToUser(String(driverId), acceptedPayload);
       } catch {}
 
-      // 3) recovery.started (both) — include customer info
+      // 3) recovery.started (both) — include customer info + acceptedFare
       try {
         const startedPayload = {
           event: "recovery.started",
@@ -5262,7 +5253,8 @@ class RecoveryHandler {
             dropoffLocation: booking.dropoffLocation,
             driverProfile,
             vehicleDetails,
-            customer: customerProfile, // <-- added
+            customer: customerProfile,
+            acceptedFare: { amount: acceptedAmount, currency },
           },
         };
         const toCustomer = String(booking.user || "");
