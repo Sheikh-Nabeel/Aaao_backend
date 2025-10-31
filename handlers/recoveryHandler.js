@@ -2081,6 +2081,28 @@ class RecoveryHandler {
       return;
     }
 
+    // Small helpers
+    const toStr = (v) => (v ? String(v) : "");
+    const unique = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+    const notifyUsers = (userIds, payload) => {
+      try {
+        if (this.webSocketService?.sendToUsers) {
+          this.webSocketService.sendToUsers(
+            unique(userIds).map(toStr),
+            payload
+          );
+          return;
+        }
+        if (this.webSocketService?.sendToUser) {
+          unique(userIds)
+            .map(toStr)
+            .forEach((id) => this.webSocketService.sendToUser(id, payload));
+        }
+      } catch (e) {
+        logger.warn("Cancel notifyUsers failed:", e?.message || e);
+      }
+    };
+
     // Idempotency: prevent concurrent/duplicate cancellation executions
     let lockAcquired = false;
     const lockKey = `booking:cancel:lock:${bookingId}`;
@@ -2105,21 +2127,31 @@ class RecoveryHandler {
 
     try {
       // Authorization: only booking owner or assigned/pending driver
-      const viewerId = String(ws?.user?._id || ws?.user?.id || "").trim();
+      const viewerId = toStr(ws?.user?._id || ws?.user?.id);
       const booking = await Booking.findById(bookingId)
         .select(
-          "user driver status pendingAssignment pickupLocation dropoffLocation fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown cancellationReason cancelledAt"
+          "user driver status pendingAssignment pickupLocation dropoffLocation fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown cancellationReason cancelledAt updatedAt"
         )
         .lean();
+
       if (!booking) throw new Error("Booking not found");
 
       const isParticipant =
-        (booking.user && String(booking.user) === viewerId) ||
-        (booking.driver && String(booking.driver) === viewerId) ||
+        (booking.user && toStr(booking.user) === viewerId) ||
+        (booking.driver && toStr(booking.driver) === viewerId) ||
         (booking?.pendingAssignment?.driverId &&
-          String(booking.pendingAssignment.driverId) === viewerId);
+          toStr(booking.pendingAssignment.driverId) === viewerId);
+
       if (!isParticipant)
         throw new Error("Not authorized to cancel this booking");
+
+      // Build common recipients set (both sides: customer + driver/pending driver)
+      const recipientsEarly = unique([
+        toStr(booking.user),
+        booking?.driver
+          ? toStr(booking.driver)
+          : toStr(booking?.pendingAssignment?.driverId),
+      ]);
 
       // If already cancelled/completed, send single notifications and ack (avoid reprocessing)
       if (["cancelled", "completed"].includes(booking.status)) {
@@ -2145,47 +2177,31 @@ class RecoveryHandler {
               : undefined,
         };
 
-        // If status is 'cancelled', ensure both sides receive recovery.cancelled once
-        if (booking.status === "cancelled") {
-          const cancelPayload = {
-            event: "recovery.cancelled",
-            bookingId,
-            data: {
-              status: "cancelled",
-              cancelledAt: alreadyData.cancelledAt,
-              reason: alreadyData.reason || "cancelled",
-              finalFare: alreadyData.finalFare,
-              currency: alreadyData.currency,
-              breakdown: alreadyData.breakdown,
-            },
-          };
+        const cancelPayload = {
+          event: "recovery.cancelled",
+          bookingId,
+          data: {
+            status: "cancelled",
+            cancelledAt: alreadyData.cancelledAt || new Date(),
+            reason: alreadyData.reason || "cancelled",
+            finalFare: alreadyData.finalFare,
+            currency: alreadyData.currency,
+            breakdown: alreadyData.breakdown,
+          },
+        };
 
-          // Notify customer
-          if (booking?.user)
-            this.webSocketService.sendToUser(
-              String(booking.user),
-              cancelPayload
-            );
+        // Always notify both sides (customer + driver or pending driver)
+        notifyUsers(recipientsEarly, cancelPayload);
 
-          // Notify driver (assigned or pending assignment)
-          const driverTargets = [];
-          if (booking?.driver) driverTargets.push(String(booking.driver));
-          else if (booking?.pendingAssignment?.driverId)
-            driverTargets.push(String(booking.pendingAssignment.driverId));
-          Array.from(new Set(driverTargets))
-            .filter(Boolean)
-            .forEach((drvId) =>
-              this.webSocketService.sendToUser(drvId, cancelPayload)
-            );
-
-          // Optional broadcast to booking room
+        // Optional broadcast to booking room
+        try {
           if (this.webSocketService?.sendToRoom) {
             this.webSocketService.sendToRoom(
               `booking:${bookingId}`,
               cancelPayload
             );
           }
-        }
+        } catch {}
 
         // Ack to requester (single)
         this.emitToClient(ws, {
@@ -2194,7 +2210,7 @@ class RecoveryHandler {
           data: alreadyData,
         });
 
-        // Optional: also mark request unavailable in service room (only if cancelled)
+        // Also mark request unavailable in service room (only if cancelled)
         try {
           if (
             booking.status === "cancelled" &&
@@ -2210,7 +2226,7 @@ class RecoveryHandler {
             this.webSocketService.sendToRoom(roomName, {
               event: "recovery.unavailable",
               bookingId,
-              data: { reason: "cancelled" },
+              data: { reason: alreadyData.reason || "cancelled" },
             });
           }
         } catch {}
@@ -2270,6 +2286,14 @@ class RecoveryHandler {
         )
         .lean();
 
+      const finalFareAmount = Number(
+        (typeof after?.fareDetails?.finalFare === "object"
+          ? after?.fareDetails?.finalFare?.amount
+          : after?.fareDetails?.finalFare) ??
+          after?.fare ??
+          0
+      );
+
       const cancelPayload = {
         event: "recovery.cancelled",
         bookingId,
@@ -2277,37 +2301,30 @@ class RecoveryHandler {
           status: "cancelled",
           cancelledAt: now,
           reason,
-          finalFare: Number(
-            (typeof after?.fareDetails?.finalFare === "object"
-              ? after?.fareDetails?.finalFare?.amount
-              : after?.fareDetails?.finalFare) ??
-              after?.fare ??
-              0
-          ),
+          finalFare: finalFareAmount,
           currency: after?.fareDetails?.currency || "AED",
           breakdown: after?.fareDetails?.breakdown || {},
         },
       };
 
-      // Notify customer
-      if (after?.user)
-        this.webSocketService.sendToUser(String(after.user), cancelPayload);
+      // Always notify both sides (customer + driver or pending driver)
+      const recipients = unique([
+        toStr(after?.user),
+        after?.driver
+          ? toStr(after.driver)
+          : toStr(after?.pendingAssignment?.driverId),
+      ]);
+      notifyUsers(recipients, cancelPayload);
 
-      // Notify driver (assigned, started, or pending assignment)
-      const driverTargets = [];
-      if (after?.driver) driverTargets.push(String(after.driver));
-      else if (after?.pendingAssignment?.driverId)
-        driverTargets.push(String(after.pendingAssignment.driverId));
-      Array.from(new Set(driverTargets))
-        .filter(Boolean)
-        .forEach((drvId) =>
-          this.webSocketService.sendToUser(drvId, cancelPayload)
-        );
-
-      // Optional broadcast to booking room (kept)
-      if (this.webSocketService?.sendToRoom) {
-        this.webSocketService.sendToRoom(`booking:${bookingId}`, cancelPayload);
-      }
+      // Optional broadcast to booking room
+      try {
+        if (this.webSocketService?.sendToRoom) {
+          this.webSocketService.sendToRoom(
+            `booking:${bookingId}`,
+            cancelPayload
+          );
+        }
+      } catch {}
 
       // Ack to requester
       this.emitToClient(ws, {
@@ -2316,7 +2333,7 @@ class RecoveryHandler {
         data: cancelPayload.data,
       });
 
-      // Optional: also mark request unavailable in service room (unchanged)
+      // Also mark request unavailable in service room
       try {
         const norm = (s) =>
           String(s || "")
@@ -2334,6 +2351,7 @@ class RecoveryHandler {
         }
       } catch {}
     } catch (error) {
+      logger.error("Error in handleCancel:", error);
       this.emitToClient(ws, {
         event: "error",
         bookingId,
@@ -4796,148 +4814,189 @@ class RecoveryHandler {
    * and broadcast admin notification when repeat-pair fraud flag is raised.
    */
   async handleRatingSubmit(ws, message) {
-    const { bookingId, data } = message || {};
-    const id = bookingId;
+    // Normalize message
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+
+    // Accept bookingId from top-level or inside data
+    const bookingId = String(
+      msg?.bookingId || message?.bookingId || data?.bookingId || ""
+    ).trim();
 
     try {
-      if (!id || !data) throw new Error("bookingId and data are required");
-      const { role, stars, text } = data;
-      const roleStr = String(role || "").toLowerCase();
-      const actorId = ws?.user?.id || ws?.user?._id;
+      if (!bookingId || !data)
+        throw new Error("bookingId and data are required");
 
-      // Load booking with fields needed for validation and updates
-      const booking = await Booking.findById(id)
-        .select("user driver status rating")
-        .populate("user", "firstName lastName phoneNumber")
-        .lean(false); // need a document to mutate/save
-      if (!booking) throw new Error("Booking not found");
+      // Inputs
+      const roleStrRaw = String(data?.role || "").toLowerCase();
+      const roleStr = roleStrRaw === "user" ? "customer" : roleStrRaw; // normalize "user" => "customer"
+      const driverId = String(data?.driverId || "").trim();
+      const s = Math.max(1, Math.min(5, Number(data?.stars || 0)));
+      const text = data?.text;
+      const trimmedComment =
+        typeof text === "string" ? text.slice(0, 500) : undefined;
 
-      // Normalize and validate stars
-      const s = Math.max(1, Math.min(5, Number(stars || 0)));
+      // Resolve actor from ws session
+      const actorId = String(ws?.user?.id || ws?.user?._id || "").trim();
+      if (!actorId) throw new Error("Unauthorized");
+
       if (!Number.isFinite(s) || s < 1 || s > 5) {
         throw new Error("stars must be an integer between 1 and 5");
       }
 
-      // Enforce: only after completion
+      // Load booking (need doc to mutate/save)
+      const booking = await Booking.findById(bookingId)
+        .select("user driver status rating")
+        .populate("user", "firstName lastName phoneNumber")
+        .lean(false);
+      if (!booking) throw new Error("Booking not found");
+
+      // Completed-only
       if (String(booking.status) !== "completed") {
         throw new Error("You can rate only after the service is completed");
       }
 
-      // Ensure rating container exists with correct shape
+      // Extract IDs correctly (populate-safe)
+      const bookingUserId = String(booking.user?._id || booking.user || "");
+      const bookingDriverId = String(
+        booking.driver?._id || booking.driver || ""
+      );
+
+      // Infer actor by identity (more reliable than client-provided role)
+      const isActorCustomer = bookingUserId === actorId;
+      const isActorDriver = bookingDriverId === actorId;
+
+      if (!isActorCustomer && !isActorDriver) {
+        throw new Error("Unauthorized");
+      }
+
+      // Ensure rating container exists
       booking.rating = booking.rating || {};
       booking.rating.userRating = booking.rating.userRating || {};
       booking.rating.driverRating = booking.rating.driverRating || {};
 
-      if (roleStr === "customer") {
-        // Only the customer linked to the booking can submit this
-        if (String(actorId) !== String(booking.user))
-          throw new Error("Unauthorized");
-
-        // Prevent duplicate customer rating
+      if (isActorCustomer) {
+        // Customer rating driver
+        if (!driverId) throw new Error("driverId is required to rate a driver");
+        if (!bookingDriverId || bookingDriverId !== driverId) {
+          throw new Error(
+            "driverId does not match the driver who served this booking"
+          );
+        }
         if (booking.rating?.userRating?.stars) {
           throw new Error("You have already rated this booking");
         }
 
-        // 1) Save on booking (customer rates driver)
+        // 1) Save audit on booking
         booking.rating.userRating = {
           stars: s,
-          comment: typeof text === "string" ? text.slice(0, 500) : undefined,
+          comment: trimmedComment,
           ratedAt: new Date(),
+          driver: booking.driver,
         };
         await booking.save();
 
         // 2) Aggregate into driver's profile
-        if (booking.driver) {
-          const driver = await User.findById(booking.driver)
-            .select("driverRating firstName lastName phoneNumber")
-            .lean(false);
-          if (driver) {
-            if (!driver.driverRating) {
-              driver.driverRating = { average: 0, count: 0, reviews: [] };
-            }
+        const driver = await User.findById(driverId)
+          .select("driverRating firstName lastName phoneNumber")
+          .lean(false);
+        if (!driver) throw new Error("Driver not found");
 
-            const prevAvg = Number(driver.driverRating.average || 0);
-            const prevCnt = Number(driver.driverRating.count || 0);
-            const newCnt = prevCnt + 1;
-            const newAvg = (prevAvg * prevCnt + s) / newCnt;
-
-            driver.driverRating.average = Number(newAvg.toFixed(2));
-            driver.driverRating.count = newCnt;
-
-            const customerName =
-              (booking.user?.firstName || "") +
-              (booking.user?.lastName ? ` ${booking.user.lastName}` : "");
-
-            driver.driverRating.reviews = driver.driverRating.reviews || [];
-            driver.driverRating.reviews.push({
-              booking: booking._id,
-              customer: booking.user?._id || booking.user,
-              stars: s,
-              comment:
-                typeof text === "string" ? text.slice(0, 500) : undefined,
-              customerInfo: {
-                name: customerName.trim() || undefined,
-                phoneNumber: booking.user?.phoneNumber || undefined,
-              },
-              createdAt: new Date(),
-            });
-
-            await driver.save();
-
-            // Notify driver
-            if (this.webSocketService?.sendToUser) {
-              this.webSocketService.sendToUser(String(booking.driver), {
-                event: "rating.received",
-                bookingId: id,
-                data: { from: "customer", stars: s },
-              });
-            }
-          }
+        if (!driver.driverRating) {
+          driver.driverRating = { average: 0, count: 0, reviews: [] };
         }
-      } else if (roleStr === "driver") {
-        // Only the driver linked to the booking can submit this
-        if (String(actorId) !== String(booking.driver))
-          throw new Error("Unauthorized");
 
-        // Prevent duplicate driver rating
+        const prevAvg = Number(driver.driverRating.average || 0);
+        const prevCnt = Number(driver.driverRating.count || 0);
+        const newCnt = prevCnt + 1;
+        const newAvg = (prevAvg * prevCnt + s) / newCnt;
+
+        driver.driverRating.average = Number(newAvg.toFixed(2));
+        driver.driverRating.count = newCnt;
+
+        const customerName =
+          (booking.user?.firstName || "") +
+          (booking.user?.lastName ? ` ${booking.user.lastName}` : "");
+
+        driver.driverRating.reviews = driver.driverRating.reviews || [];
+        driver.driverRating.reviews.push({
+          booking: booking._id,
+          customer: booking.user?._id || booking.user,
+          stars: s,
+          comment: trimmedComment,
+          customerInfo: {
+            name: customerName.trim() || undefined,
+            phoneNumber: booking.user?.phoneNumber || undefined,
+          },
+          createdAt: new Date(),
+        });
+
+        await driver.save();
+
+        // Notify driver
+        try {
+          if (this.webSocketService?.sendToUser) {
+            this.webSocketService.sendToUser(String(driverId), {
+              event: "rating.received",
+              bookingId,
+              data: { from: "customer", stars: s },
+            });
+          }
+        } catch {}
+      } else if (isActorDriver) {
+        // Driver rating customer
         if (booking.rating?.driverRating?.stars) {
           throw new Error("You have already rated this booking");
         }
 
-        // Save on booking (driver rates customer)
         booking.rating.driverRating = {
           stars: s,
-          comment: typeof text === "string" ? text.slice(0, 500) : undefined,
+          comment: trimmedComment,
           ratedAt: new Date(),
         };
         await booking.save();
 
         // Notify customer
-        if (booking.user && this.webSocketService?.sendToUser) {
-          this.webSocketService.sendToUser(String(booking.user), {
-            event: "rating.received",
-            bookingId: id,
-            data: { from: "driver", stars: s },
-          });
-        }
-      } else {
-        throw new Error('Invalid role; expected "customer" or "driver"');
+        try {
+          if (bookingUserId && this.webSocketService?.sendToUser) {
+            this.webSocketService.sendToUser(String(bookingUserId), {
+              event: "rating.received",
+              bookingId,
+              data: { from: "driver", stars: s },
+            });
+          }
+        } catch {}
       }
 
-      // Acknowledge sender
+      // Ack sender (now includes comment)
       this.emitToClient(ws, {
         event: "rating.submitted",
-        bookingId: id,
-        data: { role: roleStr, stars: s },
+        bookingId,
+        data: {
+          role: isActorCustomer ? "customer" : "driver",
+          stars: s,
+          comment: trimmedComment,
+        },
       });
 
-      // Optional: notify admins on very low ratings
+      // Optional admin alert
       try {
         if (s <= 2 && this.webSocketService?.broadcastToAdmins) {
           this.webSocketService.broadcastToAdmins({
             event: "admin.rating.low",
-            bookingId: id,
-            data: { role: roleStr, stars: s, at: new Date() },
+            bookingId,
+            data: {
+              role: isActorCustomer ? "customer" : "driver",
+              stars: s,
+              at: new Date(),
+            },
           });
         }
       } catch (adminRateErr) {
@@ -4950,7 +5009,7 @@ class RecoveryHandler {
       logger.error("Error in handleRatingSubmit:", error);
       this.emitToClient(ws, {
         event: "error",
-        bookingId: id,
+        bookingId,
         error: { code: "RATING_SUBMIT_ERROR", message: error.message },
       });
     }

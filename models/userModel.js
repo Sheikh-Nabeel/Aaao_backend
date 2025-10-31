@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 import { v4 as uuidv4 } from "uuid";
-
 const userSchema = new mongoose.Schema(
   {
     username: {
@@ -350,6 +349,25 @@ const userSchema = new mongoose.Schema(
         },
       },
     },
+
+    // Driver rating and reviews (for drivers)
+    driverRating: {
+      average: { type: Number, default: 0 },
+      count: { type: Number, default: 0 },
+      reviews: [
+        {
+          booking: { type: mongoose.Schema.Types.ObjectId, ref: "Booking" },
+          customer: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+          stars: { type: Number, min: 1, max: 5, required: true },
+          comment: { type: String, maxlength: 500 },
+          customerInfo: {
+            name: { type: String },
+            phoneNumber: { type: String },
+          },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+    },
   },
   { timestamps: true }
 );
@@ -442,6 +460,12 @@ userSchema.index({ "regionalAmbassador.countryRank": 1 });
 userSchema.index({ "regionalAmbassador.globalRank": 1 });
 userSchema.index({ "regionalAmbassador.isActive": 1 });
 userSchema.index({ country: 1, "regionalAmbassador.rank": 1 });
+
+// Indexes for driver ratings
+userSchema.index({ "driverRating.average": -1 });
+userSchema.index({ "driverRating.count": -1 });
+userSchema.index({ "driverRating.reviews.booking": 1 });
+userSchema.index({ "driverRating.reviews.customer": 1 });
 
 userSchema.pre("save", async function (next) {
   if (this.isModified("password")) {
@@ -911,7 +935,7 @@ userSchema.methods.getCRRRankProgress = function (crrRanks) {
       (tgpPoints / crrRanks.CHAMPION.requirements.tgp) * 100
     );
     pgpToNext = Math.max(0, crrRanks.CHAMPION.requirements.pgp - pgpPoints);
-    tgpToNext = Math.max(0, crrRanks.CHAMPION.requirements.tgp - tgpPoints);
+    tgpToNext = Math.max(0, crranks.CHAMPION.requirements.tgp - tgpPoints);
   } else if (currentRank === "CHAMPION") {
     nextRank = "BOSS";
     pgpProgress = Math.min(
