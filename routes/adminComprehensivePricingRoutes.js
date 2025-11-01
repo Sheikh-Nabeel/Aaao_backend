@@ -1,19 +1,10 @@
 import express from "express";
 import {
   getComprehensivePricing,
-  updateBaseFare,
-  updatePerKmRates,
-  updatePlatformFees,
-  updateCancellationCharges,
-  updateWaitingCharges,
-  updateNightCharges,
-  updateSurgePricing,
   updateCarRecoveryRates,
   updateCarCabRates,
   updateBikeRates,
   updateRoundTripFeatures,
-  updateVATConfiguration,
-  updateMinimumFare,
   bulkUpdatePricing,
   getItemPricing,
   addItemPricing,
@@ -35,19 +26,10 @@ router.use(authHandler);
 router.use(adminHandler);
 
 router.get("/", getComprehensivePricing);
-router.put("/base-fare", updateBaseFare);
-router.put("/per-km-rates", updatePerKmRates);
-router.put("/platform-fees", updatePlatformFees);
-router.put("/cancellation-charges", updateCancellationCharges);
-router.put("/waiting-charges", updateWaitingCharges);
-router.put("/night-charges", updateNightCharges);
-router.put("/surge-pricing", updateSurgePricing);
 router.put("/car-recovery-rates", updateCarRecoveryRates);
 router.put("/car-cab-rates", updateCarCabRates);
 router.put("/bike-rates", updateBikeRates);
 router.put("/round-trip-features", updateRoundTripFeatures);
-router.put("/vat-configuration", updateVATConfiguration);
-router.put("/minimum-fare", updateMinimumFare);
 router.put("/update-all", bulkUpdatePricing);
 router.get("/item-pricing", getItemPricing);
 router.post("/item-pricing", addItemPricing);
