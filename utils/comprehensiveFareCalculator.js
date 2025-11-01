@@ -7,14 +7,19 @@ const getCurrentHour = () => {
 
 // Check if current time is within night hours
 const isNightTime = (nightCharges) => {
+  if (!nightCharges || nightCharges.enabled !== true) return false;
   const currentHour = getCurrentHour();
-  const { startHour, endHour } = nightCharges;
+  const startHour = Number(nightCharges.startHour);
+  const endHour = Number(nightCharges.endHour);
+  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return false;
+
+  if (startHour === endHour) return false; // treat as disabled
 
   if (startHour > endHour) {
-    // Night time spans midnight (e.g., 22:00 to 06:00)
+    // Night spans midnight (e.g., 22 -> 06)
     return currentHour >= startHour || currentHour < endHour;
   } else {
-    // Night time within same day
+    // Same day window
     return currentHour >= startHour && currentHour < endHour;
   }
 };
@@ -23,11 +28,10 @@ const isNightTime = (nightCharges) => {
 const calculateSurgeMultiplier = (demandRatio, surgePricing) => {
   if (!surgePricing?.enabled) return 1;
 
-  // Find appropriate surge level
   const surgeLevel = (surgePricing.levels || [])
     .slice()
     .sort((a, b) => b.demandRatio - a.demandRatio)
-    .find((level) => demandRatio >= level.demandRatio);
+    .find((level) => Number(demandRatio) >= Number(level.demandRatio));
 
   return surgeLevel ? Number(surgeLevel.multiplier || 1) : 1;
 };
@@ -70,12 +74,15 @@ const calculateWaitingCharges = (waitingMinutes, waitingCharges) => {
     maximumCharge = Infinity,
   } = waitingCharges || {};
 
-  if (waitingMinutes <= freeMinutes) return 0;
+  if (Number(waitingMinutes) <= Number(freeMinutes)) return 0;
 
-  const chargeableMinutes = Math.max(0, waitingMinutes - freeMinutes);
-  const calculatedCharge = chargeableMinutes * perMinuteRate;
+  const chargeableMinutes = Math.max(
+    0,
+    Number(waitingMinutes) - Number(freeMinutes)
+  );
+  const calculatedCharge = chargeableMinutes * Number(perMinuteRate);
 
-  return Math.min(calculatedCharge, maximumCharge);
+  return Math.min(calculatedCharge, Number(maximumCharge));
 };
 
 // Calculate free stay minutes for round trips
@@ -83,7 +90,7 @@ const calculateFreeStayMinutes = (distance, roundTripConfig) => {
   if (!roundTripConfig?.freeStayMinutes?.enabled) return 0;
 
   const calculatedMinutes =
-    distance * Number(roundTripConfig.freeStayMinutes.ratePerKm || 0);
+    Number(distance) * Number(roundTripConfig.freeStayMinutes.ratePerKm || 0);
   return Math.min(
     calculatedMinutes,
     Number(roundTripConfig.freeStayMinutes.maximumMinutes || 0)
@@ -106,9 +113,9 @@ const shouldShowRefreshmentAlert = (
   ) {
     if (!recoveryConfig.refreshmentAlert.enabled) return false;
     return (
-      distance >=
+      Number(distance) >=
         Number(recoveryConfig.refreshmentAlert.minimumDistance || 0) ||
-      estimatedDuration >=
+      Number(estimatedDuration) >=
         Number(recoveryConfig.refreshmentAlert.minimumDuration || 0)
     );
   }
@@ -117,24 +124,23 @@ const shouldShowRefreshmentAlert = (
   if (!roundTripConfig?.refreshmentAlert?.enabled) return false;
 
   return (
-    distance >= Number(roundTripConfig.refreshmentAlert.minimumDistance || 0) ||
-    estimatedDuration >=
+    Number(distance) >=
+      Number(roundTripConfig.refreshmentAlert.minimumDistance || 0) ||
+    Number(estimatedDuration) >=
       Number(roundTripConfig.refreshmentAlert.minimumDuration || 0)
   );
 };
 
 // Calculate refreshment/overtime charges for car recovery
 const calculateRefreshmentCharges = (overtimeMinutes, refreshmentConfig) => {
-  if (!refreshmentConfig?.enabled || overtimeMinutes <= 0) return 0;
+  if (!refreshmentConfig?.enabled || Number(overtimeMinutes) <= 0) return 0;
 
   // Calculate charges based on per minute or per 5-minute blocks
   const perMinuteCharge =
-    overtimeMinutes * Number(refreshmentConfig.perMinuteCharges || 0);
-  const per5MinCharge =
-    Math.ceil(overtimeMinutes / 5) *
-    Number(refreshmentConfig.per5MinCharges || 0);
+    Number(overtimeMinutes) * Number(refreshmentConfig.perMinuteCharges || 0);
+  // For now we keep per-minute; if desired, switch to per-5-min:
+  // const per5MinCharge = Math.ceil(overtimeMinutes / 5) * Number(refreshmentConfig.per5MinCharges || 0);
 
-  // Use the configured charging method (assuming per minute for now)
   const calculatedCharge = perMinuteCharge;
 
   // Apply maximum charge cap
@@ -148,7 +154,8 @@ const calculateRefreshmentCharges = (overtimeMinutes, refreshmentConfig) => {
 const calculateCarRecoveryFreeStay = (distance, freeStayConfig) => {
   if (!freeStayConfig?.enabled) return 0;
 
-  const calculatedMinutes = distance * Number(freeStayConfig.ratePerKm || 0);
+  const calculatedMinutes =
+    Number(distance) * Number(freeStayConfig.ratePerKm || 0);
   return Math.min(calculatedMinutes, Number(freeStayConfig.maximumCap || 0));
 };
 
@@ -257,7 +264,7 @@ const calculateComprehensiveFare = async (bookingData) => {
     // Get pricing configuration
     const pricingConfig = await ComprehensivePricing.findOne({
       isActive: true,
-    });
+    }).lean();
     if (!pricingConfig) {
       throw new Error("Comprehensive pricing configuration not found");
     }
@@ -279,6 +286,152 @@ const calculateComprehensiveFare = async (bookingData) => {
       appointmentOptions = {}, // for appointment services (if you choose to use it)
     } = bookingData;
 
+    const normalizedServiceType = String(serviceType || "")
+      .replace(/\s+/g, "_")
+      .toLowerCase();
+
+    // Local working variables (do not rely on non-existent top-level fields)
+    let baseFare = 0;
+    let coverageKm = 0;
+    let perKmRate = 0;
+    let cityWiseAdjustment = { enabled: false };
+    let nightChargesConfigToUse = null;
+
+    // 1. Resolve per-service base/per-km/night configs
+    if (
+      (normalizedServiceType === "car_cab" || serviceType === "car cab") &&
+      pricingConfig.serviceTypes?.carCab?.enabled
+    ) {
+      const vehicleCfg =
+        pricingConfig.serviceTypes.carCab.vehicleTypes?.[
+          String(vehicleType || "").toLowerCase()
+        ];
+      if (vehicleCfg) {
+        baseFare = Number(vehicleCfg.baseFare || 0);
+        perKmRate = Number(vehicleCfg.perKmRate || 0);
+        nightChargesConfigToUse = vehicleCfg.nightCharges?.enabled
+          ? vehicleCfg.nightCharges
+          : null;
+      } else {
+        // Fallback to minimumFare as a floor only; perKmRate remains 0 unless defined per vehicle
+        baseFare = Number(pricingConfig.serviceTypes.carCab.minimumFare || 0);
+      }
+    } else if (
+      serviceType === "bike" &&
+      pricingConfig.serviceTypes?.bike?.enabled
+    ) {
+      const vehicleCfg =
+        pricingConfig.serviceTypes.bike.vehicleTypes?.[
+          String(vehicleType || "").toLowerCase()
+        ];
+      if (vehicleCfg) {
+        baseFare = Number(vehicleCfg.baseFare || 0);
+        perKmRate = Number(vehicleCfg.perKmRate || 0);
+        nightChargesConfigToUse = vehicleCfg.nightCharges?.enabled
+          ? vehicleCfg.nightCharges
+          : null;
+      } else {
+        // Bike service also has fallback numbers at service level
+        baseFare = Number(pricingConfig.serviceTypes.bike.baseFare || 0);
+        perKmRate = Number(pricingConfig.serviceTypes.bike.perKmRate || 0);
+      }
+    } else if (
+      normalizedServiceType === "car_recovery" ||
+      serviceType === "car recovery"
+    ) {
+      const recovery = pricingConfig.serviceTypes?.carRecovery || {};
+      // Defaults from service-level
+      baseFare = Number(recovery.baseFare?.amount || 0);
+      coverageKm = Number(recovery.baseFare?.coverageKm || 0);
+      perKmRate = Number(recovery.perKmRate?.afterBaseCoverage || 0);
+      cityWiseAdjustment = recovery.perKmRate?.cityWiseAdjustment || {
+        enabled: false,
+      };
+      nightChargesConfigToUse = recovery.nightCharges?.enabled
+        ? recovery.nightCharges
+        : null;
+
+      // Optional sub-service overrides driven by vehicleType key (e.g., flatbed, wheelLift, jumpstart, fuelDelivery)
+      const sub = getCRSubOverride(recovery, vehicleType);
+      if (sub) {
+        const scopeMinArriving = Number(
+          recovery?.serviceTypes?.[sub.scope]
+            ?.minimumChargesForDriverArriving || 0
+        );
+        const convenienceFee = Number(sub.block?.convenienceFee || 0);
+
+        const subBaseAmount = Number(sub.block?.baseFare?.amount || 0);
+        if (subBaseAmount > 0) {
+          baseFare = subBaseAmount + convenienceFee;
+        } else {
+          baseFare = scopeMinArriving + convenienceFee;
+        }
+
+        // Effective overrides
+        const effCoverageKm =
+          sub.block?.baseFare?.coverageKm ?? recovery.baseFare?.coverageKm ?? 0;
+        const effPerKm =
+          sub.block?.perKmRate?.afterBaseCoverage ??
+          recovery.perKmRate?.afterBaseCoverage ??
+          0;
+        const effCityWise = sub.block?.perKmRate?.cityWiseAdjustment ??
+          recovery.perKmRate?.cityWiseAdjustment ?? { enabled: false };
+
+        coverageKm = Number(effCoverageKm || 0);
+        perKmRate = Number(effPerKm || 0);
+        cityWiseAdjustment = effCityWise || { enabled: false };
+
+        // Waiting/night/surge/platform/cancellation/VAT overrides
+        // These blocks are used later when computing totals
+        pricingConfig._runtime = pricingConfig._runtime || {};
+        pricingConfig._runtime.waitingCharges =
+          sub.block?.waitingCharges || recovery.waitingCharges || {};
+        pricingConfig._runtime.surgePricing =
+          sub.block?.surgePricing || recovery.surgePricing || {};
+        nightChargesConfigToUse =
+          (sub.block?.nightCharges?.enabled && sub.block.nightCharges) ||
+          nightChargesConfigToUse;
+
+        pricingConfig._runtime.minimumFare = Number(recovery.minimumFare || 0);
+        pricingConfig._runtime.platformFee = recovery.platformFee || {};
+        pricingConfig._runtime.cancellationCharges =
+          recovery.cancellationCharges || {};
+        if (recovery.vat?.enabled) {
+          pricingConfig._runtime.vat = recovery.vat;
+        }
+      } else {
+        // Service-level policies
+        pricingConfig._runtime = pricingConfig._runtime || {};
+        pricingConfig._runtime.minimumFare = Number(recovery.minimumFare || 0);
+        pricingConfig._runtime.platformFee = recovery.platformFee || {};
+        pricingConfig._runtime.cancellationCharges =
+          recovery.cancellationCharges || {};
+        pricingConfig._runtime.waitingCharges = recovery.waitingCharges || {};
+        pricingConfig._runtime.surgePricing = recovery.surgePricing || {};
+        if (recovery.vat?.enabled) {
+          pricingConfig._runtime.vat = recovery.vat;
+        }
+      }
+    } else if (
+      normalizedServiceType === "shifting_&_movers" ||
+      normalizedServiceType === "shifting_movers" ||
+      serviceType === "shifting & movers"
+    ) {
+      const sm = pricingConfig.serviceTypes?.shiftingMovers || {};
+      const vc = sm.vehicleCost || {};
+      baseFare = Number(vc.startFare || 0);
+      coverageKm = Number(vc.coverageKm || 0);
+      perKmRate = Number(vc.perKmRate || 0);
+      // night/surge/waiting not overridden for movers; leave as null/0
+    } else if (
+      normalizedServiceType === "appointment" ||
+      serviceType === "appointment"
+    ) {
+      const appt = pricingConfig.appointmentServices || {};
+      if (appt.enabled) baseFare = Number(appt.fixedAppointmentFee || 0);
+    }
+
+    // Fare breakdown scaffold
     let fareBreakdown = {
       baseFare: 0,
       distanceFare: 0,
@@ -290,214 +443,22 @@ const calculateComprehensiveFare = async (bookingData) => {
       vatAmount: 0,
       subtotal: 0,
       totalFare: 0,
-      currency: pricingConfig.currency,
+      currency: pricingConfig.currency || "AED",
       breakdown: {},
       alerts: [],
     };
 
-    // 1. Calculate base fare and distance fare
-    let baseFare = Number(pricingConfig.baseFare.amount || 0);
-    let perKmRate = Number(pricingConfig.perKmRate.afterBaseCoverage || 0);
-    let nightChargesConfigToUse = pricingConfig.nightCharges;
-
-    // Service-specific adjustments (normalize service type)
-    const normalizedServiceType = String(serviceType || "")
-      .replace(/\s+/g, "_")
-      .toLowerCase();
-
-    // Car Cab
-    if (
-      (normalizedServiceType === "car_cab" || serviceType === "car cab") &&
-      pricingConfig.serviceTypes?.carCab?.enabled
-    ) {
-      const vehicleConfig =
-        pricingConfig.serviceTypes.carCab.vehicleTypes?.[vehicleType];
-      if (vehicleConfig) {
-        baseFare = Number(vehicleConfig.baseFare || 0);
-        perKmRate = Number(vehicleConfig.perKmRate || 0);
-        if (vehicleConfig.nightCharges?.enabled) {
-          nightChargesConfigToUse = vehicleConfig.nightCharges;
-        }
-      }
-
-      // Bike
-    } else if (
-      serviceType === "bike" &&
-      pricingConfig.serviceTypes?.bike?.enabled
-    ) {
-      const vehicleConfig =
-        pricingConfig.serviceTypes.bike.vehicleTypes?.[vehicleType];
-
-      if (vehicleConfig) {
-        baseFare = Number(vehicleConfig.baseFare || 0);
-        perKmRate = Number(vehicleConfig.perKmRate || 0);
-        if (vehicleConfig.nightCharges?.enabled) {
-          nightChargesConfigToUse = vehicleConfig.nightCharges;
-        }
-      } else {
-        baseFare = Number(pricingConfig.serviceTypes.bike.baseFare || 0);
-        perKmRate = Number(pricingConfig.serviceTypes.bike.perKmRate || 0);
-      }
-
-      // Car Recovery (with sub-service overrides)
-    } else if (
-      normalizedServiceType === "car_recovery" ||
-      serviceType === "car recovery"
-    ) {
-      const recoveryConfig = pricingConfig.serviceTypes?.carRecovery || {};
-      const sub = getCRSubOverride(recoveryConfig, vehicleType);
-
-      if (sub) {
-        // Scope-specific minimum driver-arrival fee (by scope: towing/winching/roadside)
-        const scopeMinArriving = Number(
-          recoveryConfig?.serviceTypes?.[sub.scope]
-            ?.minimumChargesForDriverArriving || 0
-        );
-
-        // Sub convenience fee
-        const convenienceFee = Number(sub.block?.convenienceFee || 0);
-
-        // Prefer explicit sub-service base fare when provided
-        const subBaseAmount = Number(sub.block?.baseFare?.amount || 0);
-        if (subBaseAmount > 0) {
-          baseFare = subBaseAmount + convenienceFee; // e.g., 70 + 100 = 170
-        } else {
-          baseFare = scopeMinArriving + convenienceFee; // fallback
-        }
-
-        fareBreakdown.baseFare = baseFare;
-        fareBreakdown.distanceFare = 0;
-        fareBreakdown.breakdown.convenienceFee = convenienceFee;
-        fareBreakdown.breakdown.minimumDriverCharges = scopeMinArriving;
-        fareBreakdown.breakdown.usedSubService = String(
-          vehicleType || sub.scope || ""
-        );
-
-        // Effective overrides for coverage/per-km/city-wise
-        const effCoverageKm =
-          sub.block?.baseFare?.coverageKm ??
-          recoveryConfig.baseFare?.coverageKm ??
-          pricingConfig.baseFare.coverageKm;
-
-        const effPerKm =
-          sub.block?.perKmRate?.afterBaseCoverage ??
-          recoveryConfig.perKmRate?.afterBaseCoverage ??
-          pricingConfig.perKmRate.afterBaseCoverage;
-
-        const effCityWise =
-          sub.block?.perKmRate?.cityWiseAdjustment ??
-          recoveryConfig.perKmRate?.cityWiseAdjustment ??
-          pricingConfig.perKmRate.cityWiseAdjustment;
-
-        pricingConfig.baseFare.coverageKm = Number(effCoverageKm || 0);
-        perKmRate = Number(effPerKm || 0);
-        pricingConfig.perKmRate.cityWiseAdjustment = effCityWise || {
-          enabled: false,
-        };
-
-        // Waiting/night/surge overrides
-        pricingConfig.waitingCharges =
-          sub.block?.waitingCharges || recoveryConfig.waitingCharges || {};
-        nightChargesConfigToUse =
-          sub.block?.nightCharges || recoveryConfig.nightCharges || {};
-        pricingConfig.surgePricing =
-          sub.block?.surgePricing || recoveryConfig.surgePricing || {};
-
-        // Service-level policies
-        pricingConfig.minimumFare = Number(recoveryConfig.minimumFare || 0);
-        pricingConfig.platformFee = recoveryConfig.platformFee || {};
-        pricingConfig.cancellationCharges =
-          recoveryConfig.cancellationCharges || {};
-
-        // VAT override
-        if (recoveryConfig.vat?.enabled) {
-          pricingConfig.vat = recoveryConfig.vat;
-        }
-      } else {
-        baseFare = Number(recoveryConfig.baseFare?.amount || 0);
-        perKmRate = Number(recoveryConfig.perKmRate?.afterBaseCoverage || 0);
-
-        pricingConfig.perKmRate.cityWiseAdjustment =
-          recoveryConfig.perKmRate?.cityWiseAdjustment ||
-          pricingConfig.perKmRate.cityWiseAdjustment;
-
-        pricingConfig.baseFare.coverageKm = Number(
-          recoveryConfig.baseFare?.coverageKm ||
-            pricingConfig.baseFare.coverageKm
-        );
-        pricingConfig.minimumFare = Number(recoveryConfig.minimumFare || 0);
-        pricingConfig.platformFee = recoveryConfig.platformFee || {};
-        pricingConfig.cancellationCharges =
-          recoveryConfig.cancellationCharges || {};
-        pricingConfig.waitingCharges = recoveryConfig.waitingCharges || {};
-        nightChargesConfigToUse = recoveryConfig.nightCharges || {};
-        pricingConfig.surgePricing = recoveryConfig.surgePricing || {};
-        if (recoveryConfig.vat?.enabled) {
-          pricingConfig.vat = recoveryConfig.vat;
-        }
-      }
-
-      // Shifting & Movers (full support)
-    } else if (
-      normalizedServiceType === "shifting_&_movers" ||
-      normalizedServiceType === "shifting_movers" ||
-      serviceType === "shifting & movers"
-    ) {
-      const sm = pricingConfig.serviceTypes?.shiftingMovers || {};
-      const vc = sm.vehicleCost || {};
-      const startFare = Number(vc.startFare || 0);
-      const coverageKm = Number(vc.coverageKm || 0);
-      const moversPerKm = Number(vc.perKmRate || 0);
-
-      // Base + distance for movers
-      baseFare = startFare;
-      perKmRate = moversPerKm;
-      pricingConfig.baseFare.coverageKm = coverageKm;
-
-      // Distance fare (computed below with the generic logic)
-
-      // Extras from basic services, pickup/dropoff policies, and per-item fares
-      const moversExtras = computeShiftingMoversExtras(
-        pricingConfig,
-        moversOptions
-      );
-      if (moversExtras > 0) {
-        // Track details
-        fareBreakdown.breakdown.shiftingMoversExtras = moversExtras;
-      }
-
-      // Apply movers extras directly into subtotal after base+distance
-      // We add it later after distance fare is computed by the common path.
-
-      // Movers do not specify special night/surge/waiting overrides -> use global/top-level
-
-      // Appointment services (optional, fixed fee)
-    } else if (
-      normalizedServiceType === "appointment" ||
-      serviceType === "appointment"
-    ) {
-      const appt = pricingConfig.appointmentServices || {};
-      if (appt.enabled) {
-        baseFare = Number(appt.fixedAppointmentFee || 0);
-        // You can extend this branch if you want to use rating thresholds and penalties in pricing.
-      }
-    }
-
     // Base fare
     fareBreakdown.baseFare = Number(baseFare || 0);
 
-    // Calculate distance fare
-    if (distance > Number(pricingConfig.baseFare.coverageKm || 0)) {
-      let remainingDistance =
-        Number(distance) - Number(pricingConfig.baseFare.coverageKm || 0);
+    // 2. Distance fare with coverage and city-wise adjustment
+    if (Number(distance) > Number(coverageKm || 0)) {
+      let remainingDistance = Number(distance) - Number(coverageKm || 0);
 
-      // City-wise pricing adjustment
-      const cwa = pricingConfig.perKmRate?.cityWiseAdjustment || {};
-      if (cwa.enabled && Number(distance) > Number(cwa.aboveKm || Infinity)) {
-        const adjustmentPoint =
-          Number(cwa.aboveKm || 0) -
-          Number(pricingConfig.baseFare.coverageKm || 0);
-
+      const cwa = cityWiseAdjustment || { enabled: false };
+      const aboveKm = Number(cwa.aboveKm || 0);
+      if (cwa.enabled && Number(distance) > aboveKm) {
+        const adjustmentPoint = Math.max(0, aboveKm - Number(coverageKm || 0));
         if (remainingDistance > adjustmentPoint) {
           const beforeAdjustment = adjustmentPoint * Number(perKmRate || 0);
           const afterAdjustment =
@@ -513,22 +474,28 @@ const calculateComprehensiveFare = async (bookingData) => {
       }
     }
 
-    // Calculate subtotal before additional charges
+    // Subtotal before extras
     fareBreakdown.subtotal =
       Number(fareBreakdown.baseFare || 0) +
       Number(fareBreakdown.distanceFare || 0);
 
-    // If Shifting & Movers, add computed extras now
+    // Movers extras
     if (
       normalizedServiceType === "shifting_&_movers" ||
       normalizedServiceType === "shifting_movers" ||
       serviceType === "shifting & movers"
     ) {
-      const add = Number(fareBreakdown.breakdown?.shiftingMoversExtras || 0);
-      fareBreakdown.subtotal += add;
+      const moversExtras = computeShiftingMoversExtras(
+        pricingConfig,
+        moversOptions
+      );
+      if (moversExtras > 0) {
+        fareBreakdown.breakdown.shiftingMoversExtras = moversExtras;
+        fareBreakdown.subtotal += Number(moversExtras);
+      }
     }
 
-    // Apply route type multiplier for round trips (exclude car recovery)
+    // Round trip multiplier (exclude car recovery)
     if (
       (routeType === "round_trip" || routeType === "two_way") &&
       serviceType !== "car recovery"
@@ -537,16 +504,16 @@ const calculateComprehensiveFare = async (bookingData) => {
       fareBreakdown.subtotal *= fareBreakdown.roundTripMultiplier;
     }
 
-    // Calculate free stay minutes
-    const freeStayMinutes = calculateFreeStayMinutes(
+    // Free stay minutes (generic round trip block)
+    const genericFreeStayMinutes = calculateFreeStayMinutes(
       Number(distance || 0),
       pricingConfig.roundTrip || {}
     );
-    if (freeStayMinutes > 0) {
-      fareBreakdown.breakdown.freeStayMinutes = freeStayMinutes;
+    if (genericFreeStayMinutes > 0) {
+      fareBreakdown.breakdown.freeStayMinutes = genericFreeStayMinutes;
     }
 
-    // Check for refreshment alert
+    // Refreshment alert
     if (
       shouldShowRefreshmentAlert(
         Number(distance || 0),
@@ -571,7 +538,7 @@ const calculateComprehensiveFare = async (bookingData) => {
       }
     }
 
-    // Car recovery free stay minutes
+    // Car recovery free stay minutes (service-specific)
     if (
       serviceType === "car recovery" &&
       pricingConfig.serviceTypes?.carRecovery?.freeStayMinutes?.enabled
@@ -596,38 +563,26 @@ const calculateComprehensiveFare = async (bookingData) => {
       }
     }
 
-    // 2. Apply minimum fare (service-specific)
-    let minimumFare = Number(pricingConfig.minimumFare || 0);
-
-    if (
-      serviceType === "car_cab" &&
-      pricingConfig.serviceTypes?.carCab?.minimumFare != null
-    ) {
-      minimumFare = Number(pricingConfig.serviceTypes.carCab.minimumFare || 0);
-    } else if (
-      serviceType === "bike" &&
-      pricingConfig.serviceTypes?.bike?.minimumFare != null
-    ) {
-      minimumFare = Number(pricingConfig.serviceTypes.bike.minimumFare || 0);
-    } else if (
-      (normalizedServiceType === "car_recovery" ||
-        serviceType === "car recovery") &&
-      pricingConfig.serviceTypes?.carRecovery?.minimumFare != null
-    ) {
+    // 3. Minimum fare (service-specific)
+    let minimumFare = 0;
+    if (serviceType === "car cab" || normalizedServiceType === "car_cab") {
       minimumFare = Number(
-        pricingConfig.serviceTypes.carRecovery.minimumFare || 0
+        pricingConfig.serviceTypes?.carCab?.minimumFare || 0
       );
+    } else if (serviceType === "bike") {
+      minimumFare = Number(pricingConfig.serviceTypes?.bike?.minimumFare || 0);
     } else if (
-      serviceType === "shifting & movers" &&
-      pricingConfig.serviceTypes?.shiftingMovers?.vehicleCost?.startFare != null
+      serviceType === "car recovery" ||
+      normalizedServiceType === "car_recovery"
     ) {
-      // Usually startFare already applied as base, but minimum safeguard:
-      minimumFare = Math.max(
-        minimumFare,
-        Number(
-          pricingConfig.serviceTypes.shiftingMovers.vehicleCost.startFare || 0
-        )
+      minimumFare =
+        Number(pricingConfig._runtime?.minimumFare) ||
+        Number(pricingConfig.serviceTypes?.carRecovery?.minimumFare || 0);
+    } else if (serviceType === "shifting & movers") {
+      const startFare = Number(
+        pricingConfig.serviceTypes?.shiftingMovers?.vehicleCost?.startFare || 0
       );
+      minimumFare = Math.max(Number(minimumFare || 0), startFare);
     }
 
     if (fareBreakdown.subtotal < minimumFare) {
@@ -635,7 +590,7 @@ const calculateComprehensiveFare = async (bookingData) => {
       fareBreakdown.breakdown.minimumFareApplied = true;
     }
 
-    // 3. Night charges (top-level or overridden per-vehicle/per-subservice)
+    // 4. Night charges (use resolved config)
     if (
       nightChargesConfigToUse?.enabled &&
       (isNightTimeParam || isNightTime(nightChargesConfigToUse))
@@ -653,11 +608,15 @@ const calculateComprehensiveFare = async (bookingData) => {
         nightChargeFixed > nightChargeMultiplied ? "fixed" : "multiplier";
     }
 
-    // 4. Surge pricing
-    if (pricingConfig.surgePricing?.enabled && Number(demandRatio || 1) > 1) {
+    // 5. Surge pricing
+    const effectiveSurge =
+      pricingConfig._runtime?.surgePricing ||
+      pricingConfig.surgePricing ||
+      null;
+    if (effectiveSurge?.enabled && Number(demandRatio || 1) > 1) {
       const surgeMultiplier = calculateSurgeMultiplier(
         Number(demandRatio || 1),
-        pricingConfig.surgePricing
+        effectiveSurge
       );
       if (surgeMultiplier > 1) {
         fareBreakdown.surgeCharges =
@@ -667,52 +626,64 @@ const calculateComprehensiveFare = async (bookingData) => {
       }
     }
 
-    // 5. Waiting charges
+    // 6. Waiting charges
+    const effectiveWaiting =
+      pricingConfig._runtime?.waitingCharges ||
+      pricingConfig.waitingCharges ||
+      {};
     if (Number(waitingMinutes || 0) > 0) {
       fareBreakdown.waitingCharges = calculateWaitingCharges(
         Number(waitingMinutes || 0),
-        pricingConfig.waitingCharges || {}
+        effectiveWaiting
       );
     }
 
-    // 6. Cancellation charges
+    // 7. Cancellation charges
+    const effectiveCancellation =
+      pricingConfig._runtime?.cancellationCharges ||
+      pricingConfig.cancellationCharges ||
+      {};
     if (isCancelled) {
       fareBreakdown.cancellationCharges = calculateCancellationCharges(
         tripProgress,
         cancellationReason,
-        pricingConfig.cancellationCharges || {}
+        effectiveCancellation
       );
     }
 
-    // 7. Platform fee
+    // 8. Platform fee
     const fareBeforePlatformFee =
       Number(fareBreakdown.subtotal || 0) +
       Number(fareBreakdown.nightCharges || 0) +
       Number(fareBreakdown.surgeCharges || 0) +
       Number(fareBreakdown.waitingCharges || 0);
 
-    const platformPct = Number(pricingConfig.platformFee?.percentage || 0);
+    const effectivePlatform =
+      pricingConfig._runtime?.platformFee || pricingConfig.platformFee || {};
+    const platformPct = Number(effectivePlatform.percentage || 0);
     fareBreakdown.platformFee = (fareBeforePlatformFee * platformPct) / 100;
 
     fareBreakdown.breakdown.platformFeeBreakdown = {
       driverShare:
         (fareBreakdown.platformFee *
-          Number(pricingConfig.platformFee?.driverShare || 0)) /
-        Math.max(1, platformPct),
+          Number(effectivePlatform.driverShare || 0)) /
+        Math.max(1, platformPct || 1),
       customerShare:
         (fareBreakdown.platformFee *
-          Number(pricingConfig.platformFee?.customerShare || 0)) /
-        Math.max(1, platformPct),
+          Number(effectivePlatform.customerShare || 0)) /
+        Math.max(1, platformPct || 1),
     };
 
-    // 8. VAT
-    if (pricingConfig.vat?.enabled) {
+    // 9. VAT
+    const effectiveVAT = pricingConfig._runtime?.vat ||
+      pricingConfig.vat || { enabled: false };
+    if (effectiveVAT?.enabled) {
       const fareBeforeVAT = fareBeforePlatformFee + fareBreakdown.platformFee;
       fareBreakdown.vatAmount =
-        (fareBeforeVAT * Number(pricingConfig.vat.percentage || 0)) / 100;
+        (fareBeforeVAT * Number(effectiveVAT.percentage || 0)) / 100;
     }
 
-    // 9. Total fare
+    // 10. Total fare
     fareBreakdown.totalFare =
       Number(fareBreakdown.subtotal || 0) +
       Number(fareBreakdown.nightCharges || 0) +
@@ -722,7 +693,7 @@ const calculateComprehensiveFare = async (bookingData) => {
       Number(fareBreakdown.vatAmount || 0) +
       Number(fareBreakdown.cancellationCharges || 0);
 
-    // Round to 2 decimals
+    // Round to 2 decimals (numbers only)
     Object.keys(fareBreakdown).forEach((key) => {
       if (typeof fareBreakdown[key] === "number") {
         fareBreakdown[key] = Math.round(fareBreakdown[key] * 100) / 100;
