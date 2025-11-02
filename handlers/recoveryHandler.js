@@ -2236,6 +2236,12 @@ class RecoveryHandler {
   /**
    * Handle cancellation of a recovery request (DB-first, no in-memory dependency)
    */
+  /**
+   * Cancel a recovery booking.
+   * - Notifies ONLY booking.user and booking.driver via sendToUser (no rooms)
+   * - Allows cancel from both customer and assigned driver (must be a participant)
+   * - Idempotent; retries shortly if another worker is processing cancel
+   */
   async handleCancel(ws, message) {
     // Normalize message
     let msg = message || {};
@@ -2259,66 +2265,81 @@ class RecoveryHandler {
       return;
     }
 
-    // Small helpers
-    const toStr = (v) => (v ? String(v) : "");
-    const unique = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
-
-    // Will be set after we load booking; used to force-send to assigned driver
-    let currentDriverId = null;
-
-    const notifyUsers = (userIds, payload) => {
-      const ids = unique(userIds).map(toStr).filter(Boolean);
-      // Attempt batch send first
-      let batchTried = false;
+    // Helpers
+    const toStr = (v) => (v != null ? String(v) : "");
+    const sendToUserSafe = (userId, payload) => {
       try {
-        if (this.webSocketService?.sendToUsers && ids.length) {
-          batchTried = true;
-          this.webSocketService.sendToUsers(ids, payload);
-        }
+        const uid = toStr(userId);
+        if (!uid) return;
+        logger.info("sendToUser(cancel): target", {
+          bookingId,
+          userId: uid,
+          event: payload?.event,
+        });
+        this.webSocketService?.sendToUser?.(uid, payload);
       } catch (e) {
-        // Fallback to per-user on any failure
-        try {
-          if (this.webSocketService?.sendToUser && ids.length) {
-            ids.forEach((id) => this.webSocketService.sendToUser(id, payload));
-          }
-        } catch (e2) {
-          logger.warn(
-            "Cancel per-user notify fallback failed:",
-            e2?.message || e2
-          );
-        }
-      }
-
-      // If batch wasn't done or even if it was, ensure driver gets it explicitly
-      try {
-        if (currentDriverId && this.webSocketService?.sendToUser) {
-          this.webSocketService.sendToUser(String(currentDriverId), payload);
-        }
-      } catch (e3) {
-        logger.warn("Cancel direct driver notify failed:", e3?.message || e3);
+        logger.warn("sendToUser(cancel) failed", e?.message || e);
       }
     };
 
-    // Idempotency: prevent concurrent/duplicate cancellation executions
+    // Idempotency lock
     let lockAcquired = false;
     const lockKey = `booking:cancel:lock:${bookingId}`;
     try {
-      // Acquire a 15s lock; if exists, drop duplicate calls
       lockAcquired = await redis.set(lockKey, "1", { NX: true, EX: 15 });
       if (!lockAcquired) {
-        // Someone else is processing this cancel right now or just did
+        // Inform caller
         this.emitToClient(ws, {
           event: "cancel.ack",
           bookingId,
-          data: {
-            status: "cancel_in_progress",
-            reason,
-          },
+          data: { status: "cancel_in_progress", reason },
         });
+
+        // Best-effort: retry-read, notify both participants if DB shows cancelled
+        const attemptNotifyIfCancelled = async () => {
+          try {
+            const b = await Booking.findById(bookingId)
+              .select(
+                "user driver status fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown cancelledAt cancellationReason"
+              )
+              .lean();
+            if (b && b.status === "cancelled") {
+              const finalFareAmount = Number(
+                (typeof b?.fareDetails?.finalFare === "object"
+                  ? b?.fareDetails?.finalFare?.amount
+                  : b?.fareDetails?.finalFare) ??
+                  b?.fare ??
+                  0
+              );
+              const payload = {
+                event: "recovery.cancelled",
+                bookingId,
+                data: {
+                  status: "cancelled",
+                  cancelledAt: b?.cancelledAt || new Date(),
+                  reason: b?.cancellationReason || reason,
+                  finalFare: finalFareAmount,
+                  currency: b?.fareDetails?.currency || "AED",
+                  breakdown: b?.fareDetails?.breakdown || {},
+                },
+              };
+              logger.info("Cancel notify (lock contention)", {
+                bookingId,
+                user: toStr(b.user),
+                driver: toStr(b.driver),
+              });
+              sendToUserSafe(b.user, payload);
+              sendToUserSafe(b.driver, payload);
+            }
+          } catch {}
+        };
+        setTimeout(attemptNotifyIfCancelled, 700);
+        setTimeout(attemptNotifyIfCancelled, 2000);
+
         return;
       }
     } catch {
-      // If locking fails, proceed (best-effort). Status check below still prevents duplicates.
+      // proceed best-effort
     }
 
     try {
@@ -2329,27 +2350,17 @@ class RecoveryHandler {
           "user driver status pendingAssignment pickupLocation dropoffLocation fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown cancellationReason cancelledAt updatedAt"
         )
         .lean();
-
       if (!booking) throw new Error("Booking not found");
-
-      // Capture assigned driver early for robust notifying
-      currentDriverId = booking?.driver ? toStr(booking.driver) : null;
 
       const isParticipant =
         (booking.user && toStr(booking.user) === viewerId) ||
         (booking.driver && toStr(booking.driver) === viewerId) ||
         (booking?.pendingAssignment?.driverId &&
           toStr(booking.pendingAssignment.driverId) === viewerId);
-
       if (!isParticipant)
         throw new Error("Not authorized to cancel this booking");
 
-      // Build recipients: ONLY customer + assigned driver (do not notify any pendingAssignment)
-      const recipientsEarly = unique(
-        [toStr(booking.user), currentDriverId].filter(Boolean)
-      );
-
-      // If already cancelled/completed, send single notifications and ack (avoid reprocessing)
+      // If already cancelled/completed, notify both and ack (avoid reprocessing)
       if (["cancelled", "completed"].includes(booking.status)) {
         const alreadyData = {
           status: booking.status,
@@ -2386,67 +2397,19 @@ class RecoveryHandler {
           },
         };
 
-        // Notify ONLY customer + assigned driver
-        notifyUsers(recipientsEarly, cancelPayload);
+        logger.info("Cancel notify (already terminal)", {
+          bookingId,
+          user: toStr(booking.user),
+          driver: toStr(booking.driver),
+        });
+        sendToUserSafe(booking.user, cancelPayload);
+        sendToUserSafe(booking.driver, cancelPayload);
 
-        // Optional broadcast to booking room
-        try {
-          if (this.webSocketService?.sendToRoom) {
-            this.webSocketService.sendToRoom(
-              `booking:${bookingId}`,
-              cancelPayload
-            );
-          }
-        } catch {}
-
-        // NEW: End any active public share sessions for this booking
-        try {
-          if (this.publicShareSessions && this.publicShareSessions.size) {
-            for (const [tok, sess] of this.publicShareSessions.entries()) {
-              if (sess?.bookingId === bookingId && !sess?.stopped) {
-                sess.stopped = true;
-                const room = sess.roomName;
-                this.publicShareSessions.delete(tok);
-                try {
-                  this.webSocketService?.sendToRoom?.(room, {
-                    event: "share.public.end",
-                    bookingId,
-                    data: { endedAt: new Date(), reason: "cancelled" },
-                  });
-                } catch {}
-              }
-            }
-          }
-        } catch {}
-
-        // Ack to requester (single)
         this.emitToClient(ws, {
           event: "cancel.ack",
           bookingId,
           data: alreadyData,
         });
-
-        // Also mark request unavailable in service room (only if cancelled)
-        try {
-          if (
-            booking.status === "cancelled" &&
-            this.webSocketService?.sendToRoom
-          ) {
-            const norm = (s) =>
-              String(s || "")
-                .trim()
-                .toLowerCase()
-                .replace(/\s+/g, "_");
-            const st = norm("car recovery");
-            const roomName = `svc:${st}`;
-            this.webSocketService.sendToRoom(roomName, {
-              event: "recovery.unavailable",
-              bookingId,
-              data: { reason: alreadyData.reason || "cancelled" },
-            });
-          }
-        } catch {}
-
         return;
       }
 
@@ -2495,7 +2458,7 @@ class RecoveryHandler {
       });
       this.activeRecoveries.set(bookingId, rec);
 
-      // Reload minimal for outbound payload and recipients
+      // Reload minimal for outbound payload and participants
       const after = await Booking.findById(bookingId)
         .select(
           "user driver fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
@@ -2523,41 +2486,13 @@ class RecoveryHandler {
         },
       };
 
-      // Notify ONLY customer + assigned driver (still ensure direct driver notify)
-      const recipients = unique(
-        [toStr(after?.user), currentDriverId].filter(Boolean)
-      );
-      notifyUsers(recipients, cancelPayload);
-
-      // Optional broadcast to booking room
-      try {
-        if (this.webSocketService?.sendToRoom) {
-          this.webSocketService.sendToRoom(
-            `booking:${bookingId}`,
-            cancelPayload
-          );
-        }
-      } catch {}
-
-      // NEW: End any active public share sessions for this booking
-      try {
-        if (this.publicShareSessions && this.publicShareSessions.size) {
-          for (const [tok, sess] of this.publicShareSessions.entries()) {
-            if (sess?.bookingId === bookingId && !sess?.stopped) {
-              sess.stopped = true;
-              const room = sess.roomName;
-              this.publicShareSessions.delete(tok);
-              try {
-                this.webSocketService?.sendToRoom?.(room, {
-                  event: "share.public.end",
-                  bookingId,
-                  data: { endedAt: new Date(), reason: "cancelled" },
-                });
-              } catch {}
-            }
-          }
-        }
-      } catch {}
+      logger.info("Cancel notify (finalized)", {
+        bookingId,
+        user: toStr(after.user),
+        driver: toStr(after.driver),
+      });
+      sendToUserSafe(after.user, cancelPayload);
+      sendToUserSafe(after.driver, cancelPayload);
 
       // Ack to requester
       this.emitToClient(ws, {
@@ -2565,24 +2500,6 @@ class RecoveryHandler {
         bookingId,
         data: cancelPayload.data,
       });
-
-      // Also mark request unavailable in service room
-      try {
-        const norm = (s) =>
-          String(s || "")
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, "_");
-        const st = norm("car recovery");
-        const roomName = `svc:${st}`;
-        if (this.webSocketService?.sendToRoom) {
-          this.webSocketService.sendToRoom(roomName, {
-            event: "recovery.unavailable",
-            bookingId,
-            data: { reason: "cancelled" },
-          });
-        }
-      } catch {}
     } catch (error) {
       logger.error("Error in handleCancel:", error);
       this.emitToClient(ws, {
@@ -2766,6 +2683,7 @@ class RecoveryHandler {
 
     const buildCurrency = (fd) =>
       fd?.finalFare?.currency ||
+      fd?.acceptedFare?.currency ||
       fd?.estimatedFare?.currency ||
       fd?.currency ||
       "AED";
@@ -2926,22 +2844,24 @@ class RecoveryHandler {
         return;
       }
 
-      // Build/resolve fare and breakdown
       const fd = booking.fareDetails || {};
       let breakdown = coalesceBreakdown(fd);
-      const currency = buildCurrency(fd);
       if (needsRebuild(booking, breakdown)) {
         const rebuilt = await rebuildFromCalculator(booking);
         breakdown = rebuilt.breakdown || breakdown;
       }
-      const totalFare =
-        Number(fd?.finalFare?.amount ?? fd?.finalFare ?? booking.fare ?? 0) ||
-        Object.values(breakdown || {}).reduce(
-          (acc, n) => acc + Number(n || 0),
-          0
-        );
 
-      // Persist completion
+      // Use the accepted fare that was locked at acceptance time
+      const acceptedFareAmount =
+        toNum(fd?.acceptedFare?.amount) ??
+        toNum(fd?.acceptedFare) ??
+        toNum(booking.fare) ??
+        0;
+
+      const currency = buildCurrency(fd);
+      const totalFare = Number(acceptedFareAmount || 0);
+
+      // Persist completion with accepted fare as final
       const now = new Date();
       await Booking.findByIdAndUpdate(
         bookingId,
@@ -2971,7 +2891,7 @@ class RecoveryHandler {
       });
       this.activeRecoveries.set(bookingId, rec);
 
-      // Notify participants
+      // Notify participants: service.completed (existing)
       const summaryPayload = {
         event: "service.completed",
         bookingId,
@@ -3003,6 +2923,70 @@ class RecoveryHandler {
           `booking:${bookingId}`,
           summaryPayload
         );
+      } catch {}
+
+      // Billing summary (uses accepted fare)
+      try {
+        const billingPayload = {
+          event: "billing.details",
+          bookingId,
+          data: {
+            status: "completed",
+            at: now,
+            totalFare,
+            currency: currency || "AED",
+            breakdown,
+          },
+        };
+        if (booking?.user) {
+          this.webSocketService?.sendToUser?.(
+            String(booking.user),
+            billingPayload
+          );
+        }
+        if (booking?.driver) {
+          this.webSocketService?.sendToUser?.(
+            String(booking.driver),
+            billingPayload
+          );
+        }
+        this.webSocketService?.sendToRoom?.(
+          `booking:${bookingId}`,
+          billingPayload
+        );
+      } catch {}
+
+      // Proactively send booking.details with final (accepted) fare
+      try {
+        const bookingDetailsPayload = {
+          event: "booking.details",
+          bookingId,
+          data: {
+            bookingId: String(bookingId),
+            status: "completed",
+            serviceType: booking.serviceType || null,
+            serviceCategory: booking.serviceCategory || null,
+            pickupLocation: booking.pickupLocation || null,
+            dropoffLocation: booking.dropoffLocation || null,
+            fareDetails: {
+              estimatedFare: booking?.fareDetails?.estimatedFare ?? null,
+              finalFare: { amount: totalFare, currency: currency || "AED" },
+              negotiation: booking?.fareDetails?.negotiation ?? null,
+            },
+          },
+        };
+        if (booking?.user) {
+          this.webSocketService?.sendToUser?.(
+            String(booking.user),
+            bookingDetailsPayload
+          );
+        }
+        if (booking?.driver) {
+          this.webSocketService?.sendToUser?.(
+            String(booking.driver),
+            bookingDetailsPayload
+          );
+        }
       } catch {}
 
       // ACK to caller
@@ -6161,7 +6145,7 @@ class RecoveryHandler {
           bookingId,
           data: {
             status: booking.status,
-            proposed: amount ? { amount, currency, by, at: now } : null,
+            proposed: { amount, currency, by, at: now },
             negotiationState: "closed",
             message: "Negotiation is closed for this booking",
             offeredBy,
@@ -6283,13 +6267,30 @@ class RecoveryHandler {
 
         // When driver offers, include rating + ETA/distance in the customer's notification
         if (by === "driver" && toCustomer) {
+          // Enrich with both structured and flat fields for compatibility with create-request notification
+          const extraForCustomer = {
+            ...(driverDistance ? { driverDistance } : {}),
+            ...(driverETA ? { driverETA } : {}),
+            ...(driverDistance
+              ? {
+                  driverDistanceMeters: driverDistance.meters,
+                  driverDistanceText: driverDistance.text,
+                }
+              : {}),
+            ...(driverETA
+              ? {
+                  driverEtaSeconds: driverETA.seconds,
+                  driverEtaText: driverETA.text,
+                }
+              : {}),
+          };
+
           this.webSocketService.sendToUser(toCustomer, {
             event: "fare.offered",
             ...payloadBase,
             data: {
               ...payloadBase.data,
-              ...(driverDistance ? { driverDistance } : {}),
-              ...(driverETA ? { driverETA } : {}),
+              ...extraForCustomer,
             },
           });
         }
