@@ -287,7 +287,7 @@ class RecoveryHandler {
    * Handle recovery request from client
    */
   async handleRecoveryRequest(ws, message) {
-    // Helpers
+    // Helpers (existing)
     const toNum = (v) => {
       if (typeof v === "number") return Number.isFinite(v) ? v : null;
       if (typeof v === "string" && v.trim() !== "") {
@@ -331,6 +331,124 @@ class RecoveryHandler {
       };
     };
 
+    // NEW: Google Distance Matrix helpers (scoped to this handler to avoid changing other parts)
+    const GOOGLE_KEY = process.env.GOOGLE_MAPS_API_KEY; // set this in your .env
+    const chunk = (arr, size) => {
+      const out = [];
+      for (let i = 0; i < arr.length; i += size)
+        out.push(arr.slice(i, i + size));
+      return out;
+    };
+    const extractLatLng = (driver) => {
+      // Try multiple shapes
+      const c =
+        driver?.location?.coordinates ||
+        driver?.currentLocation?.coordinates ||
+        null;
+      if (Array.isArray(c) && c.length >= 2) {
+        // Might be [lng,lat] or [lat,lng]; most of repo uses [lng,lat]
+        const lngFirst = Number(c[0]);
+        const latSecond = Number(c[1]);
+        // Heuristic: if abs(lat) > abs(lng) then probably it's [lat,lng]
+        const abs0 = Math.abs(lngFirst);
+        const abs1 = Math.abs(latSecond);
+        if (abs0 <= 90 && abs1 >= 90) {
+          // [lat,lng]
+          return { lat: lngFirst, lng: latSecond };
+        }
+        // assume [lng,lat]
+        return { lat: latSecond, lng: lngFirst };
+      }
+      // Objects
+      if (driver?.location?.lat != null && driver?.location?.lng != null) {
+        return {
+          lat: Number(driver.location.lat),
+          lng: Number(driver.location.lng),
+        };
+      }
+      if (
+        driver?.currentLocation?.lat != null &&
+        driver?.currentLocation?.lng != null
+      ) {
+        return {
+          lat: Number(driver.currentLocation.lat),
+          lng: Number(driver.currentLocation.lng),
+        };
+      }
+      return null;
+    };
+    const distanceMatrixBatch = async (originsLatLng, destinationLatLng) => {
+      if (!GOOGLE_KEY || typeof fetch !== "function") return null;
+      if (!originsLatLng?.length) return null;
+
+      // Distance Matrix: up to 25 origins per request when 1 destination
+      const batches = chunk(originsLatLng, 25);
+      const results = [];
+      for (const batch of batches) {
+        const originsParam = batch.map((o) => `${o.lat},${o.lng}`).join("|");
+        const destinationsParam = `${destinationLatLng.lat},${destinationLatLng.lng}`;
+        const url = `https://maps.googleapis.com/maps/api/distancematrix/json?units=metric&origins=${encodeURIComponent(
+          originsParam
+        )}&destinations=${encodeURIComponent(
+          destinationsParam
+        )}&key=${encodeURIComponent(GOOGLE_KEY)}`;
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const json = await resp.json();
+          if (json?.status !== "OK" || !Array.isArray(json?.rows)) {
+            results.push(...batch.map(() => null));
+            continue;
+          }
+          // rows aligns with origins; each row has elements aligned with destinations (1)
+          for (const row of json.rows) {
+            const el = Array.isArray(row?.elements) ? row.elements[0] : null;
+            if (el && el.status === "OK") {
+              results.push({
+                distance: el.distance, // { value: meters, text }
+                duration: el.duration, // { value: seconds, text }
+              });
+            } else {
+              results.push(null);
+            }
+          }
+        } catch {
+          // On failure, push nulls for this batch to keep indexes aligned
+          results.push(...batch.map(() => null));
+        }
+      }
+      return results;
+    };
+    const augmentDriversWithGoogleEta = async (drivers, pickupPoint) => {
+      if (!drivers?.length || !pickupPoint) return drivers || [];
+      const origins = [];
+      const indexMap = []; // keep driver index alignment
+      drivers.forEach((d, i) => {
+        const ll = extractLatLng(d);
+        if (ll) {
+          origins.push(ll);
+          indexMap.push(i);
+        }
+      });
+      if (!origins.length) return drivers;
+
+      const dm = await distanceMatrixBatch(origins, pickupPoint);
+      if (!dm) return drivers; // fall back silently
+
+      // Map back to drivers
+      dm.forEach((item, idx) => {
+        const di = indexMap[idx];
+        if (di == null || !drivers[di]) return;
+        if (item && item.distance && item.duration) {
+          drivers[di].distanceMeters = Number(item.distance.value || 0);
+          drivers[di].distanceText = String(item.distance.text || "");
+          drivers[di].etaSeconds = Number(item.duration.value || 0);
+          drivers[di].etaText = String(item.duration.text || "");
+        }
+      });
+      return drivers;
+    };
+
     // Normalize message
     let msg = message || {};
     if (typeof msg === "string") {
@@ -363,11 +481,12 @@ class RecoveryHandler {
       }
       const pickupZone = data?.pickupLocation?.zone || "general";
       const dropoffZone = data?.dropoffLocation?.zone || "general";
+      const pickupPoint = { lat: pickArr[1], lng: pickArr[0] }; // for Google DM
 
       // Service typing
       const serviceType = "car recovery";
 
-      // Derive category/subcategory/vehicleType
+      // Derive category/subcategory/vehicleType (existing)
       const deriveCategory = (t, sub) => {
         const v = normKeyLoose(t);
         const s = normKeyLoose(sub);
@@ -478,7 +597,7 @@ class RecoveryHandler {
       const distanceKmInt = Math.round(distanceKm);
       const distanceInMeters = Math.round(distanceKm * 1000);
 
-      // Compute comprehensive fare (fills components)
+      // Compute comprehensive fare (existing)
       let comp;
       try {
         comp = await calculateComprehensiveFare({
@@ -496,7 +615,7 @@ class RecoveryHandler {
           tripProgress: 0,
           isCancelled: false,
           cancellationReason: null,
-          // Optional flags if your calc supports them:
+          // Optional flags:
           isNightTime: data?.options?.isNightTime ?? undefined,
           roundTrip: data?.options?.roundTrip ?? undefined,
           helper: data?.options?.helper ?? undefined,
@@ -527,18 +646,17 @@ class RecoveryHandler {
         comp.breakdown.total = Number(comp?.totalFare ?? comp?.total ?? 0);
       }
 
-      // Respect client-sent estimate if provided (authoritative for request)
+      // Client-estimated vs computed (existing)
       const clientEstimated =
         toNum(data?.estimatedFare) ?? toNum(data?.estimated?.amount);
       const computedEstimated = Number(comp?.totalFare ?? comp?.total ?? 0);
       const currencyFromConfig = comp?.currency || "AED";
-
       const estimatedFare =
         clientEstimated && clientEstimated > 0
           ? clientEstimated
           : computedEstimated;
 
-      // Adjustment settings and min/max (from config, but aligned with REST)
+      // AdjustmentSettings and min/max (existing)
       let cfg = null;
       try {
         cfg = await ComprehensivePricing.findOne({ isActive: true }).lean();
@@ -551,7 +669,6 @@ class RecoveryHandler {
             3
         ) || 3;
 
-      // Compute min/max scenarios via calculator (more accurate than +/- % here)
       let minFare = estimatedFare;
       try {
         const minComp = await calculateComprehensiveFare({
@@ -613,7 +730,6 @@ class RecoveryHandler {
       } catch {}
       if (maxFare < minFare) maxFare = minFare;
 
-      // Dynamic adjustment summary
       const surgePercent = Number(comp?.dynamicAdjustment?.surgePercent ?? 0);
       const dynamicAdjustment = {
         surgePercent,
@@ -625,7 +741,6 @@ class RecoveryHandler {
             : "none",
       };
 
-      // Trip details (REST-aligned)
       const tripDetails = {
         distance: `${Number(distanceKm || 0).toFixed(2)} km`,
         serviceType: "car recovery",
@@ -636,7 +751,6 @@ class RecoveryHandler {
         paymentMethod: data?.paymentMethod || "cash",
       };
 
-      // Fare breakdown (keep calculator components; force total to authoritative estimatedFare)
       const fareBreakdown = {
         baseFare: Number(comp?.baseFare || 0),
         distanceFare: Number(comp?.distanceFare || 0),
@@ -653,12 +767,11 @@ class RecoveryHandler {
         },
       };
 
-      // Final fare fields for DB
       const offeredFare = estimatedFare;
       const fare = estimatedFare;
       const now = new Date();
 
-      // Build DB doc
+      // Build DB doc (existing)
       const insertDoc = {
         status: "pending",
         user: userId || null,
@@ -714,7 +827,7 @@ class RecoveryHandler {
         },
       };
 
-      // Optional targeted driver
+      // Optional targeted driver (existing)
       const preferredDriverId = String(
         data?.preferredDispatch?.driverId || data?.driverId || ""
       ).trim();
@@ -725,7 +838,7 @@ class RecoveryHandler {
       const booking = await Booking.create(insertDoc);
       const bookingId = String(booking._id);
 
-      // Customer profile
+      // Customer profile (existing)
       let customerProfile = null;
       try {
         if (userId) {
@@ -738,7 +851,7 @@ class RecoveryHandler {
         }
       } catch {}
 
-      // Cache
+      // Cache (existing)
       const rec = {
         status: "pending",
         createdAt: now,
@@ -753,7 +866,7 @@ class RecoveryHandler {
       };
       this.activeRecoveries.set(bookingId, rec);
 
-      // ACK to requester (REST-aligned sections included)
+      // ACK to requester (existing)
       this.emitToClient(ws, {
         event: "request.created",
         bookingId,
@@ -782,7 +895,7 @@ class RecoveryHandler {
             cancellationCharges: insertDoc.fareDetails.cancellationCharges,
             vatAmount: insertDoc.fareDetails.vatAmount,
             subtotal: insertDoc.fareDetails.subtotal,
-            breakdown: insertDoc.fareDetails.breakdown, // includes total forced to estimatedFare
+            breakdown: insertDoc.fareDetails.breakdown,
             alerts: insertDoc.fareDetails.alerts,
             negotiation: insertDoc.fareDetails.negotiation,
           },
@@ -793,20 +906,18 @@ class RecoveryHandler {
             canAdjustFare: true,
           },
           dynamicAdjustment,
-          tripDetails: {
-            ...tripDetails,
-          },
-          fareBreakdown, // includes totalFare forced to estimatedFare
+          tripDetails: { ...tripDetails },
+          fareBreakdown,
           createdAt: now,
         },
       });
 
-      // Discover drivers (unchanged)
+      // Discover drivers (existing)
       const searchRadiusKm = Math.max(
         1,
         Math.min(50, Number(data?.searchRadiusKm ?? data?.searchRadius ?? 15))
       );
-      let discoveryFilters = {
+      const discoveryFilters = {
         pinkCaptainOnly: !!data?.preferences?.pinkCaptainOnly,
         safety: {
           familyWithGuardianMale: !!data?.preferences?.familyWithGuardianMale,
@@ -846,7 +957,19 @@ class RecoveryHandler {
         }
       }
 
-      // Emit available drivers list to requester (kept)
+      // NEW: Enrich with Google real-time ETA/distance (fallback to existing heuristic if Google key/fetch not available)
+      try {
+        if (nearbyDrivers?.length) {
+          nearbyDrivers = await augmentDriversWithGoogleEta(
+            nearbyDrivers,
+            pickupPoint
+          );
+        }
+      } catch {
+        // silently ignore, keep original distances/etaMinutes from getAvailableDrivers
+      }
+
+      // Emit available drivers list to requester (now enriched)
       this.emitToClient(ws, {
         event: "carRecovery:driversAvailable",
         bookingId,
@@ -858,7 +981,7 @@ class RecoveryHandler {
         },
       });
 
-      // Broadcast to service rooms
+      // Broadcast to service rooms (unchanged)
       try {
         const baseRoom = `svc:${normKey("car recovery")}`;
         const categoryRoom = `svc:${normKey("car recovery")}:${normKey(
@@ -921,6 +1044,55 @@ class RecoveryHandler {
               subCategoryRoom,
               legacyEventPayload
             );
+          }
+        }
+      } catch {}
+
+      // NEW: Targeted notifications to each nearby driver with their personalized ETA/distance (like inDriver)
+      try {
+        if (Array.isArray(nearbyDrivers) && this.webSocketService?.sendToUser) {
+          for (const d of nearbyDrivers) {
+            const driverId = String(d.id || d._id || "").trim();
+            if (!driverId) continue;
+            this.webSocketService.sendToUser(driverId, {
+              event: "newRecoveryRequest",
+              bookingId,
+              data: {
+                bookingId,
+                serviceType,
+                serviceCategory,
+                vehicleType: vehicleTypeDerived,
+                pickupLocation: insertDoc.pickupLocation,
+                dropoffLocation: insertDoc.dropoffLocation,
+                distance: Number(distanceKm || 0),
+                estimatedFare: Number(estimatedFare || 0),
+                currency: currencyFromConfig,
+                // Personalized distance/eta if Google DM enriched, else fallback to existing fields
+                driverDistance: {
+                  meters:
+                    d.distanceMeters != null
+                      ? Number(d.distanceMeters)
+                      : Math.round((Number(d.distanceKm || 0) || 0) * 1000),
+                  text:
+                    d.distanceText ||
+                    (d.distanceKm != null
+                      ? `${Number(d.distanceKm).toFixed(1)} km`
+                      : null),
+                },
+                driverETA: {
+                  seconds:
+                    d.etaSeconds != null
+                      ? Number(d.etaSeconds)
+                      : Math.max(1, Number(d.etaMinutes || 0) * 60) || null,
+                  text:
+                    d.etaText ||
+                    (d.etaMinutes != null
+                      ? `${Math.max(1, Math.ceil(d.etaMinutes))} mins`
+                      : null),
+                },
+                at: new Date(),
+              },
+            });
           }
         }
       } catch {}
@@ -2085,18 +2257,19 @@ class RecoveryHandler {
     const toStr = (v) => (v ? String(v) : "");
     const unique = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
     const notifyUsers = (userIds, payload) => {
+      const ids = unique(userIds).map(toStr);
       try {
         if (this.webSocketService?.sendToUsers) {
-          this.webSocketService.sendToUsers(
-            unique(userIds).map(toStr),
-            payload
-          );
-          return;
+          this.webSocketService.sendToUsers(ids, payload);
+        } else if (this.webSocketService?.sendToUser) {
+          ids.forEach((id) => this.webSocketService.sendToUser(id, payload));
         }
-        if (this.webSocketService?.sendToUser) {
-          unique(userIds)
-            .map(toStr)
-            .forEach((id) => this.webSocketService.sendToUser(id, payload));
+        // Safety: also directly ping driver individually if present in list
+        const driverId = ids.find(
+          (x) => x && x !== "" && x === toStr(currentDriverId)
+        );
+        if (driverId && this.webSocketService?.sendToUser) {
+          this.webSocketService.sendToUser(driverId, payload);
         }
       } catch (e) {
         logger.warn("Cancel notifyUsers failed:", e?.message || e);
@@ -2125,6 +2298,9 @@ class RecoveryHandler {
       // If locking fails, proceed (best-effort). Status check below still prevents duplicates.
     }
 
+    // Track driver id for reliable direct notify in helper
+    let currentDriverId = null;
+
     try {
       // Authorization: only booking owner or assigned/pending driver
       const viewerId = toStr(ws?.user?._id || ws?.user?.id);
@@ -2145,13 +2321,12 @@ class RecoveryHandler {
       if (!isParticipant)
         throw new Error("Not authorized to cancel this booking");
 
-      // Build common recipients set (both sides: customer + driver/pending driver)
-      const recipientsEarly = unique([
-        toStr(booking.user),
-        booking?.driver
-          ? toStr(booking.driver)
-          : toStr(booking?.pendingAssignment?.driverId),
-      ]);
+      currentDriverId = booking?.driver ? toStr(booking.driver) : null;
+
+      // Build recipients: ONLY customer + assigned driver (DO NOT notify any pendingAssignment)
+      const recipientsEarly = unique(
+        [toStr(booking.user), currentDriverId].filter(Boolean)
+      );
 
       // If already cancelled/completed, send single notifications and ack (avoid reprocessing)
       if (["cancelled", "completed"].includes(booking.status)) {
@@ -2190,7 +2365,7 @@ class RecoveryHandler {
           },
         };
 
-        // Always notify both sides (customer + driver or pending driver)
+        // Notify ONLY customer + assigned driver
         notifyUsers(recipientsEarly, cancelPayload);
 
         // Optional broadcast to booking room
@@ -2282,9 +2457,11 @@ class RecoveryHandler {
       // Reload minimal for outbound payload and recipients
       const after = await Booking.findById(bookingId)
         .select(
-          "user driver pendingAssignment fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
+          "user driver fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
         )
         .lean();
+
+      currentDriverId = after?.driver ? toStr(after.driver) : null;
 
       const finalFareAmount = Number(
         (typeof after?.fareDetails?.finalFare === "object"
@@ -2307,13 +2484,10 @@ class RecoveryHandler {
         },
       };
 
-      // Always notify both sides (customer + driver or pending driver)
-      const recipients = unique([
-        toStr(after?.user),
-        after?.driver
-          ? toStr(after.driver)
-          : toStr(after?.pendingAssignment?.driverId),
-      ]);
+      // Notify ONLY customer + assigned driver
+      const recipients = unique(
+        [toStr(after?.user), currentDriverId].filter(Boolean)
+      );
       notifyUsers(recipients, cancelPayload);
 
       // Optional broadcast to booking room
