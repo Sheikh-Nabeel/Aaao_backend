@@ -234,6 +234,12 @@ class RecoveryHandler {
       this.handleRatingSubmit.bind(this)
     );
 
+    // New: Share-ride
+    this.webSocketService.on(
+      "recovery.sharePublic",
+      this.handlePublicShareMinimal.bind(this)
+    );
+
     // Availability + user location (optional)
     if (typeof this.handleDriverAvailability === "function") {
       this.webSocketService.on(
@@ -2256,23 +2262,40 @@ class RecoveryHandler {
     // Small helpers
     const toStr = (v) => (v ? String(v) : "");
     const unique = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+
+    // Will be set after we load booking; used to force-send to assigned driver
+    let currentDriverId = null;
+
     const notifyUsers = (userIds, payload) => {
-      const ids = unique(userIds).map(toStr);
+      const ids = unique(userIds).map(toStr).filter(Boolean);
+      // Attempt batch send first
+      let batchTried = false;
       try {
-        if (this.webSocketService?.sendToUsers) {
+        if (this.webSocketService?.sendToUsers && ids.length) {
+          batchTried = true;
           this.webSocketService.sendToUsers(ids, payload);
-        } else if (this.webSocketService?.sendToUser) {
-          ids.forEach((id) => this.webSocketService.sendToUser(id, payload));
-        }
-        // Safety: also directly ping driver individually if present in list
-        const driverId = ids.find(
-          (x) => x && x !== "" && x === toStr(currentDriverId)
-        );
-        if (driverId && this.webSocketService?.sendToUser) {
-          this.webSocketService.sendToUser(driverId, payload);
         }
       } catch (e) {
-        logger.warn("Cancel notifyUsers failed:", e?.message || e);
+        // Fallback to per-user on any failure
+        try {
+          if (this.webSocketService?.sendToUser && ids.length) {
+            ids.forEach((id) => this.webSocketService.sendToUser(id, payload));
+          }
+        } catch (e2) {
+          logger.warn(
+            "Cancel per-user notify fallback failed:",
+            e2?.message || e2
+          );
+        }
+      }
+
+      // If batch wasn't done or even if it was, ensure driver gets it explicitly
+      try {
+        if (currentDriverId && this.webSocketService?.sendToUser) {
+          this.webSocketService.sendToUser(String(currentDriverId), payload);
+        }
+      } catch (e3) {
+        logger.warn("Cancel direct driver notify failed:", e3?.message || e3);
       }
     };
 
@@ -2298,9 +2321,6 @@ class RecoveryHandler {
       // If locking fails, proceed (best-effort). Status check below still prevents duplicates.
     }
 
-    // Track driver id for reliable direct notify in helper
-    let currentDriverId = null;
-
     try {
       // Authorization: only booking owner or assigned/pending driver
       const viewerId = toStr(ws?.user?._id || ws?.user?.id);
@@ -2312,6 +2332,9 @@ class RecoveryHandler {
 
       if (!booking) throw new Error("Booking not found");
 
+      // Capture assigned driver early for robust notifying
+      currentDriverId = booking?.driver ? toStr(booking.driver) : null;
+
       const isParticipant =
         (booking.user && toStr(booking.user) === viewerId) ||
         (booking.driver && toStr(booking.driver) === viewerId) ||
@@ -2321,9 +2344,7 @@ class RecoveryHandler {
       if (!isParticipant)
         throw new Error("Not authorized to cancel this booking");
 
-      currentDriverId = booking?.driver ? toStr(booking.driver) : null;
-
-      // Build recipients: ONLY customer + assigned driver (DO NOT notify any pendingAssignment)
+      // Build recipients: ONLY customer + assigned driver (do not notify any pendingAssignment)
       const recipientsEarly = unique(
         [toStr(booking.user), currentDriverId].filter(Boolean)
       );
@@ -2375,6 +2396,26 @@ class RecoveryHandler {
               `booking:${bookingId}`,
               cancelPayload
             );
+          }
+        } catch {}
+
+        // NEW: End any active public share sessions for this booking
+        try {
+          if (this.publicShareSessions && this.publicShareSessions.size) {
+            for (const [tok, sess] of this.publicShareSessions.entries()) {
+              if (sess?.bookingId === bookingId && !sess?.stopped) {
+                sess.stopped = true;
+                const room = sess.roomName;
+                this.publicShareSessions.delete(tok);
+                try {
+                  this.webSocketService?.sendToRoom?.(room, {
+                    event: "share.public.end",
+                    bookingId,
+                    data: { endedAt: new Date(), reason: "cancelled" },
+                  });
+                } catch {}
+              }
+            }
           }
         } catch {}
 
@@ -2461,8 +2502,6 @@ class RecoveryHandler {
         )
         .lean();
 
-      currentDriverId = after?.driver ? toStr(after.driver) : null;
-
       const finalFareAmount = Number(
         (typeof after?.fareDetails?.finalFare === "object"
           ? after?.fareDetails?.finalFare?.amount
@@ -2484,7 +2523,7 @@ class RecoveryHandler {
         },
       };
 
-      // Notify ONLY customer + assigned driver
+      // Notify ONLY customer + assigned driver (still ensure direct driver notify)
       const recipients = unique(
         [toStr(after?.user), currentDriverId].filter(Boolean)
       );
@@ -2497,6 +2536,26 @@ class RecoveryHandler {
             `booking:${bookingId}`,
             cancelPayload
           );
+        }
+      } catch {}
+
+      // NEW: End any active public share sessions for this booking
+      try {
+        if (this.publicShareSessions && this.publicShareSessions.size) {
+          for (const [tok, sess] of this.publicShareSessions.entries()) {
+            if (sess?.bookingId === bookingId && !sess?.stopped) {
+              sess.stopped = true;
+              const room = sess.roomName;
+              this.publicShareSessions.delete(tok);
+              try {
+                this.webSocketService?.sendToRoom?.(room, {
+                  event: "share.public.end",
+                  bookingId,
+                  data: { endedAt: new Date(), reason: "cancelled" },
+                });
+              } catch {}
+            }
+          }
         }
       } catch {}
 
@@ -2704,6 +2763,7 @@ class RecoveryHandler {
       }
       return null;
     };
+
     const buildCurrency = (fd) =>
       fd?.finalFare?.currency ||
       fd?.estimatedFare?.currency ||
@@ -2732,6 +2792,7 @@ class RecoveryHandler {
       }
       return out;
     };
+
     const needsRebuild = (bk, breakdown) => {
       if (!bk) return false;
       const keys = [
@@ -2748,6 +2809,7 @@ class RecoveryHandler {
       const sum = keys.reduce((acc, k) => acc + Number(breakdown[k] || 0), 0);
       return sum === 0;
     };
+
     const rebuildFromCalculator = async (bk) => {
       const fd = bk?.fareDetails || {};
       const toNumLocal = (v) => {
@@ -2766,25 +2828,25 @@ class RecoveryHandler {
       const distance =
         toNumLocal(fd?.estimatedDistance) ?? toNumLocal(bk?.distance) ?? 0;
       const routeType = fd?.routeType || "one_way";
-      const estimatedDuration = toNumLocal(fd?.estimatedDuration) ?? 0;
       const waitingMinutes = toNumLocal(fd?.waitingMinutes) ?? 0;
       const demandRatio = toNumLocal(fd?.demandRatio) ?? 1;
-      const vehicleType = bk?.vehicleType || null;
-
+      const isNightTime = !!fd?.isNightTime;
+      const subService = fd?.subService || undefined;
       try {
         const comp = await calculateComprehensiveFare({
           serviceType: "car recovery",
-          vehicleType,
+          vehicleType: bk?.vehicleType || null,
           distance: Number(distance || 0),
           routeType,
-          estimatedDuration: Number(estimatedDuration || 0),
-          waitingMinutes: Number(waitingMinutes || 0),
-          demandRatio: Number(demandRatio || 1),
-          tripProgress: 1,
+          estimatedDuration: Number(fd?.estimatedDuration || 0),
+          waitingMinutes,
+          demandRatio,
+          tripProgress: 100,
           isCancelled: false,
           cancellationReason: null,
+          isNightTime,
+          subService,
         });
-
         const breakdown = {
           baseFare: Number(comp?.baseFare || 0),
           distanceFare: Number(comp?.distanceFare || 0),
@@ -2795,7 +2857,7 @@ class RecoveryHandler {
           cancellationCharges: Number(comp?.cancellationCharges || 0),
           platformFee: Number(comp?.platformFee || 0),
           vatAmount: Number(comp?.vatAmount || 0),
-          ...(comp?.breakdown && typeof comp.breakdown === "object"
+          ...(comp?.breakdown
             ? Object.fromEntries(
                 Object.entries(comp.breakdown).filter(
                   ([k]) =>
@@ -2827,193 +2889,160 @@ class RecoveryHandler {
 
       // Load booking
       const booking = await Booking.findById(bookingId).select(
-        "status user driver vehicleType pickupLocation dropoffLocation acceptedAt startedAt fareDetails fare distance"
+        "status user driver fare fareDetails pickupLocation dropoffLocation serviceType serviceCategory vehicleType"
       );
       if (!booking) throw new Error("Booking not found");
 
-      // Authorization
-      const role = String(ws?.user?.role || "").toLowerCase();
-      const isDriver = role === "driver";
-      const isCustomer =
-        role === "user" || role === "customer" || role === "client";
-      let driverId = String(booking.driver || "") || null;
-      if (!driverId)
-        throw new Error("No assigned driver found on this booking");
-      if (isDriver) {
-        const authDriverId = String(ws?.user?.id || ws?.user?._id || "").trim();
-        if (!authDriverId || authDriverId !== driverId) {
-          throw new Error(
-            "Not authorized: only the assigned driver can complete the service"
-          );
-        }
-      } else if (isCustomer) {
-        const providedDriverId = data?.driverId ? String(data.driverId) : null;
-        if (providedDriverId && providedDriverId !== driverId) {
-          throw new Error(
-            "Provided driverId does not match the assigned driver"
-          );
-        }
-      } else {
-        throw new Error(
-          "Unknown actor; only assigned driver or customer can complete the service"
-        );
+      // Terminal protection
+      if (["completed", "cancelled"].includes(String(booking.status))) {
+        // Ack
+        this.emitToClient(ws, {
+          event: "service.complete.ack",
+          bookingId,
+          data: {
+            status: booking.status,
+            at: new Date(),
+          },
+        });
+        // NEW: End any active public share sessions for this booking
+        try {
+          if (this.publicShareSessions && this.publicShareSessions.size) {
+            for (const [tok, sess] of this.publicShareSessions.entries()) {
+              if (sess?.bookingId === bookingId && !sess?.stopped) {
+                sess.stopped = true;
+                const room = sess.roomName;
+                this.publicShareSessions.delete(tok);
+                try {
+                  this.webSocketService?.sendToRoom?.(room, {
+                    event: "share.public.end",
+                    bookingId,
+                    data: { endedAt: new Date(), reason: "completed" },
+                  });
+                } catch {}
+              }
+            }
+          }
+        } catch {}
+        return;
       }
 
-      // Authoritative total strictly from DB: booking.fare (accepted fare)
-      const fd = booking?.fareDetails || {};
+      // Build/resolve fare and breakdown
+      const fd = booking.fareDetails || {};
+      let breakdown = coalesceBreakdown(fd);
       const currency = buildCurrency(fd);
-      const now = new Date();
-      const finalAmount = Number(booking?.fare || 0);
+      if (needsRebuild(booking, breakdown)) {
+        const rebuilt = await rebuildFromCalculator(booking);
+        breakdown = rebuilt.breakdown || breakdown;
+      }
+      const totalFare =
+        Number(fd?.finalFare?.amount ?? fd?.finalFare ?? booking.fare ?? 0) ||
+        Object.values(breakdown || {}).reduce(
+          (acc, n) => acc + Number(n || 0),
+          0
+        );
 
-      // Persist completion (keep fare as-is; do not re-derive from calculator here)
+      // Persist completion
+      const now = new Date();
       await Booking.findByIdAndUpdate(
         bookingId,
         {
           $set: {
             status: "completed",
-            fare: Number(finalAmount || 0),
-            completedAt: now,
+            "fareDetails.finalFare": {
+              amount: totalFare,
+              currency: currency || "AED",
+            },
             updatedAt: now,
+            completedAt: now,
           },
         },
         { new: false }
       );
 
-      // Reload for outbound payloads
-      const finalDoc = await Booking.findById(bookingId).select(
-        "status user driver vehicleType pickupLocation dropoffLocation acceptedAt startedAt completedAt fareDetails fare distance"
-      );
-      const fd2 = finalDoc?.fareDetails || {};
+      // Cache update
+      const rec = this.activeRecoveries.get(bookingId) || {};
+      rec.status = "completed";
+      rec.completedAt = now;
+      rec.statusHistory = rec.statusHistory || [];
+      rec.statusHistory.push({
+        status: "completed",
+        timestamp: now,
+        message: "Service completed",
+      });
+      this.activeRecoveries.set(bookingId, rec);
 
-      // Rebuild breakdown if needed (for display), but DO NOT use it to compute total
-      let breakdown2 = coalesceBreakdown(fd2);
-      if (needsRebuild(finalDoc, breakdown2)) {
-        const rebuilt = await rebuildFromCalculator(finalDoc);
-        if (rebuilt.breakdown) breakdown2 = rebuilt.breakdown;
-      }
-
-      // Totals strictly from DB top-level fare
-      const totalAmount2 = Number(finalDoc?.fare || 0);
-
-      const billing = {
-        status: String(finalDoc?.status || "completed"),
-        acceptedAt: finalDoc?.acceptedAt || null,
-        startedAt: finalDoc?.startedAt || null,
-        completedAt: finalDoc?.completedAt || null,
-        total: {
-          amount: Number(totalAmount2 || 0),
-          currency: buildCurrency(fd2),
+      // Notify participants
+      const summaryPayload = {
+        event: "service.completed",
+        bookingId,
+        data: {
+          status: "completed",
+          at: now,
+          totalFare,
+          currency: currency || "AED",
+          breakdown,
+          pickupLocation: booking?.pickupLocation || null,
+          dropoffLocation: booking?.dropoffLocation || null,
         },
-        pickup: finalDoc?.pickupLocation
-          ? {
-              address: finalDoc.pickupLocation.address || null,
-              zone: finalDoc.pickupLocation.zone || null,
-              coordinates: finalDoc.pickupLocation.coordinates || null,
-            }
-          : null,
-        dropoff: finalDoc?.dropoffLocation
-          ? {
-              address: finalDoc.dropoffLocation.address || null,
-              zone: finalDoc.dropoffLocation.zone || null,
-              coordinates: finalDoc.dropoffLocation.coordinates || null,
-            }
-          : null,
-        finalFare: {
-          amount: Number(totalAmount2 || 0),
-          currency: buildCurrency(fd2),
-        },
-        estimatedFare:
-          typeof fd2?.estimatedFare === "object" && fd2?.estimatedFare !== null
-            ? fd2.estimatedFare
-            : fd2?.estimatedFare != null
-            ? {
-                amount: Number(fd2.estimatedFare || 0),
-                currency: buildCurrency(fd2),
-              }
-            : null,
-        breakdown: breakdown2,
-        vat:
-          breakdown2.vatAmount > 0
-            ? { amount: breakdown2.vatAmount, currency: buildCurrency(fd2) }
-            : null,
-        surge:
-          breakdown2.surgeCharges > 0
-            ? { amount: breakdown2.surgeCharges, currency: buildCurrency(fd2) }
-            : null,
-        platformFees:
-          breakdown2.platformFee > 0
-            ? { amount: breakdown2.platformFee, currency: buildCurrency(fd2) }
-            : null,
-        waitingCharges:
-          breakdown2.waitingCharges > 0
-            ? {
-                amount: breakdown2.waitingCharges,
-                currency: buildCurrency(fd2),
-              }
-            : null,
-        extras: fd2?.extras ?? null,
       };
+      try {
+        if (booking?.user) {
+          this.webSocketService?.sendToUser?.(
+            String(booking.user),
+            summaryPayload
+          );
+        }
+        if (booking?.driver) {
+          this.webSocketService?.sendToUser?.(
+            String(booking.driver),
+            summaryPayload
+          );
+        }
+        // Booking room
+        this.webSocketService?.sendToRoom?.(
+          `booking:${bookingId}`,
+          summaryPayload
+        );
+      } catch {}
 
-      const details = {
-        status: String(finalDoc?.status || "completed"),
-        acceptedAt: finalDoc?.acceptedAt || null,
-        startedAt: finalDoc?.startedAt || null,
-        completedAt: finalDoc?.completedAt || null,
-        pickup: billing.pickup,
-        dropoff: billing.dropoff,
-        finalFare: billing.finalFare,
-        estimatedFare: billing.estimatedFare,
-        total: billing.total,
-        breakdown: billing.breakdown,
-        vat: fd2?.vat || null,
-        surge: fd2?.surge || null,
-        platformFees: billing.platformFees,
-        waitingCharges: billing.waitingCharges,
-        extras: fd2?.extras || null,
-      };
-
-      // Ack to caller
+      // ACK to caller
       this.emitToClient(ws, {
         event: "service.complete.ack",
         bookingId,
-        data: { status: "completed", completedAt: now },
+        data: {
+          status: "completed",
+          at: now,
+          totalFare,
+          currency: currency || "AED",
+          breakdown,
+        },
       });
 
-      // Completed summary to both (use DB-only totals based on top-level fare)
+      // NEW: End any active public share sessions for this booking
       try {
-        const toCustomer = String(finalDoc.user || "");
-        const after = await Booking.findById(bookingId)
-          .select("fare fareDetails.currency")
-          .lean();
-
-        const ccy = after?.fareDetails?.currency || "AED";
-        const completedAmount = Number(after?.fare || 0);
-
-        const completedPayload = {
-          event: "recovery.completed",
-          bookingId,
-          data: {
-            status: "completed",
-            total: { amount: Number(completedAmount || 0), currency: ccy },
-            details,
-          },
-        };
-
-        // Send to customer and driver
-        const toDriver = String(finalDoc.driver || "");
-        this.webSocketService.sendToUsers(
-          [toCustomer, toDriver],
-          completedPayload
-        );
+        if (this.publicShareSessions && this.publicShareSessions.size) {
+          for (const [tok, sess] of this.publicShareSessions.entries()) {
+            if (sess?.bookingId === bookingId && !sess?.stopped) {
+              sess.stopped = true;
+              const room = sess.roomName;
+              this.publicShareSessions.delete(tok);
+              try {
+                this.webSocketService?.sendToRoom?.(room, {
+                  event: "share.public.end",
+                  bookingId,
+                  data: { endedAt: new Date(), reason: "completed" },
+                });
+              } catch {}
+            }
+          }
+        }
       } catch {}
     } catch (error) {
+      logger.error("Error in handleServiceComplete:", error);
       this.emitToClient(ws, {
         event: "error",
         bookingId,
-        error: {
-          code: "SERVICE_COMPLETE_ERROR",
-          message: error.message || "Failed to complete service",
-        },
+        error: { code: "SERVICE_COMPLETE_ERROR", message: error.message },
       });
     }
   }
@@ -5872,6 +5901,77 @@ class RecoveryHandler {
         image: u.selfieImage || u.avatarUrl || null,
       };
     };
+    // Build a comprehensive, compact rating payload for drivers
+    const buildDriverRating = (u) => {
+      const avg = Number(u?.driverRating?.average || 0);
+      const cnt = Number(u?.driverRating?.count || 0);
+      const reviews = Array.isArray(u?.driverRating?.reviews)
+        ? u.driverRating.reviews
+            .slice(-5) // last 5 recent
+            .map((r) => ({
+              stars: Number(r?.stars || 0),
+              comment: r?.comment || null,
+              customerInfo: {
+                name: r?.customerInfo?.name || null,
+                phoneNumber: r?.customerInfo?.phoneNumber || null,
+              },
+              createdAt: r?.createdAt || null,
+            }))
+        : [];
+      return { average: avg, count: cnt, recentReviews: reviews };
+    };
+
+    // NEW: Google Distance helpers (scoped)
+    const GOOGLE_KEY = process.env.GOOGLE_MAPS_API_KEY;
+    const coordsFromBookingPoint = (pt) => {
+      try {
+        const c = pt?.coordinates;
+        if (Array.isArray(c) && c.length >= 2) {
+          const lng = Number(c[0]);
+          const lat = Number(c[1]);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+        }
+      } catch {}
+      return null;
+    };
+    const coordsFromDriver = (drv) => {
+      try {
+        const c = drv?.currentLocation?.coordinates;
+        if (Array.isArray(c) && c.length >= 2) {
+          const lng = Number(c[0]);
+          const lat = Number(c[1]);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+        }
+      } catch {}
+      return null;
+    };
+    const getDistanceEta = async (origin, destination) => {
+      // Returns { distanceMeters, distanceText, etaSeconds, etaText } or null
+      if (!GOOGLE_KEY || !origin || !destination) return null;
+      try {
+        const url =
+          `https://maps.googleapis.com/maps/api/distancematrix/json` +
+          `?origins=${encodeURIComponent(origin.lat + "," + origin.lng)}` +
+          `&destinations=${encodeURIComponent(
+            destination.lat + "," + destination.lng
+          )}` +
+          `&mode=driving&units=metric&key=${encodeURIComponent(GOOGLE_KEY)}`;
+        // Prefer native fetch if available; otherwise this will be a no-op if not supported (wrapped)
+        const res = await fetch(url, { method: "GET" });
+        if (!res?.ok) return null;
+        const json = await res.json();
+        const row = json?.rows?.[0]?.elements?.[0];
+        if (!row || row.status !== "OK") return null;
+        return {
+          distanceMeters: Number(row.distance?.value ?? 0),
+          distanceText: row.distance?.text || null,
+          etaSeconds: Number(row.duration?.value ?? 0),
+          etaText: row.duration?.text || null,
+        };
+      } catch {
+        return null;
+      }
+    };
 
     // Normalize
     let msg = message || {};
@@ -5940,14 +6040,21 @@ class RecoveryHandler {
       // Build actor/counterparty info
       let offeredBy = null;
       let counterparty = null;
+
+      // NEW: We'll also capture driver currentLocation for ETA/distance if by === 'driver'
+      let driverDocForEta = null;
+
       try {
         if (by === "driver") {
           const drv = await User.findById(ws?.user?.id || ws?.user?._id)
             .select(
-              "firstName lastName email phoneNumber selfieImage username avatarUrl"
+              "firstName lastName email phoneNumber selfieImage username avatarUrl driverRating.average driverRating.count driverRating.reviews.stars driverRating.reviews.comment driverRating.reviews.customerInfo driverRating.reviews.createdAt currentLocation.coordinates"
             )
             .lean();
           offeredBy = buildInfo(drv);
+          offeredBy.rating = buildDriverRating(drv);
+          driverDocForEta = drv;
+
           if (booking?.user) {
             const cust = await User.findById(booking.user)
               .select(
@@ -5979,7 +6086,6 @@ class RecoveryHandler {
 
       // If user is rejecting the offer
       if (action === "reject") {
-        // Terminal states still allow rejecting with a soft ACK, no throws
         const update = {
           $set: {
             "fareDetails.negotiation.state": "rejected",
@@ -6000,7 +6106,7 @@ class RecoveryHandler {
         try {
           await Booking.findByIdAndUpdate(bookingId, update, { new: false });
         } catch {
-          // Even if update fails (e.g., terminal booking), proceed with ACK notifications
+          // Proceed with ACK notifications even if update fails
         }
 
         // ACK to caller
@@ -6062,7 +6168,7 @@ class RecoveryHandler {
             counterparty,
           },
         });
-        // Do not notify counterpart in closed state to avoid confusion
+        // Do not notify counterpart in closed state
         return;
       }
 
@@ -6131,12 +6237,35 @@ class RecoveryHandler {
         },
       });
 
-      // Notify counterpart (include min/max band)
+      // Prepare Google ETA/distance if driver is offering (driver -> customer path)
+      let driverDistance = null;
+      let driverETA = null;
+      try {
+        if (by === "driver") {
+          const origin = coordsFromDriver(driverDocForEta);
+          const destination = coordsFromBookingPoint(booking?.pickupLocation);
+          const result = await getDistanceEta(origin, destination);
+          if (result) {
+            driverDistance = {
+              meters: Number(result.distanceMeters ?? 0),
+              text: result.distanceText || null,
+            };
+            driverETA = {
+              seconds: Number(result.etaSeconds ?? 0),
+              text: result.etaText || null,
+            };
+          }
+        }
+      } catch {
+        // swallow, keep payload without ETA/distance on failures
+      }
+
+      // Notify counterpart (include min/max band; add ETA/distance when driver offers)
       try {
         const toCustomer = String(booking.user || "");
         const toDriver = String(driverId || booking.driver || "");
-        const payload = {
-          event: "fare.offered",
+
+        const payloadBase = {
           bookingId,
           data: {
             amount,
@@ -6151,10 +6280,27 @@ class RecoveryHandler {
             allowedPercentage,
           },
         };
-        if (by === "driver" && toCustomer)
-          this.webSocketService.sendToUser(toCustomer, payload);
-        if (by === "customer" && toDriver)
-          this.webSocketService.sendToUser(toDriver, payload);
+
+        // When driver offers, include rating + ETA/distance in the customer's notification
+        if (by === "driver" && toCustomer) {
+          this.webSocketService.sendToUser(toCustomer, {
+            event: "fare.offered",
+            ...payloadBase,
+            data: {
+              ...payloadBase.data,
+              ...(driverDistance ? { driverDistance } : {}),
+              ...(driverETA ? { driverETA } : {}),
+            },
+          });
+        }
+
+        // When customer offers, send to driver (no ETA/distance needed in this direction)
+        if (by === "customer" && toDriver) {
+          this.webSocketService.sendToUser(toDriver, {
+            event: "fare.offered",
+            ...payloadBase,
+          });
+        }
       } catch {}
     } catch (error) {
       logger.error("Error in handleFareOffer:", error);
@@ -6998,6 +7144,412 @@ class RecoveryHandler {
         event: "error",
         bookingId: bookingId || null,
         error: { code: "DRIVER_ON_THE_WAY_ERROR", message: error.message },
+      });
+    }
+  }
+
+  /**
+   * Public live map sharing for recovery.
+   */
+  async handlePublicShareMinimal(ws, message) {
+    if (!this.publicShareSessions) this.publicShareSessions = new Map();
+
+    // Helpers
+    const toStr = (v) => (v == null ? "" : String(v));
+    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+    const randToken = () =>
+      Math.random().toString(36).slice(2, 10) +
+      Math.random().toString(36).slice(2, 6);
+    const buildUser = (u) => {
+      if (!u) return null;
+      const name =
+        `${u.firstName ?? ""} ${u.lastName ?? ""}`.trim() ||
+        u.username ||
+        "User";
+      return {
+        id: String(u._id || u.id || ""),
+        name,
+        phone: u.phoneNumber || null,
+        image: u.selfieImage || u.avatarUrl || null,
+        role: u.role || null,
+        rating: u?.driverRating
+          ? {
+              average: Number(u.driverRating.average || 0),
+              count: Number(u.driverRating.count || 0),
+            }
+          : null,
+      };
+    };
+
+    // Parse
+    let msg = message || {};
+    if (typeof msg === "string") {
+      try {
+        msg = JSON.parse(msg);
+      } catch {
+        msg = { raw: message };
+      }
+    }
+    const data = msg?.data || {};
+    const action = String(data?.action || "").toLowerCase(); // share | ping | end
+    const bookingId = toStr(data?.bookingId || "");
+    const token = toStr(data?.token || "");
+    const now = new Date();
+
+    if (!action || !bookingId) {
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId,
+        error: {
+          code: "PUBLIC_SHARE_ERROR",
+          message: "action and bookingId are required",
+        },
+      });
+      return;
+    }
+
+    const getSess = (t) => {
+      const s = this.publicShareSessions.get(t);
+      if (!s) return null;
+      if (s.bookingId !== bookingId) return null;
+      if (s.expiresAt && new Date(s.expiresAt) < new Date()) return null;
+      if (s.stopped) return null;
+      return s;
+    };
+
+    // Internal: clear and remove a session safely
+    const stopSession = (tok, reason = "ended") => {
+      try {
+        const sess = this.publicShareSessions.get(tok);
+        if (!sess) return;
+        sess.stopped = true;
+        if (sess.intervalId) {
+          clearInterval(sess.intervalId);
+          sess.intervalId = null;
+        }
+        this.publicShareSessions.delete(tok);
+        // Broadcast end
+        try {
+          this.webSocketService?.sendToRoom?.(sess.roomName, {
+            event: "share.public.end",
+            bookingId,
+            data: { endedAt: new Date(), reason },
+          });
+        } catch {}
+      } catch {}
+    };
+
+    try {
+      // Load booking + participants
+      const booking = await Booking.findById(bookingId)
+        .select("user driver status pickupLocation dropoffLocation")
+        .lean();
+      if (!booking) throw new Error("Booking not found");
+
+      const viewerId = toStr(ws?.user?._id || ws?.user?.id || "");
+      const isCustomer = booking.user && toStr(booking.user) === viewerId;
+      const isDriver = booking.driver && toStr(booking.driver) === viewerId;
+
+      let customerProfile = null;
+      let driverProfile = null;
+      let driverDoc = null;
+      try {
+        if (booking.user) {
+          const cust = await User.findById(booking.user)
+            .select(
+              "firstName lastName username phoneNumber selfieImage avatarUrl role"
+            )
+            .lean();
+          customerProfile = buildUser(cust);
+        }
+        if (booking.driver) {
+          driverDoc = await User.findById(booking.driver)
+            .select(
+              "firstName lastName username phoneNumber selfieImage avatarUrl role driverRating.average driverRating.count currentLocation"
+            )
+            .lean();
+          driverProfile = buildUser(driverDoc);
+          if (driverDoc?.currentLocation?.coordinates?.length >= 2) {
+            driverProfile.initialLocation = {
+              lat: Number(driverDoc.currentLocation.coordinates[1]),
+              lng: Number(driverDoc.currentLocation.coordinates[0]),
+            };
+          }
+        }
+      } catch {}
+
+      const pickup = booking?.pickupLocation || null;
+      const dropoff = booking?.dropoffLocation || null;
+
+      // Internal helpers to fetch driver live location
+      const fetchRedisLocation = async (driverId) => {
+        try {
+          const r = await redis.get(`driver:loc:${driverId}`);
+          if (!r) return null;
+          const p = JSON.parse(r);
+          return p && typeof p.lat === "number" && typeof p.lng === "number"
+            ? p
+            : null;
+        } catch {
+          return null;
+        }
+      };
+      const isFresh = (iso) => {
+        const t = iso ? new Date(iso).getTime() : 0;
+        return t > 0 && Date.now() - t < 15 * 1000; // 15s freshness window
+      };
+
+      if (action === "share") {
+        // Only customer or assigned driver can share
+        if (!isCustomer && !isDriver)
+          throw new Error("Not authorized to share");
+
+        const ttlMinutes = clamp(Number(data?.expiresInMinutes || 180), 5, 720);
+        const shareToken = randToken();
+        const roomName = `sharepub:${bookingId}:${shareToken}`;
+        const expiresAt = new Date(now.getTime() + ttlMinutes * 60 * 1000);
+
+        // Compose a public URL for your frontend page (viewer map)
+        const base =
+          process.env.PUBLIC_SHARE_BASE_URL || process.env.APP_URL || "";
+        const shareUrl = base
+          ? `${base.replace(
+              /\/+$/,
+              ""
+            )}/public/recovery/share?bookingId=${encodeURIComponent(
+              bookingId
+            )}&token=${encodeURIComponent(shareToken)}`
+          : null;
+
+        // Seed state
+        const initial = driverProfile?.initialLocation || null;
+        this.publicShareSessions.set(shareToken, {
+          bookingId,
+          roomName,
+          createdBy:
+            viewerId ||
+            (isCustomer ? toStr(booking.user) : toStr(booking.driver)),
+          createdAt: now,
+          expiresAt,
+          stopped: false,
+          lastLocation: initial, // {lat,lng,at,speed,heading}
+          path: initial ? [{ ...initial, at: new Date() }] : [],
+          shareUrl,
+          driverId: booking?.driver ? String(booking.driver) : null,
+          intervalId: null,
+        });
+
+        // Reply to creator
+        this.emitToClient(ws, {
+          event: "share.public.started",
+          bookingId,
+          data: {
+            token: shareToken,
+            room: roomName,
+            shareUrl,
+            expiresAt,
+            pickupLocation: pickup,
+            dropoffLocation: dropoff,
+            participants: { customer: customerProfile, driver: driverProfile },
+            lastLocation: initial,
+          },
+        });
+
+        // Broadcast initial snapshot
+        try {
+          this.webSocketService?.sendToRoom?.(roomName, {
+            event: "share.public.snapshot",
+            bookingId,
+            data: {
+              pickupLocation: pickup,
+              dropoffLocation: dropoff,
+              participants: {
+                customer: customerProfile,
+                driver: driverProfile,
+              },
+              lastLocation: initial,
+              path: initial ? [{ ...initial, at: new Date() }] : [],
+              status: booking.status,
+            },
+          });
+        } catch {}
+
+        // Start server-side poller to fetch and broadcast driver location periodically
+        const sess = this.publicShareSessions.get(shareToken);
+        if (sess && sess.driverId) {
+          const poll = async () => {
+            if (!this.publicShareSessions.has(shareToken)) return; // session ended
+            const s = this.publicShareSessions.get(shareToken);
+            if (!s || s.stopped) return;
+
+            let point = null;
+
+            // 1) Try redis
+            let parsed = await fetchRedisLocation(s.driverId);
+
+            // 2) Ask driver live (optional) and retry a few times if stale/missing
+            if (!parsed || !isFresh(parsed.at)) {
+              try {
+                this.webSocketService?.sendToUser?.(String(s.driverId), {
+                  event: "driver.location.request",
+                  bookingId: bookingId || null,
+                  data: { reason: "realtime_request" },
+                });
+              } catch {}
+              const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+              for (let i = 0; i < 4; i++) {
+                await sleep(250);
+                parsed = await fetchRedisLocation(s.driverId);
+                if (parsed && isFresh(parsed.at)) break;
+              }
+            }
+
+            // 3) DB fallback if still stale/missing
+            if (!parsed || !parsed.lat || !parsed.lng || !isFresh(parsed.at)) {
+              try {
+                const drv = await User.findById(s.driverId)
+                  .select("currentLocation.coordinates")
+                  .lean();
+                const c = drv?.currentLocation?.coordinates;
+                if (Array.isArray(c) && c.length >= 2) {
+                  point = {
+                    lat: Number(c[1]),
+                    lng: Number(c[0]),
+                    at: new Date(),
+                  };
+                }
+              } catch {}
+            } else {
+              point = {
+                lat: Number(parsed.lat),
+                lng: Number(parsed.lng),
+                at: parsed.at ? new Date(parsed.at) : new Date(),
+                speed: parsed.speed != null ? Number(parsed.speed) : null,
+                heading: parsed.heading != null ? Number(parsed.heading) : null,
+              };
+            }
+
+            // If we have a point, update session and broadcast
+            if (
+              point &&
+              Number.isFinite(point.lat) &&
+              Number.isFinite(point.lng)
+            ) {
+              s.lastLocation = point;
+              s.path.push({ lat: point.lat, lng: point.lng, at: point.at });
+              if (s.path.length > 1000) s.path.splice(0, s.path.length - 1000);
+
+              try {
+                this.webSocketService?.sendToRoom?.(s.roomName, {
+                  event: "share.public.update",
+                  bookingId,
+                  data: {
+                    location: s.lastLocation,
+                    path: s.path,
+                    pickupLocation: pickup,
+                    dropoffLocation: dropoff,
+                    participants: {
+                      customer: customerProfile,
+                      driver: driverProfile,
+                    },
+                  },
+                });
+              } catch {}
+            }
+
+            // Auto-expire
+            if (s.expiresAt && new Date(s.expiresAt) < new Date()) {
+              stopSession(shareToken, "expired");
+            }
+          };
+
+          // Every 3 seconds
+          sess.intervalId = setInterval(poll, 3000);
+          // Run once immediately
+          poll().catch(() => {});
+        }
+
+        return;
+      }
+
+      // Optional: still support "ping" for legacy clients (not required anymore)
+      if (action === "ping") {
+        if (!token) throw new Error("token is required");
+        const sess = getSess(token);
+        if (!sess) throw new Error("Invalid or expired token");
+
+        // Accept pings only from assigned driver (if someone still uses it)
+        if (!isDriver) throw new Error("Only assigned driver can ping");
+
+        const lat = Number(data?.location?.lat ?? data?.lat);
+        const lng = Number(data?.location?.lng ?? data?.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          throw new Error("Valid lat/lng required");
+        }
+        const speed = data?.speed != null ? Number(data.speed) : null;
+        const heading = data?.heading != null ? Number(data.heading) : null;
+
+        const point = { lat, lng, at: new Date(), speed, heading };
+        sess.lastLocation = point;
+        sess.path.push({ lat, lng, at: point.at });
+        if (sess.path.length > 1000)
+          sess.path.splice(0, sess.path.length - 1000);
+
+        try {
+          this.webSocketService?.sendToRoom?.(sess.roomName, {
+            event: "share.public.update",
+            bookingId,
+            data: {
+              location: sess.lastLocation,
+              path: sess.path,
+              pickupLocation: pickup,
+              dropoffLocation: dropoff,
+              participants: {
+                customer: customerProfile,
+                driver: driverProfile,
+              },
+            },
+          });
+        } catch {}
+
+        this.emitToClient(ws, {
+          event: "share.public.ping.ack",
+          bookingId,
+          data: { at: new Date() },
+        });
+        return;
+      }
+
+      if (action === "end") {
+        if (!token) throw new Error("token is required");
+        const sess = getSess(token);
+        if (!sess) throw new Error("Invalid or expired token");
+
+        const isCreator = toStr(sess.createdBy) === viewerId;
+        const terminal = ["completed", "cancelled"].includes(
+          String(booking.status)
+        );
+        if (!isCreator && !isDriver && !isCustomer && !terminal) {
+          throw new Error("Not authorized to end");
+        }
+
+        stopSession(token, "ended");
+
+        this.emitToClient(ws, {
+          event: "share.public.end.ack",
+          bookingId,
+          data: { endedAt: new Date() },
+        });
+        return;
+      }
+
+      throw new Error("Unsupported action");
+    } catch (error) {
+      logger.error("Error in handlePublicShareMinimal:", error);
+      this.emitToClient(ws, {
+        event: "error",
+        bookingId,
+        error: { code: "PUBLIC_SHARE_ERROR", message: error.message },
       });
     }
   }
