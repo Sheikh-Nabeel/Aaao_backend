@@ -58,6 +58,9 @@ const VehicleTypeSub = Sub({
   baseFare: { type: Number, default: 0 },
   perKmRate: { type: Number, default: 0 },
   nightCharges: { type: NightChargesSub, default: {} },
+  // Display metadata
+  label: { type: String, default: "" },
+  info: { type: String, default: "" },
 });
 
 // Towing/winching/roadside specialized leaf
@@ -69,6 +72,9 @@ const CategoryLeafSub = Sub({
   waitingCharges: { type: WaitingChargesSub, default: {} },
   nightCharges: { type: NightChargesSub, default: {} },
   surgePricing: { type: SurgePricingSub, default: {} },
+  // Display metadata
+  label: { type: String, default: "" },
+  info: { type: String, default: "" },
 });
 
 // Car Recovery service-level subs
@@ -180,6 +186,9 @@ const TowingSub = Sub({
     options: { type: [Number], default: [50, 100] },
     default: { type: Number, default: 50 },
   }),
+  // Display metadata
+  label: { type: String, default: "" },
+  imageHint: { type: String, default: "" },
   subCategories: Sub({
     flatbed: { type: CategoryLeafSub, default: {} },
     wheelLift: { type: CategoryLeafSub, default: {} },
@@ -193,6 +202,9 @@ const WinchingSub = Sub({
     options: { type: [Number], default: [50, 100] },
     default: { type: Number, default: 50 },
   }),
+  // Display metadata
+  label: { type: String, default: "" },
+  imageHint: { type: String, default: "" },
   subCategories: Sub({
     onRoadWinching: { type: CategoryLeafSub, default: {} },
     offRoadWinching: { type: CategoryLeafSub, default: {} },
@@ -206,6 +218,9 @@ const RoadsideAssistanceSub = Sub({
     options: { type: [Number], default: [50, 100] },
     default: { type: Number, default: 50 },
   }),
+  // Display metadata
+  label: { type: String, default: "" },
+  imageHint: { type: String, default: "" },
   subCategories: Sub({
     jumpstart: { type: CategoryLeafSub, default: {} },
     fuelDelivery: { type: CategoryLeafSub, default: {} },
@@ -216,6 +231,9 @@ const SpecializedHeavyRecoverySub = Sub({
   enabled: { type: Boolean, default: true },
   minimumChargesForDriverArriving: { type: Number, default: 5 },
   convenienceFee: { type: Number, default: 150 },
+  // Display metadata
+  label: { type: String, default: "" },
+  imageHint: { type: String, default: "" },
   subCategories: Sub({
     luxuryExotic: { type: CategoryLeafSub, default: {} },
     accidentCollision: { type: CategoryLeafSub, default: {} },

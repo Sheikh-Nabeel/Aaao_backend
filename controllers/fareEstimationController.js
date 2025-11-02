@@ -8,7 +8,6 @@ import User from "../models/userModel.js";
 import { calculateDistance } from "../utils/distanceCalculator.js";
 import Booking from "../models/bookingModel.js";
 import redis from "../services/redisClient.js";
-
 /**
  * Find qualified drivers and vehicles for fare estimation
  */
