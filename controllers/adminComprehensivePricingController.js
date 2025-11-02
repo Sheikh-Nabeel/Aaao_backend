@@ -351,7 +351,7 @@ const calculateComprehensiveFare = async (bookingData) => {
         ? recovery.nightCharges
         : null;
 
-      // Optional sub-service overrides driven by vehicleType key (e.g., flatbed, wheelLift, jumpstart, fuelDelivery)
+      // Optional sub-service overrides driven by vehicleType key
       const sub = getCRSubOverride(recovery, vehicleType);
       if (sub) {
         const scopeMinArriving = Number(
@@ -714,8 +714,6 @@ export {
   calculateCarRecoveryFreeStay,
 };
 
-// ====================== Admin endpoints and helpers below ======================
-
 // Validation helper functions
 const validatePositiveNumber = (value, fieldName) => {
   if (value === undefined || value === null) return null;
@@ -913,6 +911,20 @@ function alignCarRecoveryToFlow(cr) {
 
   const current = (out.serviceTypes = out.serviceTypes || {});
 
+  // Preserve category-level labels and imageHint
+  desiredCats.towing.label = current.towing?.label || "Towing Services";
+  desiredCats.towing.imageHint = current.towing?.imageHint || "";
+  desiredCats.winching.label = current.winching?.label || "Winching Services";
+  desiredCats.winching.imageHint = current.winching?.imageHint || "";
+  desiredCats.roadsideAssistance.label =
+    current.roadsideAssistance?.label || "Roadside Assistance";
+  desiredCats.roadsideAssistance.imageHint =
+    current.roadsideAssistance?.imageHint || "";
+  desiredCats.specializedHeavyRecovery.label =
+    current.specializedHeavyRecovery?.label || "Specialized/Heavy Recovery";
+  desiredCats.specializedHeavyRecovery.imageHint =
+    current.specializedHeavyRecovery?.imageHint || "";
+
   // Ensure each required subcategory key exists at least as {}
   // Towing
   const towing = current.towing || {};
@@ -945,6 +957,68 @@ function alignCarRecoveryToFlow(cr) {
     spec.subCategories?.heavyDutyVehicle ?? {};
   desiredCats.specializedHeavyRecovery.subCategories.basementPullOut =
     spec.subCategories?.basementPullOut ?? {};
+
+  // Preserve subcategory labels/info if present
+  const preserveLeaf = (dstLeaf, srcLeaf, fallbackLabel) => {
+    dstLeaf.label = srcLeaf?.label || fallbackLabel || "";
+    dstLeaf.info = srcLeaf?.info || "";
+    return dstLeaf;
+  };
+
+  desiredCats.towing.subCategories.flatbed = preserveLeaf(
+    desiredCats.towing.subCategories.flatbed,
+    towing.subCategories?.flatbed,
+    "Flatbed Towing"
+  );
+  desiredCats.towing.subCategories.wheelLift = preserveLeaf(
+    desiredCats.towing.subCategories.wheelLift,
+    towing.subCategories?.wheelLift,
+    "Wheel Lift Towing"
+  );
+  desiredCats.winching.subCategories.onRoadWinching = preserveLeaf(
+    desiredCats.winching.subCategories.onRoadWinching,
+    winching.subCategories?.onRoadWinching,
+    "On-Road Winching"
+  );
+  desiredCats.winching.subCategories.offRoadWinching = preserveLeaf(
+    desiredCats.winching.subCategories.offRoadWinching,
+    winching.subCategories?.offRoadWinching,
+    "Off-Road Winching"
+  );
+  desiredCats.roadsideAssistance.subCategories.jumpstart = preserveLeaf(
+    desiredCats.roadsideAssistance.subCategories.jumpstart,
+    roadside.subCategories?.jumpstart,
+    "Battery Jump Start"
+  );
+  desiredCats.roadsideAssistance.subCategories.fuelDelivery = preserveLeaf(
+    desiredCats.roadsideAssistance.subCategories.fuelDelivery,
+    roadside.subCategories?.fuelDelivery,
+    "Fuel Delivery"
+  );
+  desiredCats.specializedHeavyRecovery.subCategories.luxuryExotic =
+    preserveLeaf(
+      desiredCats.specializedHeavyRecovery.subCategories.luxuryExotic,
+      spec.subCategories?.luxuryExotic,
+      "Luxury & Exotic Car Recovery"
+    );
+  desiredCats.specializedHeavyRecovery.subCategories.accidentCollision =
+    preserveLeaf(
+      desiredCats.specializedHeavyRecovery.subCategories.accidentCollision,
+      spec.subCategories?.accidentCollision,
+      "Accident & Collision Recovery"
+    );
+  desiredCats.specializedHeavyRecovery.subCategories.heavyDutyVehicle =
+    preserveLeaf(
+      desiredCats.specializedHeavyRecovery.subCategories.heavyDutyVehicle,
+      spec.subCategories?.heavyDutyVehicle,
+      "Heavy-Duty Vehicle Recovery"
+    );
+  desiredCats.specializedHeavyRecovery.subCategories.basementPullOut =
+    preserveLeaf(
+      desiredCats.specializedHeavyRecovery.subCategories.basementPullOut,
+      spec.subCategories?.basementPullOut,
+      "Basement Pull-Out"
+    );
 
   out.serviceTypes = desiredCats;
   return out;
@@ -1169,6 +1243,15 @@ const updateCarCabRates = async (req, res) => {
             config.serviceTypes.carCab.vehicleTypes[vehicleType].perKmRate =
               vehicleTypes[vehicleType].perKmRate;
           }
+          // Optional UI metadata passthrough
+          if (vehicleTypes[vehicleType].label !== undefined) {
+            config.serviceTypes.carCab.vehicleTypes[vehicleType].label =
+              vehicleTypes[vehicleType].label;
+          }
+          if (vehicleTypes[vehicleType].info !== undefined) {
+            config.serviceTypes.carCab.vehicleTypes[vehicleType].info =
+              vehicleTypes[vehicleType].info;
+          }
         }
       });
     }
@@ -1193,7 +1276,7 @@ const updateCarCabRates = async (req, res) => {
 // Update bike service rates
 const updateBikeRates = async (req, res) => {
   try {
-    const { enabled, baseFare, perKmRate } = req.body;
+    const { enabled, baseFare, perKmRate, vehicleTypes } = req.body;
     const adminId = req.user.id;
 
     const config = await ComprehensivePricing.findOne({ isActive: true });
@@ -1207,8 +1290,33 @@ const updateBikeRates = async (req, res) => {
     if (enabled !== undefined) config.serviceTypes.bike.enabled = enabled;
     if (baseFare !== undefined) config.serviceTypes.bike.baseFare = baseFare;
     if (perKmRate !== undefined) config.serviceTypes.bike.perKmRate = perKmRate;
-    config.lastUpdatedBy = adminId;
 
+    // Optional UI metadata for bike vehicle types
+    if (vehicleTypes) {
+      const validBikeTypes = ["economy", "premium", "vip"];
+      validBikeTypes.forEach((vt) => {
+        if (vehicleTypes[vt]) {
+          if (vehicleTypes[vt].label !== undefined) {
+            config.serviceTypes.bike.vehicleTypes[vt].label =
+              vehicleTypes[vt].label;
+          }
+          if (vehicleTypes[vt].info !== undefined) {
+            config.serviceTypes.bike.vehicleTypes[vt].info =
+              vehicleTypes[vt].info;
+          }
+          if (vehicleTypes[vt].baseFare !== undefined) {
+            config.serviceTypes.bike.vehicleTypes[vt].baseFare =
+              vehicleTypes[vt].baseFare;
+          }
+          if (vehicleTypes[vt].perKmRate !== undefined) {
+            config.serviceTypes.bike.vehicleTypes[vt].perKmRate =
+              vehicleTypes[vt].perKmRate;
+          }
+        }
+      });
+    }
+
+    config.lastUpdatedBy = adminId;
     await config.save();
 
     res.status(200).json({
@@ -1317,6 +1425,11 @@ const bulkUpdatePricing = async (req, res) => {
               const dstCat = (cr.serviceTypes[catKey] = cr.serviceTypes[
                 catKey
               ] || { subCategories: {} });
+
+              // Category display metadata
+              if (cat.label !== undefined) dstCat.label = cat.label;
+              if (cat.imageHint !== undefined) dstCat.imageHint = cat.imageHint;
+
               if (Array.isArray(cat.subServices)) {
                 for (const sub of cat.subServices) {
                   let mapGroup = null;
@@ -1333,6 +1446,12 @@ const bulkUpdatePricing = async (req, res) => {
                   if (!mapped) continue;
                   dstCat.subCategories[mapped] =
                     dstCat.subCategories[mapped] || {};
+
+                  // Subcategory display metadata
+                  if (sub.label !== undefined)
+                    dstCat.subCategories[mapped].label = sub.label;
+                  if (sub.info !== undefined)
+                    dstCat.subCategories[mapped].info = sub.info;
                 }
               }
             }
@@ -1362,6 +1481,10 @@ const bulkUpdatePricing = async (req, res) => {
             cab.vehicleTypes = cab.vehicleTypes || {};
             for (const sub of svc.subServices) {
               cab.vehicleTypes[sub.key] = cab.vehicleTypes[sub.key] || {};
+              if (sub.label !== undefined)
+                cab.vehicleTypes[sub.key].label = sub.label;
+              if (sub.info !== undefined)
+                cab.vehicleTypes[sub.key].info = sub.info;
             }
           }
           if (svc.helpers) cab.helpers = svc.helpers;
@@ -1372,6 +1495,10 @@ const bulkUpdatePricing = async (req, res) => {
             bike.vehicleTypes = bike.vehicleTypes || {};
             for (const sub of svc.subServices) {
               bike.vehicleTypes[sub.key] = bike.vehicleTypes[sub.key] || {};
+              if (sub.label !== undefined)
+                bike.vehicleTypes[sub.key].label = sub.label;
+              if (sub.info !== undefined)
+                bike.vehicleTypes[sub.key].info = sub.info;
             }
           }
           if (svc.helpers) bike.helpers = svc.helpers;
@@ -2062,6 +2189,189 @@ const updateRecoverySurgeFlags = async (req, res) => {
   }
 };
 
+// Local mappers for query values -> schema keys
+const crMapQuery = {
+  category(v) {
+    const k = String(v || "")
+      .toLowerCase()
+      .replace(/\s+/g, "-");
+    if (k === "car-recovery" || k === "car_recovery") return "carRecovery";
+    return null;
+  },
+  service(v) {
+    const k = String(v || "")
+      .toLowerCase()
+      .replace(/\s+/g, "-");
+    if (k === "towing") return "towing";
+    if (k === "winching") return "winching";
+    if (k === "roadside" || k === "roadside-assistance")
+      return "roadsideAssistance";
+    if (k === "specialized" || k === "specialized-heavy-recovery")
+      return "specializedHeavyRecovery";
+    return null;
+  },
+  subService(v, serviceKey) {
+    const k = String(v || "")
+      .toLowerCase()
+      .replace(/\s+/g, "-");
+    if (serviceKey === "towing") {
+      if (k === "flatbed") return "flatbed";
+      if (k === "wheel-lift" || k === "wheellift") return "wheelLift";
+    }
+    if (serviceKey === "winching") {
+      if (k === "on-road" || k === "on-road-winching") return "onRoadWinching";
+      if (k === "off-road" || k === "off-road-winching")
+        return "offRoadWinching";
+    }
+    if (serviceKey === "roadsideAssistance") {
+      if (k === "jumpstart" || k === "battery-jump-start") return "jumpstart";
+      if (k === "fuel-delivery") return "fuelDelivery";
+    }
+    if (serviceKey === "specializedHeavyRecovery") {
+      if (k === "luxury-exotic" || k === "luxury-exotic-car")
+        return "luxuryExotic";
+      if (k === "accident-collision") return "accidentCollision";
+      if (k === "heavy-duty-vehicle" || k === "heavy-duty")
+        return "heavyDutyVehicle";
+      if (k === "basement-pull-out" || k === "basement-pullout")
+        return "basementPullOut";
+    }
+    return null;
+  },
+};
+
+// Ensure path exists and return node reference
+function resolveCRNodeByKeys(config, serviceKey, subKey) {
+  config.serviceTypes = config.serviceTypes || {};
+  config.serviceTypes.carRecovery = ensureCarRecoveryServiceLevel(
+    config.serviceTypes.carRecovery || {}
+  );
+  const cr = config.serviceTypes.carRecovery;
+  cr.serviceTypes = cr.serviceTypes || {};
+  cr.serviceTypes[serviceKey] = cr.serviceTypes[serviceKey] || {
+    subCategories: {},
+  };
+  const holder = cr.serviceTypes[serviceKey];
+  holder.subCategories = holder.subCategories || {};
+  holder.subCategories[subKey] = holder.subCategories[subKey] || {};
+  return holder.subCategories[subKey];
+}
+
+// GET /admin/comprehensive-pricing?category=...&service=...&sub-service=...
+// If all three are present, returns only that node; else falls back to getComprehensivePricing
+const getPricingByQuery = async (req, res, next) => {
+  try {
+    const q = req.query || {};
+    const category = crMapQuery.category(q.category);
+    const service = crMapQuery.service(q.service);
+    const subService = crMapQuery.subService(
+      q["sub-service"] ?? q.subService,
+      service
+    );
+
+    // If any of the required params missing, return full config via existing handler
+    if (!category || !service || !subService) {
+      return getComprehensivePricing(req, res, next);
+    }
+
+    if (category !== "carRecovery") {
+      return res.status(400).json({
+        success: false,
+        message: "Only car-recovery is supported right now",
+      });
+    }
+
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config) {
+      return res.status(404).json({
+        success: false,
+        message: "Comprehensive pricing configuration not found",
+      });
+    }
+
+    const node = resolveCRNodeByKeys(config, service, subService);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        category: "car recovery",
+        service,
+        subService,
+        currency: config.currency || "AED",
+        node,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching pricing node",
+      error: error.message,
+    });
+  }
+};
+
+// PUT /admin/comprehensive-pricing?category=...&service=...&sub-service=...
+// Updates only the specified node, merges body into that node, returns that node only.
+const updatePricingByQuery = async (req, res) => {
+  try {
+    const q = req.query || {};
+    const category = crMapQuery.category(q.category);
+    const service = crMapQuery.service(q.service);
+    const subService = crMapQuery.subService(
+      q["sub-service"] ?? q.subService,
+      service
+    );
+
+    if (!category || !service || !subService) {
+      return res.status(400).json({
+        success: false,
+        message: "category, service and sub-service query params are required",
+      });
+    }
+    if (category !== "carRecovery") {
+      return res.status(400).json({
+        success: false,
+        message: "Only car-recovery is supported right now",
+      });
+    }
+
+    const adminId = req.user?.id || null;
+    const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (!config) {
+      return res.status(404).json({
+        success: false,
+        message: "Comprehensive pricing configuration not found",
+      });
+    }
+
+    const node = resolveCRNodeByKeys(config, service, subService);
+
+    const payload = { ...(req.body || {}) };
+    pruneUndefinedDeep(payload);
+    deepMergeReplaceArrays(node, payload);
+
+    config.lastUpdatedBy = adminId;
+    await config.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Pricing node updated",
+      data: {
+        category: "car recovery",
+        service,
+        subService,
+        node,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating pricing node",
+      error: error.message,
+    });
+  }
+};
+
 export {
   getComprehensivePricing,
   updateCarRecoveryRates,
@@ -2079,4 +2389,6 @@ export {
   updateRecoveryCancellationCharges,
   updateRecoveryNightCharges,
   updateRecoverySurgeFlags,
+  getPricingByQuery,
+  updatePricingByQuery,
 };
