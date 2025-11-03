@@ -27,9 +27,6 @@ const router = express.Router();
 router.use(authHandler);
 router.use(adminHandler);
 
-// Query-aware endpoints at "/".
-// - GET: if category/service/sub-service present, returns that node; else returns full config
-// - PUT: requires category/service/sub-service; updates only that node
 router.get("/", getPricingByQuery);
 router.put("/", updatePricingByQuery);
 
