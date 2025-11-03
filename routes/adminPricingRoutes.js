@@ -1,4 +1,4 @@
-import express from 'express';
+import express from "express";
 import {
   getAllPricingConfigs,
   getPricingByServiceType,
@@ -9,10 +9,10 @@ import {
   updateItemPricing,
   deleteItemPricing,
   getItemPricing,
-  deactivatePricingConfig
-} from '../controllers/adminPricingController.js';
-import authHandler from '../middlewares/authMIddleware.js';
-import adminHandler from '../middlewares/adminMiddleware.js';
+  deactivatePricingConfig,
+} from "../controllers/adminPricingController.js";
+import authHandler from "../middlewares/authMIddleware.js";
+import adminHandler from "../middlewares/adminMiddleware.js";
 
 const router = express.Router();
 
@@ -21,23 +21,23 @@ router.use(authHandler);
 router.use(adminHandler);
 
 // Get all pricing configurations
-router.get('/configs', getAllPricingConfigs);
+router.get("/configs", getAllPricingConfigs);
 
-// Get pricing by service type
-router.get('/configs/:serviceType', getPricingByServiceType);
+// Get pricing by service type (serviceType accepted in camelCase by controller)
+router.get("/configs/:serviceType", getPricingByServiceType);
 
-// Update pricing configurations
-router.put('/shifting-movers', updateShiftingMoversPricing);
-router.put('/car-recovery', updateCarRecoveryPricing);
-router.put('/appointment-service', updateAppointmentServicePricing);
+// Update pricing configurations (camelCase paths)
+router.put("/shiftingMovers", updateShiftingMoversPricing);
+router.put("/carRecovery", updateCarRecoveryPricing);
+router.put("/appointmentService", updateAppointmentServicePricing);
 
-// Item pricing management for shifting & movers
-router.post('/shifting-movers/items', addItemPricing);
-router.put('/shifting-movers/items/:itemName', updateItemPricing);
-router.delete('/shifting-movers/items/:itemName', deleteItemPricing);
-router.get('/shifting-movers/items', getItemPricing);
+// Item pricing management for shifting & movers (camelCase)
+router.post("/shiftingMovers/items", addItemPricing);
+router.put("/shiftingMovers/items/:itemName", updateItemPricing);
+router.delete("/shiftingMovers/items/:itemName", deleteItemPricing);
+router.get("/shiftingMovers/items", getItemPricing);
 
-// Deactivate pricing configuration
-router.patch('/configs/:serviceType/deactivate', deactivatePricingConfig);
+// Deactivate pricing configuration (kept as-is; path already clear)
+router.patch("/configs/:serviceType/deactivate", deactivatePricingConfig);
 
 export default router;
