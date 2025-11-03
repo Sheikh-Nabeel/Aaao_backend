@@ -1,37 +1,26 @@
 import ComprehensivePricing from "../models/comprehensivePricingModel.js";
 
 // Get current time for night charge calculation
-const getCurrentHour = () => {
-  return new Date().getHours();
-};
-// Check if current time is within night hours
+const getCurrentHour = () => new Date().getHours();
 const isNightTime = (nightCharges) => {
   if (!nightCharges || nightCharges.enabled !== true) return false;
   const currentHour = getCurrentHour();
   const startHour = Number(nightCharges.startHour);
   const endHour = Number(nightCharges.endHour);
   if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return false;
-
-  if (startHour === endHour) return false; // treat as disabled
-
-  if (startHour > endHour) {
-    // Night spans midnight (e.g., 22 -> 06)
+  if (startHour === endHour) return false;
+  if (startHour > endHour)
     return currentHour >= startHour || currentHour < endHour;
-  } else {
-    // Same day window
-    return currentHour >= startHour && currentHour < endHour;
-  }
+  return currentHour >= startHour && currentHour < endHour;
 };
 
 // Calculate surge multiplier based on demand
 const calculateSurgeMultiplier = (demandRatio, surgePricing) => {
   if (!surgePricing?.enabled) return 1;
-
   const surgeLevel = (surgePricing.levels || [])
     .slice()
     .sort((a, b) => b.demandRatio - a.demandRatio)
     .find((level) => Number(demandRatio) >= Number(level.demandRatio));
-
   return surgeLevel ? Number(surgeLevel.multiplier || 1) : 1;
 };
 
@@ -47,21 +36,14 @@ const calculateCancellationCharges = (
     after50PercentDistance,
     afterArrival,
   } = cancellationCharges || {};
-
-  // No charge for driver cancellations
   if (cancellationReason === "driver_cancelled") return 0;
-
-  // Customer cancellation charges based on trip progress
   if (
     cancellationReason === "customer_cancelled_after_arrival" ||
     tripProgress === "arrived"
-  ) {
+  )
     return Number(afterArrival || 0);
-  }
   if (Number(tripProgress) >= 0.5) return Number(after50PercentDistance || 0);
   if (Number(tripProgress) >= 0.25) return Number(after25PercentDistance || 0);
-
-  // Default charge for early customer cancellation
   return Number(beforeArrival || 0);
 };
 
@@ -72,26 +54,22 @@ const calculateWaitingCharges = (waitingMinutes, waitingCharges) => {
     perMinuteRate = 0,
     maximumCharge = Infinity,
   } = waitingCharges || {};
-
   if (Number(waitingMinutes) <= Number(freeMinutes)) return 0;
-
   const chargeableMinutes = Math.max(
     0,
     Number(waitingMinutes) - Number(freeMinutes)
   );
   const calculatedCharge = chargeableMinutes * Number(perMinuteRate);
-
   return Math.min(calculatedCharge, Number(maximumCharge));
 };
 
 // Calculate free stay minutes for round trips
 const calculateFreeStayMinutes = (distance, roundTripConfig) => {
   if (!roundTripConfig?.freeStayMinutes?.enabled) return 0;
-
-  const calculatedMinutes =
+  const minutes =
     Number(distance) * Number(roundTripConfig.freeStayMinutes.ratePerKm || 0);
   return Math.min(
-    calculatedMinutes,
+    minutes,
     Number(roundTripConfig.freeStayMinutes.maximumMinutes || 0)
   );
 };
@@ -104,12 +82,7 @@ const shouldShowRefreshmentAlert = (
   serviceType = null,
   recoveryConfig = null
 ) => {
-  // For car recovery services, use specific refreshment alert config
-  if (
-    serviceType === "car recovery" &&
-    recoveryConfig &&
-    recoveryConfig.refreshmentAlert
-  ) {
+  if (serviceType === "car recovery" && recoveryConfig?.refreshmentAlert) {
     if (!recoveryConfig.refreshmentAlert.enabled) return false;
     return (
       Number(distance) >=
@@ -118,10 +91,7 @@ const shouldShowRefreshmentAlert = (
         Number(recoveryConfig.refreshmentAlert.minimumDuration || 0)
     );
   }
-
-  // Default logic for other services
   if (!roundTripConfig?.refreshmentAlert?.enabled) return false;
-
   return (
     Number(distance) >=
       Number(roundTripConfig.refreshmentAlert.minimumDistance || 0) ||
@@ -133,18 +103,10 @@ const shouldShowRefreshmentAlert = (
 // Calculate refreshment/overtime charges for car recovery
 const calculateRefreshmentCharges = (overtimeMinutes, refreshmentConfig) => {
   if (!refreshmentConfig?.enabled || Number(overtimeMinutes) <= 0) return 0;
-
-  // Calculate charges based on per minute or per 5-minute blocks
   const perMinuteCharge =
     Number(overtimeMinutes) * Number(refreshmentConfig.perMinuteCharges || 0);
-  // For now we keep per-minute; if desired, switch to per-5-min:
-  // const per5MinCharge = Math.ceil(overtimeMinutes / 5) * Number(refreshmentConfig.per5MinCharges || 0);
-
-  const calculatedCharge = perMinuteCharge;
-
-  // Apply maximum charge cap
   return Math.min(
-    calculatedCharge,
+    perMinuteCharge,
     Number(refreshmentConfig.maximumCharges || Infinity)
   );
 };
@@ -152,28 +114,25 @@ const calculateRefreshmentCharges = (overtimeMinutes, refreshmentConfig) => {
 // Calculate free stay minutes for car recovery round trips
 const calculateCarRecoveryFreeStay = (distance, freeStayConfig) => {
   if (!freeStayConfig?.enabled) return 0;
-
-  const calculatedMinutes =
-    Number(distance) * Number(freeStayConfig.ratePerKm || 0);
-  return Math.min(calculatedMinutes, Number(freeStayConfig.maximumCap || 0));
+  const minutes = Number(distance) * Number(freeStayConfig.ratePerKm || 0);
+  return Math.min(minutes, Number(freeStayConfig.maximumCap || 0));
 };
 
 // Helper: find Car Recovery sub-service override (towing/winching/roadside/keyUnlocker)
 const getCRSubOverride = (recoveryConfig, vehicleType) => {
   if (!vehicleType || !recoveryConfig?.serviceTypes) return null;
 
-  const towing =
-    recoveryConfig.serviceTypes.towing?.subCategories?.[vehicleType];
-  const winching =
-    recoveryConfig.serviceTypes.winching?.subCategories?.[vehicleType];
-  const roadside =
-    recoveryConfig.serviceTypes.roadsideAssistance?.subCategories?.[
-      vehicleType
-    ];
+  const T = MAP_KEYS.carRecovery.categories["towing services"];
+  const W = MAP_KEYS.carRecovery.categories["winching services"];
+  const R = MAP_KEYS.carRecovery.categories["roadside assistance"];
 
-  if (towing) return { scope: "towing", block: towing };
-  if (winching) return { scope: "winching", block: winching };
-  if (roadside) return { scope: "roadside", block: roadside };
+  const towing = recoveryConfig.serviceTypes[T]?.subCategories?.[vehicleType];
+  const winching = recoveryConfig.serviceTypes[W]?.subCategories?.[vehicleType];
+  const roadside = recoveryConfig.serviceTypes[R]?.subCategories?.[vehicleType];
+
+  if (towing) return { scope: T, block: towing };
+  if (winching) return { scope: W, block: winching };
+  if (roadside) return { scope: R, block: roadside };
 
   if (vehicleType === "keyUnlocker") {
     const keyBlock = recoveryConfig.serviceTypes.keyUnlockerServices;
@@ -186,8 +145,6 @@ const getCRSubOverride = (recoveryConfig, vehicleType) => {
 function computeShiftingMoversExtras(config, moversOptions = {}) {
   let extras = 0;
   const sm = config?.serviceTypes?.shiftingMovers || {};
-
-  // 1) Basic services (flat fee if selected)
   const bsCfg = sm.basicServices || {};
   const selectedBS = moversOptions.basicServices || {};
   if (selectedBS.loadingUnloadingHelper && bsCfg.loadingUnloadingHelper) {
@@ -200,7 +157,6 @@ function computeShiftingMoversExtras(config, moversOptions = {}) {
     extras += Number(bsCfg.fixers.flatFee || 0);
   }
 
-  // 2) Pickup/Drop-off policies
   const itemsDefault = {};
   const multiplyItems = (items, perFare) => {
     let sum = 0;
@@ -213,7 +169,6 @@ function computeShiftingMoversExtras(config, moversOptions = {}) {
     return sum;
   };
 
-  // Pickup
   const pickup = moversOptions.pickup || {};
   if (pickup.type === "stairs") {
     const floors = Math.max(0, Number(pickup.floors || 0));
@@ -226,7 +181,6 @@ function computeShiftingMoversExtras(config, moversOptions = {}) {
     extras += Number(sm.pickupLocationPolicy?.groundFloor?.extraCharge || 0);
   }
 
-  // Drop-off
   const dropoff = moversOptions.dropoff || {};
   if (dropoff.type === "stairs") {
     const floors = Math.max(0, Number(dropoff.floors || 0));
@@ -239,17 +193,14 @@ function computeShiftingMoversExtras(config, moversOptions = {}) {
     extras += Number(sm.dropoffLocationPolicy?.groundFloor?.extraCharge || 0);
   }
 
-  // 3) Packing per item
   const packingItems = moversOptions.packingItems || {};
   const packingFares = sm.packingFares || {};
   extras += multiplyItems(packingItems, packingFares);
 
-  // 4) Fixing per item
   const fixingItems = moversOptions.fixingItems || {};
   const fixingFares = sm.fixingFares || {};
   extras += multiplyItems(fixingItems, fixingFares);
 
-  // 5) Loading/Unloading per item
   const loadItems = moversOptions.loadingUnloadingItems || {};
   const loadFares = sm.loadingUnloadingFares || {};
   extras += multiplyItems(loadItems, loadFares);
@@ -776,21 +727,21 @@ const FLOW = {
 const MAP_KEYS = {
   carRecovery: {
     categories: {
-      "towing services": "towing",
-      "winching services": "winching",
+      "towing services": "towingServices",
+      "winching services": "winchingServices",
       "roadside assistance": "roadsideAssistance",
       "specialized/heavy recovery": "specializedHeavyRecovery",
     },
     towingSub: {
-      "flatbed towing": "flatbed",
-      "wheel lift towing": "wheelLift",
+      "flatbed towing": "flatbedTowing",
+      "wheel lift towing": "wheelLiftTowing",
     },
     winchingSub: {
       "on-road winching": "onRoadWinching",
       "off-road winching": "offRoadWinching",
     },
     roadsideSub: {
-      "battery jump start": "jumpstart",
+      "battery jump start": "batteryJumpStart",
       "fuel delivery": "fuelDelivery",
     },
     specializedSub: {
@@ -827,7 +778,7 @@ function deepMergeReplaceArrays(target, source) {
     return target;
   Object.keys(source).forEach((key) => {
     const srcVal = source[key];
-    if (srcVal === undefined) return; // skip undefined entirely
+    if (srcVal === undefined) return;
     if (srcVal && typeof srcVal === "object" && !Array.isArray(srcVal)) {
       if (
         !target[key] ||
@@ -838,7 +789,7 @@ function deepMergeReplaceArrays(target, source) {
       }
       deepMergeReplaceArrays(target[key], srcVal);
     } else {
-      if (srcVal === null) return; // skip null for object-typed schema nodes
+      if (srcVal === null) return;
       target[key] = srcVal;
     }
   });
@@ -895,129 +846,101 @@ function alignCarRecoveryToFlow(cr) {
   if (!cr || typeof cr !== "object") return cr;
   const out = ensureCarRecoveryServiceLevel({ ...cr });
 
+  const T = MAP_KEYS.carRecovery.categories["towing services"]; // towingServices
+  const W = MAP_KEYS.carRecovery.categories["winching services"]; // winchingServices
+  const R = MAP_KEYS.carRecovery.categories["roadside assistance"]; // roadsideAssistance
+  const S = MAP_KEYS.carRecovery.categories["specialized/heavy recovery"]; // specializedHeavyRecovery
+
   const desiredCats = {
-    [MAP_KEYS.carRecovery.categories["towing services"]]: { subCategories: {} },
-    [MAP_KEYS.carRecovery.categories["winching services"]]: {
-      subCategories: {},
-    },
-    [MAP_KEYS.carRecovery.categories["roadside assistance"]]: {
-      subCategories: {},
-    },
-    [MAP_KEYS.carRecovery.categories["specialized/heavy recovery"]]: {
-      subCategories: {},
-    },
+    [T]: { subCategories: {} },
+    [W]: { subCategories: {} },
+    [R]: { subCategories: {} },
+    [S]: { subCategories: {} },
   };
 
   const current = (out.serviceTypes = out.serviceTypes || {});
 
-  // Preserve category-level labels and imageHint
-  desiredCats.towing.label = current.towing?.label || "Towing Services";
-  desiredCats.towing.imageHint = current.towing?.imageHint || "";
-  desiredCats.winching.label = current.winching?.label || "Winching Services";
-  desiredCats.winching.imageHint = current.winching?.imageHint || "";
-  desiredCats.roadsideAssistance.label =
-    current.roadsideAssistance?.label || "Roadside Assistance";
-  desiredCats.roadsideAssistance.imageHint =
-    current.roadsideAssistance?.imageHint || "";
-  desiredCats.specializedHeavyRecovery.label =
-    current.specializedHeavyRecovery?.label || "Specialized/Heavy Recovery";
-  desiredCats.specializedHeavyRecovery.imageHint =
-    current.specializedHeavyRecovery?.imageHint || "";
+  // Category meta
+  desiredCats[T].label = current[T]?.label || "Towing Services";
+  desiredCats[T].imageHint = current[T]?.imageHint || "";
+  desiredCats[W].label = current[W]?.label || "Winching Services";
+  desiredCats[W].imageHint = current[W]?.imageHint || "";
+  desiredCats[R].label = current[R]?.label || "Roadside Assistance";
+  desiredCats[R].imageHint = current[R]?.imageHint || "";
+  desiredCats[S].label = current[S]?.label || "Specialized/Heavy Recovery";
+  desiredCats[S].imageHint = current[S]?.imageHint || "";
 
-  // Ensure each required subcategory key exists at least as {}
-  // Towing
-  const towing = current.towing || {};
-  desiredCats.towing.subCategories.flatbed =
-    towing.subCategories?.flatbed ?? {};
-  desiredCats.towing.subCategories.wheelLift =
-    towing.subCategories?.wheelLift ?? {};
-
-  // Winching
-  const winching = current.winching || {};
-  desiredCats.winching.subCategories.onRoadWinching =
-    winching.subCategories?.onRoadWinching ?? {};
-  desiredCats.winching.subCategories.offRoadWinching =
-    winching.subCategories?.offRoadWinching ?? {};
-
-  // Roadside Assistance
-  const roadside = current.roadsideAssistance || {};
-  desiredCats.roadsideAssistance.subCategories.jumpstart =
-    roadside.subCategories?.jumpstart ?? {};
-  desiredCats.roadsideAssistance.subCategories.fuelDelivery =
-    roadside.subCategories?.fuelDelivery ?? {};
-
-  // Specialized/Heavy Recovery
-  const spec = current.specializedHeavyRecovery || {};
-  desiredCats.specializedHeavyRecovery.subCategories.luxuryExotic =
-    spec.subCategories?.luxuryExotic ?? {};
-  desiredCats.specializedHeavyRecovery.subCategories.accidentCollision =
-    spec.subCategories?.accidentCollision ?? {};
-  desiredCats.specializedHeavyRecovery.subCategories.heavyDutyVehicle =
-    spec.subCategories?.heavyDutyVehicle ?? {};
-  desiredCats.specializedHeavyRecovery.subCategories.basementPullOut =
-    spec.subCategories?.basementPullOut ?? {};
-
-  // Preserve subcategory labels/info if present
-  const preserveLeaf = (dstLeaf, srcLeaf, fallbackLabel) => {
-    dstLeaf.label = srcLeaf?.label || fallbackLabel || "";
-    dstLeaf.info = srcLeaf?.info || "";
-    return dstLeaf;
+  const copyLeaf = (src, fallbackLabel) => {
+    const dst = {};
+    if (!src || typeof src !== "object")
+      return { label: fallbackLabel, info: "" };
+    [
+      "enabled",
+      "convenienceFee",
+      "baseFare",
+      "perKmRate",
+      "waitingCharges",
+      "nightCharges",
+      "surgePricing",
+    ].forEach((f) => {
+      if (src[f] !== undefined) dst[f] = src[f];
+    });
+    dst.label = src.label || fallbackLabel || "";
+    dst.info = src.info || "";
+    return dst;
   };
 
-  desiredCats.towing.subCategories.flatbed = preserveLeaf(
-    desiredCats.towing.subCategories.flatbed,
-    towing.subCategories?.flatbed,
+  // Towing subCategories (support legacy flatbed/wheelLift)
+  const towSrc = current[T]?.subCategories || {};
+  desiredCats[T].subCategories.flatbedTowing = copyLeaf(
+    towSrc.flatbedTowing ?? towSrc.flatbed,
     "Flatbed Towing"
   );
-  desiredCats.towing.subCategories.wheelLift = preserveLeaf(
-    desiredCats.towing.subCategories.wheelLift,
-    towing.subCategories?.wheelLift,
+  desiredCats[T].subCategories.wheelLiftTowing = copyLeaf(
+    towSrc.wheelLiftTowing ?? towSrc.wheelLift,
     "Wheel Lift Towing"
   );
-  desiredCats.winching.subCategories.onRoadWinching = preserveLeaf(
-    desiredCats.winching.subCategories.onRoadWinching,
-    winching.subCategories?.onRoadWinching,
+
+  // Winching
+  const winSrc = current[W]?.subCategories || {};
+  desiredCats[W].subCategories.onRoadWinching = copyLeaf(
+    winSrc.onRoadWinching,
     "On-Road Winching"
   );
-  desiredCats.winching.subCategories.offRoadWinching = preserveLeaf(
-    desiredCats.winching.subCategories.offRoadWinching,
-    winching.subCategories?.offRoadWinching,
+  desiredCats[W].subCategories.offRoadWinching = copyLeaf(
+    winSrc.offRoadWinching,
     "Off-Road Winching"
   );
-  desiredCats.roadsideAssistance.subCategories.jumpstart = preserveLeaf(
-    desiredCats.roadsideAssistance.subCategories.jumpstart,
-    roadside.subCategories?.jumpstart,
+
+  // Roadside (support legacy jumpstart)
+  const roadSrc = current[R]?.subCategories || {};
+  desiredCats[R].subCategories.batteryJumpStart = copyLeaf(
+    roadSrc.batteryJumpStart ?? roadSrc.jumpstart,
     "Battery Jump Start"
   );
-  desiredCats.roadsideAssistance.subCategories.fuelDelivery = preserveLeaf(
-    desiredCats.roadsideAssistance.subCategories.fuelDelivery,
-    roadside.subCategories?.fuelDelivery,
+  desiredCats[R].subCategories.fuelDelivery = copyLeaf(
+    roadSrc.fuelDelivery,
     "Fuel Delivery"
   );
-  desiredCats.specializedHeavyRecovery.subCategories.luxuryExotic =
-    preserveLeaf(
-      desiredCats.specializedHeavyRecovery.subCategories.luxuryExotic,
-      spec.subCategories?.luxuryExotic,
-      "Luxury & Exotic Car Recovery"
-    );
-  desiredCats.specializedHeavyRecovery.subCategories.accidentCollision =
-    preserveLeaf(
-      desiredCats.specializedHeavyRecovery.subCategories.accidentCollision,
-      spec.subCategories?.accidentCollision,
-      "Accident & Collision Recovery"
-    );
-  desiredCats.specializedHeavyRecovery.subCategories.heavyDutyVehicle =
-    preserveLeaf(
-      desiredCats.specializedHeavyRecovery.subCategories.heavyDutyVehicle,
-      spec.subCategories?.heavyDutyVehicle,
-      "Heavy-Duty Vehicle Recovery"
-    );
-  desiredCats.specializedHeavyRecovery.subCategories.basementPullOut =
-    preserveLeaf(
-      desiredCats.specializedHeavyRecovery.subCategories.basementPullOut,
-      spec.subCategories?.basementPullOut,
-      "Basement Pull-Out"
-    );
+
+  // Specialized (support both long/legacy)
+  const specSrc = current[S]?.subCategories || {};
+  desiredCats[S].subCategories.luxuryExoticCarRecovery = copyLeaf(
+    specSrc.luxuryExoticCarRecovery ?? specSrc.luxuryExotic,
+    "Luxury & Exotic Car Recovery"
+  );
+  desiredCats[S].subCategories.accidentCollisionRecovery = copyLeaf(
+    specSrc.accidentCollisionRecovery ?? specSrc.accidentCollision,
+    "Accident & Collision Recovery"
+  );
+  desiredCats[S].subCategories.heavyDutyVehicleRecovery = copyLeaf(
+    specSrc.heavyDutyVehicleRecovery ?? specSrc.heavyDutyVehicle,
+    "Heavy-Duty Vehicle Recovery"
+  );
+  desiredCats[S].subCategories.basementPullOut = copyLeaf(
+    specSrc.basementPullOut,
+    "Basement Pull-Out"
+  );
 
   out.serviceTypes = desiredCats;
   return out;
@@ -1026,8 +949,6 @@ function alignCarRecoveryToFlow(cr) {
 function alignShiftingMoversToFlow(sm) {
   if (!sm || typeof sm !== "object") return sm;
   const out = { ...sm };
-
-  // Ensure categories structure exists and keys exist as objects
   out.categories = out.categories || {};
   const cats = {};
   FLOW.moversCategories.forEach((name) => {
@@ -1040,8 +961,6 @@ function alignShiftingMoversToFlow(sm) {
     };
   });
   out.categories = cats;
-
-  // Ensure other pricing blocks are at least empty objects (avoid undefined cast)
   out.vehicleCost = out.vehicleCost || {};
   out.basicServices = out.basicServices || {};
   out.pickupLocationPolicy = out.pickupLocationPolicy || {};
@@ -1049,7 +968,6 @@ function alignShiftingMoversToFlow(sm) {
   out.packingFares = out.packingFares || {};
   out.fixingFares = out.fixingFares || {};
   out.loadingUnloadingFares = out.loadingUnloadingFares || {};
-
   return out;
 }
 
@@ -1067,22 +985,18 @@ const getComprehensivePricing = async (req, res) => {
       vat: 0,
       minimumFare: 0,
     };
-
     const config = await ComprehensivePricing.findOne(
       { isActive: true },
       projection
     ).populate("lastUpdatedBy", "name email");
-
     if (!config) {
       return res.status(404).json({
         success: false,
         message: "Comprehensive pricing configuration not found",
       });
     }
-
     const json = config.toObject({ virtuals: true }) || {};
     json.serviceTypes = json.serviceTypes || {};
-
     if (json.serviceTypes.carRecovery) {
       json.serviceTypes.carRecovery = alignCarRecoveryToFlow(
         json.serviceTypes.carRecovery
@@ -1093,11 +1007,7 @@ const getComprehensivePricing = async (req, res) => {
         json.serviceTypes.shiftingMovers
       );
     }
-
-    res.status(200).json({
-      success: true,
-      data: json,
-    });
+    res.status(200).json({ success: true, data: json });
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -2192,48 +2102,88 @@ const updateRecoverySurgeFlags = async (req, res) => {
 // Local mappers for query values -> schema keys
 const crMapQuery = {
   category(v) {
-    const k = String(v || "")
-      .toLowerCase()
-      .replace(/\s+/g, "-");
-    if (k === "car-recovery" || k === "car_recovery") return "carRecovery";
+    const s = String(v || "").trim();
+    const k = s.toLowerCase().replace(/\s+/g, "-");
+    if (k === "car-recovery" || k === "car_recovery" || s === "carRecovery")
+      return "carRecovery";
     return null;
   },
   service(v) {
-    const k = String(v || "")
-      .toLowerCase()
-      .replace(/\s+/g, "-");
-    if (k === "towing") return "towing";
-    if (k === "winching") return "winching";
-    if (k === "roadside" || k === "roadside-assistance")
-      return "roadsideAssistance";
-    if (k === "specialized" || k === "specialized-heavy-recovery")
-      return "specializedHeavyRecovery";
+    const s = String(v || "").trim();
+    const k = s.toLowerCase().replace(/\s+/g, "-");
+    if (s === "towingServices" || k === "towing-services" || k === "towing")
+      return MAP_KEYS.carRecovery.categories["towing services"];
+    if (
+      s === "winchingServices" ||
+      k === "winching-services" ||
+      k === "winching"
+    )
+      return MAP_KEYS.carRecovery.categories["winching services"];
+    if (
+      s === "roadsideAssistance" ||
+      k === "roadside-assistance" ||
+      k === "roadside"
+    )
+      return MAP_KEYS.carRecovery.categories["roadside assistance"];
+    if (
+      s === "specializedHeavyRecovery" ||
+      k === "specialized-heavy-recovery" ||
+      k === "specialized"
+    )
+      return MAP_KEYS.carRecovery.categories["specialized/heavy recovery"];
     return null;
   },
   subService(v, serviceKey) {
-    const k = String(v || "")
-      .toLowerCase()
-      .replace(/\s+/g, "-");
-    if (serviceKey === "towing") {
-      if (k === "flatbed") return "flatbed";
-      if (k === "wheel-lift" || k === "wheellift") return "wheelLift";
+    const s = String(v || "").trim();
+    const k = s.toLowerCase().replace(/\s+/g, "-");
+    const T = MAP_KEYS.carRecovery.categories["towing services"];
+    const W = MAP_KEYS.carRecovery.categories["winching services"];
+    const R = MAP_KEYS.carRecovery.categories["roadside assistance"];
+    const S = MAP_KEYS.carRecovery.categories["specialized/heavy recovery"];
+
+    if (serviceKey === T) {
+      if (s === "flatbedTowing" || k === "flatbed-towing" || k === "flatbed")
+        return "flatbedTowing";
+      if (
+        s === "wheelLiftTowing" ||
+        k === "wheel-lift-towing" ||
+        k === "wheel-lift"
+      )
+        return "wheelLiftTowing";
     }
-    if (serviceKey === "winching") {
-      if (k === "on-road" || k === "on-road-winching") return "onRoadWinching";
-      if (k === "off-road" || k === "off-road-winching")
+    if (serviceKey === W) {
+      if (s === "onRoadWinching" || k === "on-road-winching" || k === "on-road")
+        return "onRoadWinching";
+      if (
+        s === "offRoadWinching" ||
+        k === "off-road-winching" ||
+        k === "off-road"
+      )
         return "offRoadWinching";
     }
-    if (serviceKey === "roadsideAssistance") {
-      if (k === "jumpstart" || k === "battery-jump-start") return "jumpstart";
-      if (k === "fuel-delivery") return "fuelDelivery";
+    if (serviceKey === R) {
+      if (
+        s === "batteryJumpStart" ||
+        k === "battery-jump-start" ||
+        k === "jumpstart"
+      )
+        return "batteryJumpStart";
+      if (s === "fuelDelivery" || k === "fuel-delivery") return "fuelDelivery";
     }
-    if (serviceKey === "specializedHeavyRecovery") {
-      if (k === "luxury-exotic" || k === "luxury-exotic-car")
-        return "luxuryExotic";
-      if (k === "accident-collision") return "accidentCollision";
-      if (k === "heavy-duty-vehicle" || k === "heavy-duty")
-        return "heavyDutyVehicle";
-      if (k === "basement-pull-out" || k === "basement-pullout")
+    if (serviceKey === S) {
+      if (s === "luxuryExoticCarRecovery" || k.startsWith("luxury-exotic"))
+        return "luxuryExoticCarRecovery";
+      if (
+        s === "accidentCollisionRecovery" ||
+        k.startsWith("accident-collision")
+      )
+        return "accidentCollisionRecovery";
+      if (
+        s === "heavyDutyVehicleRecovery" ||
+        k.startsWith("heavy-duty-vehicle")
+      )
+        return "heavyDutyVehicleRecovery";
+      if (s === "basementPullOut" || k.startsWith("basement-pull"))
         return "basementPullOut";
     }
     return null;
@@ -2242,22 +2192,18 @@ const crMapQuery = {
 
 // NEW: Shifting & Movers mapper for selective queries
 const moversMapQuery = {
-  // Accepts: serviceType=shifting-movers | shifting-&-movers | shifting_movers
   serviceType(v) {
-    const k = String(v || "")
-      .toLowerCase()
-      .replace(/\s+/g, "-");
+    const s = String(v || "").trim();
+    const k = s.toLowerCase().replace(/\s+/g, "-");
     if (
+      s === "shiftingMovers" ||
       k === "shifting-movers" ||
       k === "shifting-&-movers" ||
       k === "shifting_-_movers"
-    ) {
+    )
       return "shiftingMovers";
-    }
     return null;
   },
-  // Accepts user-facing category names; maps to schema keys
-  // moversCategory=small mover | medium mover | heavy mover
   categoryKey(v) {
     const k = String(v || "")
       .toLowerCase()
@@ -2269,7 +2215,7 @@ const moversMapQuery = {
   },
 };
 
-// Ensure path exists and return node reference
+// Ensure path exists and return node reference with defaults
 function resolveCRNodeByKeys(config, serviceKey, subKey) {
   config.serviceTypes = config.serviceTypes || {};
   config.serviceTypes.carRecovery = ensureCarRecoveryServiceLevel(
@@ -2282,7 +2228,52 @@ function resolveCRNodeByKeys(config, serviceKey, subKey) {
   };
   const holder = cr.serviceTypes[serviceKey];
   holder.subCategories = holder.subCategories || {};
-  holder.subCategories[subKey] = holder.subCategories[subKey] || {};
+
+  // Provide defaults so a fresh node isn't an empty object
+  const humanize = (s = "") =>
+    String(s)
+      .replace(/_/g, " ")
+      .replace(/([A-Z])/g, " $1")
+      .trim()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
+  const ensureLeafDefaults = (leaf, fallbackLabel = "") => {
+    const d = leaf && typeof leaf === "object" ? { ...leaf } : {};
+    d.label = d.label || fallbackLabel;
+    d.info = d.info || "";
+    d.enabled = d.enabled ?? false;
+    d.convenienceFee = d.convenienceFee ?? 0;
+    d.baseFare = d.baseFare || { amount: 0, coverageKm: 0 };
+    d.perKmRate = d.perKmRate || {
+      afterBaseCoverage: 0,
+      cityWiseAdjustment: { enabled: false, aboveKm: 0, adjustedRate: 0 },
+    };
+    d.waitingCharges = d.waitingCharges || {
+      freeMinutes: 0,
+      perMinuteRate: 0,
+      maximumCharge: 0,
+      driverControlPopup: { enabled: false },
+    };
+    d.nightCharges = d.nightCharges || {
+      enabled: false,
+      startHour: 22,
+      endHour: 6,
+      fixedAmount: 0,
+      multiplier: 1,
+    };
+    d.surgePricing = d.surgePricing || {
+      enabled: false,
+      adminControlled: false,
+      noSurge: true,
+      surge1_5x: false,
+      surge2_0x: false,
+      levels: [],
+    };
+    return d;
+  };
+
+  const existing = holder.subCategories[subKey];
+  holder.subCategories[subKey] = ensureLeafDefaults(existing, humanize(subKey));
   return holder.subCategories[subKey];
 }
 
@@ -2291,6 +2282,45 @@ function resolveCRNodeByKeys(config, serviceKey, subKey) {
 const getPricingByQuery = async (req, res, next) => {
   try {
     const q = req.query || {};
+
+    // Shifting & Movers
+    const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
+    if (svcType === "shiftingMovers") {
+      const config = await ComprehensivePricing.findOne({ isActive: true });
+      if (!config) {
+        return res.status(404).json({
+          success: false,
+          message: "Comprehensive pricing configuration not found",
+        });
+      }
+      const sm =
+        (config.serviceTypes && config.serviceTypes.shiftingMovers) || {};
+      const catKey = moversMapQuery.categoryKey(
+        q.moversCategory || q.categoryKey
+      );
+      if (catKey) {
+        const node = (sm.categories && sm.categories[catKey]) || {};
+        return res.status(200).json({
+          success: true,
+          data: {
+            serviceType: "shiftingMovers",
+            categoryKey: catKey,
+            currency: config.currency || "AED",
+            node,
+          },
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        data: {
+          serviceType: "shiftingMovers",
+          currency: config.currency || "AED",
+          node: sm,
+        },
+      });
+    }
+
+    // Car Recovery
     const category = crMapQuery.category(q.category);
     const service = crMapQuery.service(q.service);
     const subService = crMapQuery.subService(
@@ -2298,15 +2328,14 @@ const getPricingByQuery = async (req, res, next) => {
       service
     );
 
-    // If any of the required params missing, return full config via existing handler
     if (!category || !service || !subService) {
+      // Fall back only if insufficient params
       return getComprehensivePricing(req, res, next);
     }
-
     if (category !== "carRecovery") {
       return res.status(400).json({
         success: false,
-        message: "Only car-recovery is supported right now",
+        message: "Only car-recovery is supported in this path",
       });
     }
 
@@ -2319,7 +2348,6 @@ const getPricingByQuery = async (req, res, next) => {
     }
 
     const node = resolveCRNodeByKeys(config, service, subService);
-
     return res.status(200).json({
       success: true,
       data: {
@@ -2345,10 +2373,10 @@ const updatePricingByQuery = async (req, res) => {
   try {
     const q = req.query || {};
 
-    // Shifting & Movers selective PUT
+    // Shifting & Movers
     const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
     if (svcType === "shiftingMovers") {
-      const adminId = req.user?.id || null;
+      const adminId = req.user?.id || req.user?._id || null;
       const config = await ComprehensivePricing.findOne({ isActive: true });
       if (!config) {
         return res.status(404).json({
@@ -2356,8 +2384,6 @@ const updatePricingByQuery = async (req, res) => {
           message: "Comprehensive pricing configuration not found",
         });
       }
-
-      // Ensure base branch
       config.serviceTypes = config.serviceTypes || {};
       config.serviceTypes.shiftingMovers =
         config.serviceTypes.shiftingMovers || {};
@@ -2371,33 +2397,28 @@ const updatePricingByQuery = async (req, res) => {
       const catKey = moversMapQuery.categoryKey(
         q.moversCategory || q.categoryKey
       );
+      const payload = { ...(req.body || {}) };
+      pruneUndefinedDeep(payload);
 
       if (catKey) {
         sm.categories[catKey] = sm.categories[catKey] || {};
-        const node = sm.categories[catKey];
-
-        const payload = { ...(req.body || {}) };
-        pruneUndefinedDeep(payload);
-        deepMergeReplaceArrays(node, payload);
-
+        deepMergeReplaceArrays(sm.categories[catKey], payload);
         config.lastUpdatedBy = adminId;
         await config.save();
-
         return res.status(200).json({
           success: true,
           message: "Movers category updated",
-          data: { serviceType: "shiftingMovers", categoryKey: catKey, node },
+          data: {
+            serviceType: "shiftingMovers",
+            categoryKey: catKey,
+            node: sm.categories[catKey],
+          },
         });
       }
 
-      // No category filter: update service-level block only
-      const payload = { ...(req.body || {}) };
-      pruneUndefinedDeep(payload);
       deepMergeReplaceArrays(sm, payload);
-
       config.lastUpdatedBy = adminId;
       await config.save();
-
       return res.status(200).json({
         success: true,
         message: "Shifting & Movers updated",
@@ -2405,7 +2426,7 @@ const updatePricingByQuery = async (req, res) => {
       });
     }
 
-    // Car Recovery selective PUT
+    // Car Recovery
     const category = crMapQuery.category(q.category);
     const service = crMapQuery.service(q.service);
     const subService = crMapQuery.subService(
@@ -2426,7 +2447,7 @@ const updatePricingByQuery = async (req, res) => {
       });
     }
 
-    const adminId = req.user?.id || null;
+    const adminId = req.user?.id || req.user?._id || null;
     const config = await ComprehensivePricing.findOne({ isActive: true });
     if (!config) {
       return res.status(404).json({
@@ -2436,7 +2457,6 @@ const updatePricingByQuery = async (req, res) => {
     }
 
     const node = resolveCRNodeByKeys(config, service, subService);
-
     const payload = { ...(req.body || {}) };
     pruneUndefinedDeep(payload);
     deepMergeReplaceArrays(node, payload);
