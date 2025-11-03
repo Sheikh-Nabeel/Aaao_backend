@@ -1073,7 +1073,6 @@ class RecoveryHandler {
                 distance: Number(distanceKm || 0),
                 estimatedFare: Number(estimatedFare || 0),
                 currency: currencyFromConfig,
-                // Personalized distance/eta if Google DM enriched, else fallback to existing fields
                 driverDistance: {
                   meters:
                     d.distanceMeters != null
@@ -2236,235 +2235,112 @@ class RecoveryHandler {
   /**
    * Handle cancellation of a recovery request (DB-first, no in-memory dependency)
    */
-  /**
-   * Cancel a recovery booking.
-   * - Notifies ONLY booking.user and booking.driver via sendToUser (no rooms)
-   * - Allows cancel from both customer and assigned driver (must be a participant)
-   * - Idempotent; retries shortly if another worker is processing cancel
-   */
   async handleCancel(ws, message) {
-    // Normalize message
+    // Normalize payload
     let msg = message || {};
     if (typeof msg === "string") {
       try {
         msg = JSON.parse(msg);
       } catch {
-        msg = { raw: message };
+        msg = {};
       }
     }
     const data = msg?.data || {};
-    const bookingId = String(data?.bookingId || "").trim();
+    const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
     const reason = String(data?.reason || "cancelled").trim();
-
-    if (!bookingId) {
-      this.emitToClient(ws, {
-        event: "error",
-        bookingId: null,
-        error: { code: "CANCEL_ERROR", message: "bookingId is required" },
-      });
-      return;
-    }
 
     // Helpers
     const toStr = (v) => (v != null ? String(v) : "");
-    const sendToUserSafe = (userId, payload) => {
+    const sendToUserSafe = (id, payload) => {
+      const uid = toStr(id).trim();
+      if (!uid) return;
       try {
-        const uid = toStr(userId);
-        if (!uid) return;
-        logger.info("sendToUser(cancel): target", {
-          bookingId,
-          userId: uid,
-          event: payload?.event,
-        });
         this.webSocketService?.sendToUser?.(uid, payload);
-      } catch (e) {
-        logger.warn("sendToUser(cancel) failed", e?.message || e);
-      }
+      } catch {}
     };
 
-    // Idempotency lock
-    let lockAcquired = false;
-    const lockKey = `booking:cancel:lock:${bookingId}`;
     try {
-      lockAcquired = await redis.set(lockKey, "1", { NX: true, EX: 15 });
-      if (!lockAcquired) {
-        // Inform caller
-        this.emitToClient(ws, {
-          event: "cancel.ack",
-          bookingId,
-          data: { status: "cancel_in_progress", reason },
-        });
+      if (!bookingId) throw new Error("bookingId is required");
 
-        // Best-effort: retry-read, notify both participants if DB shows cancelled
-        const attemptNotifyIfCancelled = async () => {
-          try {
-            const b = await Booking.findById(bookingId)
-              .select(
-                "user driver status fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown cancelledAt cancellationReason"
-              )
-              .lean();
-            if (b && b.status === "cancelled") {
-              const finalFareAmount = Number(
-                (typeof b?.fareDetails?.finalFare === "object"
-                  ? b?.fareDetails?.finalFare?.amount
-                  : b?.fareDetails?.finalFare) ??
-                  b?.fare ??
-                  0
-              );
-              const payload = {
-                event: "recovery.cancelled",
-                bookingId,
-                data: {
-                  status: "cancelled",
-                  cancelledAt: b?.cancelledAt || new Date(),
-                  reason: b?.cancellationReason || reason,
-                  finalFare: finalFareAmount,
-                  currency: b?.fareDetails?.currency || "AED",
-                  breakdown: b?.fareDetails?.breakdown || {},
-                },
-              };
-              logger.info("Cancel notify (lock contention)", {
-                bookingId,
-                user: toStr(b.user),
-                driver: toStr(b.driver),
-              });
-              sendToUserSafe(b.user, payload);
-              sendToUserSafe(b.driver, payload);
-            }
-          } catch {}
-        };
-        setTimeout(attemptNotifyIfCancelled, 700);
-        setTimeout(attemptNotifyIfCancelled, 2000);
-
-        return;
-      }
-    } catch {
-      // proceed best-effort
-    }
-
-    try {
-      // Authorization: only booking owner or assigned/pending driver
-      const viewerId = toStr(ws?.user?._id || ws?.user?.id);
+      // Load booking minimal fields to decide behavior and notify
       const booking = await Booking.findById(bookingId)
         .select(
-          "user driver status pendingAssignment pickupLocation dropoffLocation fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown cancellationReason cancelledAt updatedAt"
+          "user driver status fare fareDetails cancelledAt cancellationReason"
         )
         .lean();
       if (!booking) throw new Error("Booking not found");
 
-      const isParticipant =
-        (booking.user && toStr(booking.user) === viewerId) ||
-        (booking.driver && toStr(booking.driver) === viewerId) ||
-        (booking?.pendingAssignment?.driverId &&
-          toStr(booking.pendingAssignment.driverId) === viewerId);
-      if (!isParticipant)
-        throw new Error("Not authorized to cancel this booking");
+      const currentStatus = String(booking.status || "").toLowerCase();
 
-      // If already cancelled/completed, notify both and ack (avoid reprocessing)
-      if (["cancelled", "completed"].includes(booking.status)) {
-        const alreadyData = {
-          status: booking.status,
-          alreadyCancelled: booking.status === "cancelled",
-          reason:
-            booking.status === "cancelled"
-              ? booking.cancellationReason || reason
-              : undefined,
-          finalFare: Number(
-            (typeof booking?.fareDetails?.finalFare === "object"
-              ? booking?.fareDetails?.finalFare?.amount
-              : booking?.fareDetails?.finalFare) ??
-              booking?.fare ??
-              0
-          ),
-          currency: booking?.fareDetails?.currency || "AED",
-          breakdown: booking?.fareDetails?.breakdown || {},
-          cancelledAt:
-            booking.status === "cancelled"
-              ? booking?.cancelledAt || new Date()
-              : undefined,
-        };
-
-        const cancelPayload = {
-          event: "recovery.cancelled",
-          bookingId,
-          data: {
-            status: "cancelled",
-            cancelledAt: alreadyData.cancelledAt || new Date(),
-            reason: alreadyData.reason || "cancelled",
-            finalFare: alreadyData.finalFare,
-            currency: alreadyData.currency,
-            breakdown: alreadyData.breakdown,
-          },
-        };
-
-        logger.info("Cancel notify (already terminal)", {
-          bookingId,
-          user: toStr(booking.user),
-          driver: toStr(booking.driver),
-        });
-        sendToUserSafe(booking.user, cancelPayload);
-        sendToUserSafe(booking.driver, cancelPayload);
-
+      // Do NOT cancel if already terminal or pending
+      if (["completed", "cancelled", "pending"].includes(currentStatus)) {
+        // Build status-only ACK
         this.emitToClient(ws, {
           event: "cancel.ack",
           bookingId,
-          data: alreadyData,
+          data: {
+            status: booking.status,
+            cancelledAt: booking.cancelledAt || null,
+            reason: booking.cancellationReason || reason,
+          },
         });
         return;
       }
 
-      // Recompute to include cancellation charges and persist fare details
-      const now = new Date();
-      const recomputed = await this._recomputeAndPersistFare(bookingId, {
-        isCancelled: true,
-        cancellationReason: reason,
-      });
-      const totalFareLatest =
-        recomputed && recomputed.totalFare != null
-          ? recomputed.totalFare
-          : null;
-
-      // Fallback to stored fare if recompute didn't return
-      let fallbackFare = null;
-      if (totalFareLatest == null) {
-        const b = await Booking.findById(bookingId).select("fare").lean();
-        fallbackFare = Number(b?.fare || 0);
+      // Only proceed if status is exactly in_progress
+      if (currentStatus !== "in_progress") {
+        // Not eligible to cancel (e.g., searching, accepted, etc.)
+        this.emitToClient(ws, {
+          event: "cancel.ack",
+          bookingId,
+          data: {
+            status: booking.status,
+            note: "Not cancellable in current state",
+          },
+        });
+        return;
       }
 
-      // Atomic update with status + fare
-      await Booking.findByIdAndUpdate(
-        bookingId,
+      // Atomic update with status guard to avoid races
+      const now = new Date();
+      const u = await Booking.updateOne(
+        { _id: bookingId, status: "in_progress" },
         {
           $set: {
             status: "cancelled",
-            fare: totalFareLatest != null ? totalFareLatest : fallbackFare,
             cancelledAt: now,
             cancellationReason: reason,
             updatedAt: now,
           },
-        },
-        { new: false }
+        }
       );
 
-      // Update in-memory cache
-      const rec = this.activeRecoveries.get(bookingId) || {};
-      rec.status = "cancelled";
-      rec.cancelledAt = now;
-      rec.statusHistory = rec.statusHistory || [];
-      rec.statusHistory.push({
-        status: "cancelled",
-        timestamp: now,
-        message: reason,
-      });
-      this.activeRecoveries.set(bookingId, rec);
+      const modified =
+        typeof u?.modifiedCount === "number"
+          ? u.modifiedCount
+          : u?.nModified ?? 0;
 
-      // Reload minimal for outbound payload and participants
+      // Reload snapshot after update (or if guard prevented update, reflect latest)
       const after = await Booking.findById(bookingId)
         .select(
-          "user driver fare fareDetails.currency fareDetails.finalFare fareDetails.breakdown"
+          "user driver status fare fareDetails cancelledAt cancellationReason"
         )
         .lean();
 
+      // If update didn't modify (race or state changed), just ACK with current state
+      if (!modified && (!after || String(after.status) !== "cancelled")) {
+        this.emitToClient(ws, {
+          event: "cancel.ack",
+          bookingId,
+          data: {
+            status: after?.status || booking.status,
+            note: "Cancellation not applied (state changed or race)",
+          },
+        });
+        return;
+      }
+
+      // Prepare payload from updated doc
       const finalFareAmount = Number(
         (typeof after?.fareDetails?.finalFare === "object"
           ? after?.fareDetails?.finalFare?.amount
@@ -2478,23 +2354,19 @@ class RecoveryHandler {
         bookingId,
         data: {
           status: "cancelled",
-          cancelledAt: now,
-          reason,
+          cancelledAt: after?.cancelledAt || now,
+          reason: after?.cancellationReason || reason,
           finalFare: finalFareAmount,
           currency: after?.fareDetails?.currency || "AED",
           breakdown: after?.fareDetails?.breakdown || {},
         },
       };
 
-      logger.info("Cancel notify (finalized)", {
-        bookingId,
-        user: toStr(after.user),
-        driver: toStr(after.driver),
-      });
-      sendToUserSafe(after.user, cancelPayload);
-      sendToUserSafe(after.driver, cancelPayload);
+      // Notify both participants (no rooms)
+      sendToUserSafe(after?.user, cancelPayload);
+      sendToUserSafe(after?.driver, cancelPayload);
 
-      // Ack to requester
+      // Ack to caller
       this.emitToClient(ws, {
         event: "cancel.ack",
         bookingId,
@@ -2504,14 +2376,9 @@ class RecoveryHandler {
       logger.error("Error in handleCancel:", error);
       this.emitToClient(ws, {
         event: "error",
-        bookingId,
+        bookingId: bookingId || null,
         error: { code: "CANCEL_ERROR", message: error.message },
       });
-    } finally {
-      // Release idempotency lock
-      try {
-        if (lockAcquired) await redis.del(lockKey);
-      } catch {}
     }
   }
 
