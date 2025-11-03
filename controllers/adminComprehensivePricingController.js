@@ -4,7 +4,6 @@ import ComprehensivePricing from "../models/comprehensivePricingModel.js";
 const getCurrentHour = () => {
   return new Date().getHours();
 };
-
 // Check if current time is within night hours
 const isNightTime = (nightCharges) => {
   if (!nightCharges || nightCharges.enabled !== true) return false;
@@ -272,7 +271,7 @@ const calculateComprehensiveFare = async (bookingData) => {
     const {
       serviceType,
       vehicleType,
-      distance, // in km
+      distance,
       routeType = "one_way",
       demandRatio = 1,
       waitingMinutes = 0,
@@ -282,8 +281,8 @@ const calculateComprehensiveFare = async (bookingData) => {
       isCancelled = false,
       cancellationReason = null,
       // Optional service-specific inputs
-      moversOptions = {}, // for shifting & movers
-      appointmentOptions = {}, // for appointment services (if you choose to use it)
+      moversOptions = {},
+      appointmentOptions = {},
     } = bookingData;
 
     const normalizedServiceType = String(serviceType || "")
@@ -1512,6 +1511,7 @@ const bulkUpdatePricing = async (req, res) => {
     let normalized;
     if (Array.isArray(updates.flow)) {
       try {
+        orma;
         normalized = transformFlowToSchema(updates);
       } catch (e) {
         return res.status(400).json({ success: false, message: e.message });
@@ -2240,6 +2240,35 @@ const crMapQuery = {
   },
 };
 
+// NEW: Shifting & Movers mapper for selective queries
+const moversMapQuery = {
+  // Accepts: serviceType=shifting-movers | shifting-&-movers | shifting_movers
+  serviceType(v) {
+    const k = String(v || "")
+      .toLowerCase()
+      .replace(/\s+/g, "-");
+    if (
+      k === "shifting-movers" ||
+      k === "shifting-&-movers" ||
+      k === "shifting_-_movers"
+    ) {
+      return "shiftingMovers";
+    }
+    return null;
+  },
+  // Accepts user-facing category names; maps to schema keys
+  // moversCategory=small mover | medium mover | heavy mover
+  categoryKey(v) {
+    const k = String(v || "")
+      .toLowerCase()
+      .trim();
+    if (k === "small mover") return "smallMover";
+    if (k === "medium mover") return "mediumMover";
+    if (k === "heavy mover") return "heavyMover";
+    return null;
+  },
+};
+
 // Ensure path exists and return node reference
 function resolveCRNodeByKeys(config, serviceKey, subKey) {
   config.serviceTypes = config.serviceTypes || {};
@@ -2315,6 +2344,68 @@ const getPricingByQuery = async (req, res, next) => {
 const updatePricingByQuery = async (req, res) => {
   try {
     const q = req.query || {};
+
+    // Shifting & Movers selective PUT
+    const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
+    if (svcType === "shiftingMovers") {
+      const adminId = req.user?.id || null;
+      const config = await ComprehensivePricing.findOne({ isActive: true });
+      if (!config) {
+        return res.status(404).json({
+          success: false,
+          message: "Comprehensive pricing configuration not found",
+        });
+      }
+
+      // Ensure base branch
+      config.serviceTypes = config.serviceTypes || {};
+      config.serviceTypes.shiftingMovers =
+        config.serviceTypes.shiftingMovers || {};
+      const sm = config.serviceTypes.shiftingMovers;
+      sm.categories = sm.categories || {
+        smallMover: {},
+        mediumMover: {},
+        heavyMover: {},
+      };
+
+      const catKey = moversMapQuery.categoryKey(
+        q.moversCategory || q.categoryKey
+      );
+
+      if (catKey) {
+        sm.categories[catKey] = sm.categories[catKey] || {};
+        const node = sm.categories[catKey];
+
+        const payload = { ...(req.body || {}) };
+        pruneUndefinedDeep(payload);
+        deepMergeReplaceArrays(node, payload);
+
+        config.lastUpdatedBy = adminId;
+        await config.save();
+
+        return res.status(200).json({
+          success: true,
+          message: "Movers category updated",
+          data: { serviceType: "shiftingMovers", categoryKey: catKey, node },
+        });
+      }
+
+      // No category filter: update service-level block only
+      const payload = { ...(req.body || {}) };
+      pruneUndefinedDeep(payload);
+      deepMergeReplaceArrays(sm, payload);
+
+      config.lastUpdatedBy = adminId;
+      await config.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Shifting & Movers updated",
+        data: { serviceType: "shiftingMovers", node: sm },
+      });
+    }
+
+    // Car Recovery selective PUT
     const category = crMapQuery.category(q.category);
     const service = crMapQuery.service(q.service);
     const subService = crMapQuery.subService(
@@ -2331,7 +2422,7 @@ const updatePricingByQuery = async (req, res) => {
     if (category !== "carRecovery") {
       return res.status(400).json({
         success: false,
-        message: "Only car-recovery is supported right now",
+        message: "Only car-recovery is supported in this path",
       });
     }
 
@@ -2356,12 +2447,7 @@ const updatePricingByQuery = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Pricing node updated",
-      data: {
-        category: "car recovery",
-        service,
-        subService,
-        node,
-      },
+      data: { category: "car recovery", service, subService, node },
     });
   } catch (error) {
     res.status(500).json({
