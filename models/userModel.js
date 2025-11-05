@@ -164,6 +164,25 @@ const userSchema = new mongoose.Schema(
       ref: "User",
       default: [],
     },
+    savedLocations: [
+      {
+        label: { type: String, default: "" },
+        address: { type: String, default: "" },
+        location: {
+          type: {
+            type: String,
+            enum: ["Point"],
+            default: "Point",
+          },
+          coordinates: {
+            type: [Number], // [lng, lat]
+            default: undefined,
+          },
+        },
+        notes: { type: String, default: "" },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     qualificationPoints: {
       pgp: {
         monthly: { type: Number, default: 0 },
