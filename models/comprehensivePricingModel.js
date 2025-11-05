@@ -63,19 +63,15 @@ const VehicleTypeSub = Sub({
   info: { type: String, default: "" },
 });
 
-// Towing/winching/roadside specialized leaf
-const CategoryLeafSub = Sub({
-  enabled: { type: Boolean, default: true },
-  convenienceFee: { type: Number, default: 0 },
-  baseFare: { type: BaseFareSub, default: {} },
-  perKmRate: { type: PerKmRateSub, default: {} },
-  waitingCharges: { type: WaitingChargesSub, default: {} },
-  nightCharges: { type: NightChargesSub, default: {} },
-  surgePricing: { type: SurgePricingSub, default: {} },
-  // Display metadata
-  label: { type: String, default: "" },
-  info: { type: String, default: "" },
+// Leaf-level cancellation charges with 25% milestone
+const LeafCancellationChargesSub = Sub({
+  beforeArrival: { type: Number, default: 0 },
+  after25PercentDistance: { type: Number, default: 0 },
+  after50PercentDistance: { type: Number, default: 0 },
+  afterArrival: { type: Number, default: 0 },
 });
+
+/* CategoryLeafSub moved below after car-recovery sub-schemas for correct initialization order */
 
 // Car Recovery service-level subs
 const PlatformFeeSub = Sub({
@@ -176,6 +172,26 @@ const VATDetailSub = Sub({
   countryBased: { type: Boolean, default: true },
   percentage: { type: Number, default: 5 },
   showTotalIncludingTax: { type: Boolean, default: true },
+});
+
+// Towing/winching/roadside specialized leaf (defined after car-recovery subs)
+const CategoryLeafSub = Sub({
+  enabled: { type: Boolean, default: true },
+  convenienceFee: { type: Number, default: 0 },
+  baseFare: { type: BaseFareSub, default: {} },
+  perKmRate: { type: PerKmRateSub, default: {} },
+  // Use car-recovery waiting charges variant to support driverControlPopup
+  waitingCharges: { type: CarRecoveryWaitingChargesSub, default: {} },
+  nightCharges: { type: CarRecoveryNightChargesSub, default: {} },
+  surgePricing: { type: SurgePricingSub, default: {} },
+  // Extras often provided in PUT payloads
+  minimumFare: { type: Number, default: 0 },
+  platformFee: { type: PlatformFeeSub, default: {} },
+  cancellationCharges: { type: LeafCancellationChargesSub, default: {} },
+  vat: { type: VATDetailSub, default: {} },
+  // Display metadata
+  label: { type: String, default: "" },
+  info: { type: String, default: "" },
 });
 
 // Car Recovery categories containers

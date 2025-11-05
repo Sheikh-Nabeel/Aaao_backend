@@ -6,7 +6,7 @@ import asyncHandler from "express-async-handler";
 import { calculateDistance } from "../utils/distanceCalculator.js";
 import mongoose from "mongoose";
 import { webSocketService } from "../services/websocketService.js";
-// Car Recovery Service Types and Subcategories
+
 const CAR_RECOVERY_SERVICES = {
   standard: {
     id: "standard",
@@ -502,9 +502,376 @@ export const getMessages = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    Get car recovery history stats by user/driver id
-// @route   GET /api/car-recovery/history?id=...&role=customer|driver&limit=20&page=1
-// @access  Private
+
+// NEW: Search drivers by partial text (name, username, email, phoneNumber)
+export const searchDrivers = asyncHandler(async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.status(400).json({ success: false, message: "q is required" });
+
+    // Build case-insensitive regex (escape special chars lightly)
+    const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
+    const drivers = await User.find({
+      role: "driver",
+      $or: [
+        { firstName: regex },
+        { lastName: regex },
+        { username: regex },
+        { email: regex },
+        { phoneNumber: regex },
+      ],
+    })
+      .limit(50)
+      .select("_id firstName lastName username email phoneNumber driverStatus currentLocation")
+      .lean();
+
+    const ids = drivers.map((d) => d._id);
+    const vehicles = await Vehicle.find({ userId: { $in: ids } })
+      .select("userId serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
+      .lean();
+    const byUser = vehicles.reduce((acc, v) => {
+      const key = String(v.userId);
+      (acc[key] = acc[key] || []).push(v);
+      return acc;
+    }, {});
+
+    const data = drivers
+      .map((d) => ({
+        id: String(d._id),
+        name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
+        username: d.username,
+        email: d.email,
+        phoneNumber: d.phoneNumber,
+        driverStatus: d.driverStatus,
+        currentLocation: d.currentLocation || null,
+        vehicles: (byUser[String(d._id)] || []).map((v) => ({
+          serviceType: v.serviceType || null,
+          serviceCategory: v.serviceCategory || null,
+          vehicleType: v.vehicleType || null,
+          vehicleMakeModel: v.vehicleMakeModel || null,
+          vehicleColor: v.vehicleColor || null,
+          vehiclePlateNumber: v.vehiclePlateNumber || null,
+          status: v.status || null,
+          isActive: v.isActive ?? null,
+        })),
+      }))
+      .filter((d) => Array.isArray(d.vehicles) && d.vehicles.length > 0);
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error searching drivers", error: error.message });
+  }
+});
+
+// NEW: Pin a driver (max 3)
+export const pinDriver = asyncHandler(async (req, res) => {
+  try {
+    const driverId = String(req.params.driverId || "").trim();
+    if (!driverId) return res.status(400).json({ success: false, message: "driverId is required" });
+
+    const driver = await User.findOne({ _id: driverId, role: "driver" })
+      .select("_id firstName lastName username email phoneNumber driverStatus currentLocation")
+      .lean();
+    if (!driver) return res.status(404).json({ success: false, message: "Driver not found" });
+
+    const me = await User.findById(req.user._id).select("pinnedDrivers");
+    const already = (me.pinnedDrivers || []).map(String);
+
+    const vehicles = await Vehicle.find({ userId: driver._id })
+      .select("serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
+      .lean();
+
+    const payload = {
+      id: String(driver._id),
+      name: `${driver.firstName ?? ""} ${driver.lastName ?? ""}`.trim(),
+      username: driver.username,
+      email: driver.email,
+      phoneNumber: driver.phoneNumber,
+      driverStatus: driver.driverStatus,
+      currentLocation: driver.currentLocation || null,
+      vehicles: vehicles.map(v => ({
+        serviceType: v.serviceType || null,
+        serviceCategory: v.serviceCategory || null,
+        vehicleType: v.vehicleType || null,
+        vehicleMakeModel: v.vehicleMakeModel || null,
+        vehicleColor: v.vehicleColor || null,
+        vehiclePlateNumber: v.vehiclePlateNumber || null,
+        status: v.status || null,
+        isActive: v.isActive ?? null,
+      })),
+    };
+
+    if (already.includes(String(driver._id))) {
+      return res.json({ success: true, message: "Already pinned", data: payload });
+    }
+    if (already.length >= 3) {
+      return res.status(400).json({ success: false, message: "You can pin up to 3 drivers" });
+    }
+
+    await User.updateOne(
+      { _id: req.user._id },
+      { $addToSet: { pinnedDrivers: driver._id } }
+    );
+
+    return res.json({ success: true, message: "Driver pinned", data: payload });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error pinning driver", error: error.message });
+  }
+});
+
+// NEW: Unpin a driver
+export const unpinDriver = asyncHandler(async (req, res) => {
+  try {
+    const driverId = String(req.params.driverId || "").trim();
+    if (!driverId) return res.status(400).json({ success: false, message: "driverId is required" });
+
+    await User.updateOne(
+      { _id: req.user._id },
+      { $pull: { pinnedDrivers: driverId } }
+    );
+
+    return res.json({ success: true, message: "Driver unpinned" });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error unpinning driver", error: error.message });
+  }
+});
+
+// NEW: List pinned drivers
+export const getPinnedDrivers = asyncHandler(async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id)
+      .select("pinnedDrivers")
+      .populate("pinnedDrivers", "firstName lastName username email phoneNumber driverStatus currentLocation")
+      .lean();
+
+    const list = me?.pinnedDrivers || [];
+    const ids = list.map((d) => d._id);
+    const vehicles = await Vehicle.find({ userId: { $in: ids } })
+      .select("userId serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
+      .lean();
+    const byUser = vehicles.reduce((acc, v) => {
+      const key = String(v.userId);
+      (acc[key] = acc[key] || []).push(v);
+      return acc;
+    }, {});
+
+    const data = list
+      .map((d) => ({
+        id: String(d._id),
+        name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
+        username: d.username,
+        email: d.email,
+        phoneNumber: d.phoneNumber,
+        driverStatus: d.driverStatus,
+        currentLocation: d.currentLocation || null,
+        vehicles: (byUser[String(d._id)] || []).map((v) => ({
+          serviceType: v.serviceType || null,
+          serviceCategory: v.serviceCategory || null,
+          vehicleType: v.vehicleType || null,
+          vehicleMakeModel: v.vehicleMakeModel || null,
+          vehicleColor: v.vehicleColor || null,
+          vehiclePlateNumber: v.vehiclePlateNumber || null,
+          status: v.status || null,
+          isActive: v.isActive ?? null,
+        })),
+      }))
+      .filter((d) => Array.isArray(d.vehicles) && d.vehicles.length > 0);
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error fetching pinned drivers", error: error.message });
+  }
+});
+
+// NEW: Favorite a driver (unlimited)
+export const favoriteDriver = asyncHandler(async (req, res) => {
+  try {
+    const driverId = String(req.params.driverId || "").trim();
+    if (!driverId) return res.status(400).json({ success: false, message: "driverId is required" });
+
+    const driver = await User.findOne({ _id: driverId, role: "driver" })
+      .select("_id firstName lastName username email phoneNumber driverStatus currentLocation")
+      .lean();
+    if (!driver) return res.status(404).json({ success: false, message: "Driver not found" });
+
+    await User.updateOne(
+      { _id: req.user._id },
+      { $addToSet: { favoriteDrivers: driver._id } }
+    );
+
+    const vehicles = await Vehicle.find({ userId: driver._id })
+      .select("serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
+      .lean();
+
+    return res.json({
+      success: true,
+      message: "Driver favorited",
+      data: {
+        id: String(driver._id),
+        name: `${driver.firstName ?? ""} ${driver.lastName ?? ""}`.trim(),
+        username: driver.username,
+        email: driver.email,
+        phoneNumber: driver.phoneNumber,
+        driverStatus: driver.driverStatus,
+        currentLocation: driver.currentLocation || null,
+        vehicles: vehicles.map(v => ({
+          serviceType: v.serviceType || null,
+          serviceCategory: v.serviceCategory || null,
+          vehicleType: v.vehicleType || null,
+          vehicleMakeModel: v.vehicleMakeModel || null,
+          vehicleColor: v.vehicleColor || null,
+          vehiclePlateNumber: v.vehiclePlateNumber || null,
+          status: v.status || null,
+          isActive: v.isActive ?? null,
+        })),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error favoriting driver", error: error.message });
+  }
+});
+
+// NEW: Unfavorite a driver
+export const unfavoriteDriver = asyncHandler(async (req, res) => {
+  try {
+    const driverId = String(req.params.driverId || "").trim();
+    if (!driverId) return res.status(400).json({ success: false, message: "driverId is required" });
+
+    await User.updateOne(
+      { _id: req.user._id },
+      { $pull: { favoriteDrivers: driverId } }
+    );
+
+    return res.json({ success: true, message: "Driver unfavorited" });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error unfavoriting driver", error: error.message });
+  }
+});
+
+// NEW: List favorite drivers
+export const getFavoriteDrivers = asyncHandler(async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id)
+      .select("favoriteDrivers")
+      .populate("favoriteDrivers", "firstName lastName username email phoneNumber driverStatus currentLocation")
+      .lean();
+
+    const list = me?.favoriteDrivers || [];
+    const ids = list.map((d) => d._id);
+    const vehicles = await Vehicle.find({ userId: { $in: ids } })
+      .select("userId serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
+      .lean();
+    const byUser = vehicles.reduce((acc, v) => {
+      const key = String(v.userId);
+      (acc[key] = acc[key] || []).push(v);
+      return acc;
+    }, {});
+
+    const data = list.map((d) => ({
+      id: String(d._id),
+      name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
+      username: d.username,
+      email: d.email,
+      phoneNumber: d.phoneNumber,
+      driverStatus: d.driverStatus,
+      currentLocation: d.currentLocation || null,
+      vehicles: (byUser[String(d._id)] || []).map((v) => ({
+        serviceType: v.serviceType || null,
+        serviceCategory: v.serviceCategory || null,
+        vehicleType: v.vehicleType || null,
+        vehicleMakeModel: v.vehicleMakeModel || null,
+        vehicleColor: v.vehicleColor || null,
+        vehiclePlateNumber: v.vehiclePlateNumber || null,
+        status: v.status || null,
+        isActive: v.isActive ?? null,
+      })),
+    }));
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error fetching favorite drivers", error: error.message });
+  }
+});
+
+// NEW: Saved locations CRUD
+export const addSavedLocation = asyncHandler(async (req, res) => {
+  try {
+    const { label, address, location, notes } = req.body || {};
+    if (!location?.coordinates || location.coordinates.length !== 2) {
+      return res.status(400).json({ success: false, message: "location.coordinates [lng, lat] is required" });
+    }
+    const payload = {
+      label: label || "",
+      address: address || "",
+      location: {
+        type: "Point",
+        coordinates: [Number(location.coordinates[0]), Number(location.coordinates[1])],
+      },
+      notes: notes || "",
+      createdAt: new Date(),
+    };
+
+    await User.updateOne({ _id: req.user._id }, { $push: { savedLocations: payload } });
+
+    const me = await User.findById(req.user._id).select("savedLocations").lean();
+    return res.status(201).json({ success: true, data: me.savedLocations });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error adding saved location", error: error.message });
+  }
+});
+
+export const updateSavedLocation = asyncHandler(async (req, res) => {
+  try {
+    const { locationId } = req.params;
+    const { label, address, location, notes } = req.body || {};
+
+    const me = await User.findById(req.user._id).select("savedLocations");
+    const loc = me.savedLocations.id(locationId);
+    if (!loc) return res.status(404).json({ success: false, message: "Saved location not found" });
+
+    if (label !== undefined) loc.label = label;
+    if (address !== undefined) loc.address = address;
+    if (notes !== undefined) loc.notes = notes;
+    if (location?.coordinates && location.coordinates.length === 2) {
+      loc.location = {
+        type: "Point",
+        coordinates: [Number(location.coordinates[0]), Number(location.coordinates[1])],
+      };
+    }
+    await me.save();
+
+    return res.json({ success: true, data: me.savedLocations });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error updating saved location", error: error.message });
+  }
+});
+
+export const deleteSavedLocation = asyncHandler(async (req, res) => {
+  try {
+    const { locationId } = req.params;
+    const me = await User.findById(req.user._id).select("savedLocations");
+    const loc = me.savedLocations.id(locationId);
+    if (!loc) return res.status(404).json({ success: false, message: "Saved location not found" });
+
+    loc.deleteOne();
+    await me.save();
+
+    return res.json({ success: true, message: "Saved location deleted" });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error deleting saved location", error: error.message });
+  }
+});
+
+export const getSavedLocations = asyncHandler(async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id).select("savedLocations").lean();
+    return res.json({ success: true, data: me?.savedLocations || [] });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Error fetching saved locations", error: error.message });
+  }
+});
+
 export const getCarRecoveryHistoryStats = asyncHandler(async (req, res) => {
   try {
     const { id, role, limit = 20, page = 1 } = req.query;

@@ -2215,19 +2215,102 @@ const moversMapQuery = {
   },
 };
 
-// Ensure path exists and return node reference with defaults
+// Ensure path exists and return node reference with defaults + legacy self-heal
 function resolveCRNodeByKeys(config, serviceKey, subKey) {
+  // Map public/camelCase service keys to schema keys
+  const mapServiceKeyToSchema = (k) => {
+    if (k === "towingServices") return "towing";
+    if (k === "winchingServices") return "winching";
+    if (k === "roadsideAssistance") return "roadsideAssistance";
+    if (k === "specializedHeavyRecovery") return "specializedHeavyRecovery";
+    return k;
+  };
+
+  // Map public/camelCase sub keys to schema sub keys under each service
+  const mapSubKeyToSchema = (svc, sk) => {
+    if (svc === "towing") {
+      if (sk === "flatbedTowing" || sk === "flatbed") return "flatbed";
+      if (sk === "wheelLiftTowing" || sk === "wheelLift") return "wheelLift";
+    }
+    if (svc === "winching") {
+      if (sk === "onRoadWinching") return "onRoadWinching";
+      if (sk === "offRoadWinching") return "offRoadWinching";
+    }
+    if (svc === "roadsideAssistance") {
+      if (sk === "batteryJumpStart" || sk === "jumpstart") return "jumpstart";
+      if (sk === "fuelDelivery") return "fuelDelivery";
+    }
+    if (svc === "specializedHeavyRecovery") {
+      if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic")
+        return "luxuryExotic";
+      if (sk === "accidentCollisionRecovery" || sk === "accidentCollision")
+        return "accidentCollision";
+      if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle")
+        return "heavyDutyVehicle";
+      if (sk === "basementPullOut") return "basementPullOut";
+    }
+    return sk;
+  };
+
+  // Map schema service to flow container key (legacy)
+  const schemaSvcToFlowKey = (svc) => {
+    if (svc === "towing") return "towingServices";
+    if (svc === "winching") return "winchingServices";
+    if (svc === "roadsideAssistance") return "roadsideAssistance";
+    if (svc === "specializedHeavyRecovery") return "specializedHeavyRecovery";
+    return svc;
+  };
+
+  // Legacy alternates present in older docs (used for self-heal)
+  const legacyAlternates = (svc, mappedSub) => {
+    if (svc === "towing") {
+      if (mappedSub === "wheelLift") return ["wheelLiftTowing"];
+      if (mappedSub === "flatbed") return ["flatbedTowing"];
+    }
+    if (svc === "roadsideAssistance") {
+      if (mappedSub === "jumpstart") return ["batteryJumpStart"];
+    }
+    if (svc === "specializedHeavyRecovery") {
+      if (mappedSub === "luxuryExotic") return ["luxuryExoticCarRecovery"];
+      if (mappedSub === "accidentCollision")
+        return ["accidentCollisionRecovery"];
+      if (mappedSub === "heavyDutyVehicle") return ["heavyDutyVehicleRecovery"];
+    }
+    return [];
+  };
+
+  const svc = mapServiceKeyToSchema(serviceKey);
+  const sub = mapSubKeyToSchema(svc, subKey);
+
+  // Ensure tree containers exist
   config.serviceTypes = config.serviceTypes || {};
   config.serviceTypes.carRecovery = ensureCarRecoveryServiceLevel(
     config.serviceTypes.carRecovery || {}
   );
   const cr = config.serviceTypes.carRecovery;
   cr.serviceTypes = cr.serviceTypes || {};
-  cr.serviceTypes[serviceKey] = cr.serviceTypes[serviceKey] || {
-    subCategories: {},
-  };
-  const holder = cr.serviceTypes[serviceKey];
+
+  // Prefer schema container; if only legacy(flow) exists, read from it without persisting
+  const flowKey = schemaSvcToFlowKey(svc);
+  let holder = cr.serviceTypes[svc] || cr.serviceTypes[flowKey];
+  if (!holder) {
+    holder = { subCategories: {} };
+    // Do not persist during resolve; just prepare an in-memory holder
+    cr.serviceTypes[svc] = holder;
+  }
   holder.subCategories = holder.subCategories || {};
+
+  // Resolve legacy: read-only. Do not write or markModified during GET
+  let resolvedNode = holder.subCategories[sub];
+  if (!resolvedNode || Object.keys(resolvedNode || {}).length === 0) {
+    for (const alt of legacyAlternates(svc, sub)) {
+      const legacyNode = holder.subCategories[alt];
+      if (legacyNode && Object.keys(legacyNode).length > 0) {
+        resolvedNode = legacyNode; // response-only; no persistence
+        break;
+      }
+    }
+  }
 
   // Provide defaults so a fresh node isn't an empty object
   const humanize = (s = "") =>
@@ -2238,22 +2321,35 @@ function resolveCRNodeByKeys(config, serviceKey, subKey) {
       .replace(/\b\w/g, (c) => c.toUpperCase());
 
   const ensureLeafDefaults = (leaf, fallbackLabel = "") => {
-    const d = leaf && typeof leaf === "object" ? { ...leaf } : {};
+    // Normalize potential Mongoose subdocument to a plain object first
+    let src = leaf && typeof leaf === "object" ? leaf : {};
+    if (src && typeof src.toObject === "function") {
+      try {
+        src = src.toObject({ virtuals: false, getters: false });
+      } catch (e) {}
+    } else if (src && src._doc && typeof src._doc === "object") {
+      src = src._doc;
+    }
+
+    const d = { ...src };
     d.label = d.label || fallbackLabel;
     d.info = d.info || "";
     d.enabled = d.enabled ?? false;
     d.convenienceFee = d.convenienceFee ?? 0;
+
     d.baseFare = d.baseFare || { amount: 0, coverageKm: 0 };
     d.perKmRate = d.perKmRate || {
       afterBaseCoverage: 0,
       cityWiseAdjustment: { enabled: false, aboveKm: 0, adjustedRate: 0 },
     };
+
     d.waitingCharges = d.waitingCharges || {
       freeMinutes: 0,
       perMinuteRate: 0,
       maximumCharge: 0,
       driverControlPopup: { enabled: false },
     };
+
     d.nightCharges = d.nightCharges || {
       enabled: false,
       startHour: 22,
@@ -2261,6 +2357,7 @@ function resolveCRNodeByKeys(config, serviceKey, subKey) {
       fixedAmount: 0,
       multiplier: 1,
     };
+
     d.surgePricing = d.surgePricing || {
       enabled: false,
       adminControlled: false,
@@ -2269,101 +2366,73 @@ function resolveCRNodeByKeys(config, serviceKey, subKey) {
       surge2_0x: false,
       levels: [],
     };
+
+    // Optional leaf-level extras if your model supports them
+    if (d.minimumFare == null) d.minimumFare = 0;
     return d;
   };
 
-  const existing = holder.subCategories[subKey];
-  holder.subCategories[subKey] = ensureLeafDefaults(existing, humanize(subKey));
-  return holder.subCategories[subKey];
+  // Return ensured leaf for this resolved node, without persisting
+  const d = ensureLeafDefaults(resolvedNode, humanize(sub));
+  return d;
 }
 
 // GET /admin/comprehensive-pricing?category=...&service=...&sub-service=...
-// If all three are present, returns only that node; else falls back to getComprehensivePricing
+// Returns only the requested sub-service leaf; no wrappers; no in-memory writes
 const getPricingByQuery = async (req, res, next) => {
   try {
     const q = req.query || {};
 
-    // Shifting & Movers
+    // Shifting & Movers (read-only)
     const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
     if (svcType === "shiftingMovers") {
       const config = await ComprehensivePricing.findOne({ isActive: true });
       if (!config) {
-        return res.status(404).json({
-          success: false,
-          message: "Comprehensive pricing configuration not found",
-        });
+        return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
       }
-      const sm =
-        (config.serviceTypes && config.serviceTypes.shiftingMovers) || {};
-      const catKey = moversMapQuery.categoryKey(
-        q.moversCategory || q.categoryKey
-      );
+      const sm = (config.serviceTypes && config.serviceTypes.shiftingMovers) || {};
+      const catKey = moversMapQuery.categoryKey(q.moversCategory || q.categoryKey);
       if (catKey) {
         const node = (sm.categories && sm.categories[catKey]) || {};
-        return res.status(200).json({
-          success: true,
-          data: {
-            serviceType: "shiftingMovers",
-            categoryKey: catKey,
-            currency: config.currency || "AED",
-            node,
-          },
-        });
+        return res.status(200).json({ success: true, data: node });
       }
-      return res.status(200).json({
-        success: true,
-        data: {
-          serviceType: "shiftingMovers",
-          currency: config.currency || "AED",
-          node: sm,
-        },
-      });
+      return res.status(200).json({ success: true, data: sm });
     }
 
-    // Car Recovery
+    // Car Recovery selective GET
     const category = crMapQuery.category(q.category);
     const service = crMapQuery.service(q.service);
-    const subService = crMapQuery.subService(
-      q["sub-service"] ?? q.subService,
-      service
-    );
+    const subService = crMapQuery.subService(q["sub-service"] ?? q.subService, service);
 
+    const anySelectiveProvided = q.category != null || q.service != null || q["sub-service"] != null || q.subService != null;
     if (!category || !service || !subService) {
-      // Fall back only if insufficient params
+      if (anySelectiveProvided) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing or invalid category, service, or sub-service. Expected category=carRecovery, service=towingServices|winchingServices|roadsideAssistance|specializedHeavyRecovery, sub-service per service.",
+        });
+      }
+      // Fallback to full GET (already aligned)
       return getComprehensivePricing(req, res, next);
     }
     if (category !== "carRecovery") {
-      return res.status(400).json({
-        success: false,
-        message: "Only car-recovery is supported in this path",
-      });
+      return res.status(400).json({ success: false, message: "Only car-recovery is supported in this path" });
     }
 
     const config = await ComprehensivePricing.findOne({ isActive: true });
     if (!config) {
-      return res.status(404).json({
-        success: false,
-        message: "Comprehensive pricing configuration not found",
-      });
+      return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
     }
 
+    // Resolve WITHOUT writing; sanitize to plain JSON
     const node = resolveCRNodeByKeys(config, service, subService);
-    return res.status(200).json({
-      success: true,
-      data: {
-        category: "car recovery",
-        service,
-        subService,
-        currency: config.currency || "AED",
-        node,
-      },
-    });
+    const nodeClean = node && typeof node.toObject === "function"
+      ? node.toObject({ virtuals: false, getters: false })
+      : JSON.parse(JSON.stringify(node || {}));
+
+    return res.status(200).json({ success: true, data: nodeClean });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error fetching pricing node",
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: "Error fetching pricing node", error: error.message });
   }
 };
 
@@ -2448,27 +2517,62 @@ const updatePricingByQuery = async (req, res) => {
     }
 
     const adminId = req.user?.id || req.user?._id || null;
-    const config = await ComprehensivePricing.findOne({ isActive: true });
-    if (!config) {
-      return res.status(404).json({
-        success: false,
-        message: "Comprehensive pricing configuration not found",
-      });
-    }
 
-    const node = resolveCRNodeByKeys(config, service, subService);
+    // Atomic update using dot-path; no in-memory save, no markModified
+    const mapServiceKeyToSchema = (k) => {
+      if (k === "towingServices") return "towing";
+      if (k === "winchingServices") return "winching";
+      if (k === "roadsideAssistance") return "roadsideAssistance";
+      if (k === "specializedHeavyRecovery") return "specializedHeavyRecovery";
+      return k;
+    };
+    const mapSubKeyToSchema = (svcKey, sk) => {
+      if (svcKey === "towing") {
+        if (sk === "flatbedTowing" || sk === "flatbed") return "flatbed";
+        if (sk === "wheelLiftTowing" || sk === "wheelLift") return "wheelLift";
+      }
+      if (svcKey === "winching") {
+        if (sk === "onRoadWinching") return "onRoadWinching";
+        if (sk === "offRoadWinching") return "offRoadWinching";
+      }
+      if (svcKey === "roadsideAssistance") {
+        if (sk === "batteryJumpStart" || sk === "jumpstart") return "jumpstart";
+        if (sk === "fuelDelivery") return "fuelDelivery";
+      }
+      if (svcKey === "specializedHeavyRecovery") {
+        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic") return "luxuryExotic";
+        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision") return "accidentCollision";
+        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle") return "heavyDutyVehicle";
+        if (sk === "basementPullOut") return "basementPullOut";
+      }
+      return sk;
+    };
+
+    const svcSchema = mapServiceKeyToSchema(service);
+    const subSchema = mapSubKeyToSchema(svcSchema, subService);
+    const dotPath = `serviceTypes.carRecovery.serviceTypes.${svcSchema}.subCategories.${subSchema}`;
+
+    // Fetch existing leaf (projection), merge, then atomic $set
+    const projection = { [dotPath]: 1 };
+    const existingDoc = await ComprehensivePricing.findOne({ isActive: true }, projection);
+    if (!existingDoc) {
+      return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
+    }
+    const existingLeaf = (((existingDoc.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema] || {};
+
     const payload = { ...(req.body || {}) };
     pruneUndefinedDeep(payload);
-    deepMergeReplaceArrays(node, payload);
+    const merged = deepMergeReplaceArrays({ ...existingLeaf }, payload);
 
-    config.lastUpdatedBy = adminId;
-    await config.save();
+    await ComprehensivePricing.updateOne(
+      { _id: existingDoc._id },
+      { $set: { [dotPath]: merged, lastUpdatedBy: adminId } }
+    );
 
-    return res.status(200).json({
-      success: true,
-      message: "Pricing node updated",
-      data: { category: "car recovery", service, subService, node },
-    });
+    // Return updated leaf only (same document)
+    const fresh = await ComprehensivePricing.findById(existingDoc._id, projection);
+    const updatedLeaf = (((fresh.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema] || {};
+    return res.status(200).json({ success: true, data: updatedLeaf });
   } catch (error) {
     res.status(500).json({
       success: false,

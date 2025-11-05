@@ -164,6 +164,45 @@ const userSchema = new mongoose.Schema(
       ref: "User",
       default: [],
     },
+    savedLocations: [
+      {
+        label: { type: String, default: "" },
+        address: { type: String, default: "" },
+        location: {
+          type: {
+            type: String,
+            enum: ["Point"],
+            default: "Point",
+          },
+          coordinates: {
+            type: [Number], // [lng, lat]
+            default: undefined,
+          },
+        },
+        notes: { type: String, default: "" },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+    driverStats: {
+      completed: { type: Number, default: 0 },
+      cancelled: { type: Number, default: 0 },
+      ongoing: { type: Number, default: 0 },
+    },
+    completedBookings: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "Booking",
+      default: [],
+    },
+    cancelledBookings: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "Booking",
+      default: [],
+    },
+    ongoingBookings: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "Booking",
+      default: [],
+    },
     qualificationPoints: {
       pgp: {
         monthly: { type: Number, default: 0 },
@@ -923,18 +962,6 @@ userSchema.methods.getCRRRankProgress = function (crrRanks) {
       (tgpPoints / crrRanks.Tycoon.requirements.tgp) * 100
     );
     pgpToNext = Math.max(0, crrRanks.Tycoon.requirements.pgp - pgpPoints);
-    tgpToNext = Math.max(0, crrRanks.Tycoon.requirements.tgp - tgpPoints);
-  } else if (currentRank === "Tycoon") {
-    nextRank = "CHAMPION";
-    pgpProgress = Math.min(
-      100,
-      (pgpPoints / crrRanks.CHAMPION.requirements.pgp) * 100
-    );
-    tgpProgress = Math.min(
-      100,
-      (tgpPoints / crrRanks.CHAMPION.requirements.tgp) * 100
-    );
-    pgpToNext = Math.max(0, crrRanks.CHAMPION.requirements.pgp - pgpPoints);
     tgpToNext = Math.max(0, crranks.CHAMPION.requirements.tgp - tgpPoints);
   } else if (currentRank === "CHAMPION") {
     nextRank = "BOSS";

@@ -2248,6 +2248,7 @@ class RecoveryHandler {
     const data = msg?.data || {};
     const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
     const reason = String(data?.reason || "cancelled").trim();
+    const driverId = String(data?.driverId || msg?.driverId || "").trim();
 
     // Helpers
     const toStr = (v) => (v != null ? String(v) : "");
@@ -2339,6 +2340,22 @@ class RecoveryHandler {
         });
         return;
       }
+
+      // Update driver doc: record cancelled booking and increment cancelled counter
+      try {
+        const targetDriverId = driverId || String(after?.driver || "");
+        if (targetDriverId) {
+          const { default: User } = await import("../models/userModel.js");
+          await User.updateOne(
+            { _id: targetDriverId, role: "driver" },
+            {
+              $addToSet: { cancelledBookings: String(bookingId) },
+              $inc: { "driverStats.cancelled": 1 },
+            },
+            { strict: false }
+          );
+        }
+      } catch {}
 
       // Prepare payload from updated doc
       const finalFareAmount = Number(
@@ -2533,6 +2550,7 @@ class RecoveryHandler {
     }
     const data = msg?.data || {};
     const bookingId = String(data?.bookingId || msg?.bookingId || "").trim();
+    const driverId = String(data?.driverId || msg?.driverId || "").trim();
 
     // Small local helpers
     const toNum = (v) => {
@@ -2678,6 +2696,16 @@ class RecoveryHandler {
       );
       if (!booking) throw new Error("Booking not found");
 
+      // If driverId provided and booking has no driver yet, attach it
+      try {
+        if (driverId && !booking.driver) {
+          await Booking.findByIdAndUpdate(bookingId, {
+            $set: { driver: driverId },
+          });
+          booking.driver = driverId; // reflect locally
+        }
+      } catch {}
+
       // Terminal protection
       if (["completed", "cancelled"].includes(String(booking.status))) {
         // Ack
@@ -2745,6 +2773,22 @@ class RecoveryHandler {
         },
         { new: false }
       );
+
+      // ALSO: update the driver doc: add this booking as completed and bump counter
+      try {
+        const targetDriverId = driverId || String(booking.driver || "");
+        if (targetDriverId) {
+          const { default: User } = await import("../models/userModel.js");
+          await User.updateOne(
+            { _id: targetDriverId, role: "driver" },
+            {
+              $addToSet: { completedBookings: String(bookingId) },
+              $inc: { "driverStats.completed": 1 },
+            },
+            { strict: false }
+          );
+        }
+      } catch {}
 
       // Cache update
       const rec = this.activeRecoveries.get(bookingId) || {};
@@ -5196,6 +5240,20 @@ class RecoveryHandler {
         },
         { new: false }
       );
+
+      // NEW: Record as ongoing on the driver
+      try {
+        const { default: mongoose } = await import("mongoose");
+        const bid = new mongoose.Types.ObjectId(bookingId);
+        await User.updateOne(
+          { _id: driverId, role: "driver" },
+          {
+            $addToSet: { ongoingBookings: bid },
+            $inc: { "driverStats.ongoing": 1 },
+          },
+          { strict: false }
+        );
+      } catch {}
 
       // Update cache
       let rec = this.activeRecoveries.get(bookingId) || {};
