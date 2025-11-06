@@ -346,26 +346,20 @@ class RecoveryHandler {
       return out;
     };
     const extractLatLng = (driver) => {
-      // Try multiple shapes
       const c =
         driver?.location?.coordinates ||
         driver?.currentLocation?.coordinates ||
         null;
       if (Array.isArray(c) && c.length >= 2) {
-        // Might be [lng,lat] or [lat,lng]; most of repo uses [lng,lat]
         const lngFirst = Number(c[0]);
         const latSecond = Number(c[1]);
-        // Heuristic: if abs(lat) > abs(lng) then probably it's [lat,lng]
         const abs0 = Math.abs(lngFirst);
         const abs1 = Math.abs(latSecond);
         if (abs0 <= 90 && abs1 >= 90) {
-          // [lat,lng]
           return { lat: lngFirst, lng: latSecond };
         }
-        // assume [lng,lat]
         return { lat: latSecond, lng: lngFirst };
       }
-      // Objects
       if (driver?.location?.lat != null && driver?.location?.lng != null) {
         return {
           lat: Number(driver.location.lat),
@@ -387,7 +381,6 @@ class RecoveryHandler {
       if (!GOOGLE_KEY || typeof fetch !== "function") return null;
       if (!originsLatLng?.length) return null;
 
-      // Distance Matrix: up to 25 origins per request when 1 destination
       const batches = chunk(originsLatLng, 25);
       const results = [];
       for (const batch of batches) {
@@ -406,20 +399,15 @@ class RecoveryHandler {
             results.push(...batch.map(() => null));
             continue;
           }
-          // rows aligns with origins; each row has elements aligned with destinations (1)
           for (const row of json.rows) {
             const el = Array.isArray(row?.elements) ? row.elements[0] : null;
             if (el && el.status === "OK") {
-              results.push({
-                distance: el.distance, // { value: meters, text }
-                duration: el.duration, // { value: seconds, text }
-              });
+              results.push({ distance: el.distance, duration: el.duration });
             } else {
               results.push(null);
             }
           }
         } catch {
-          // On failure, push nulls for this batch to keep indexes aligned
           results.push(...batch.map(() => null));
         }
       }
@@ -428,7 +416,7 @@ class RecoveryHandler {
     const augmentDriversWithGoogleEta = async (drivers, pickupPoint) => {
       if (!drivers?.length || !pickupPoint) return drivers || [];
       const origins = [];
-      const indexMap = []; // keep driver index alignment
+      const indexMap = [];
       drivers.forEach((d, i) => {
         const ll = extractLatLng(d);
         if (ll) {
@@ -439,9 +427,8 @@ class RecoveryHandler {
       if (!origins.length) return drivers;
 
       const dm = await distanceMatrixBatch(origins, pickupPoint);
-      if (!dm) return drivers; // fall back silently
+      if (!dm) return drivers;
 
-      // Map back to drivers
       dm.forEach((item, idx) => {
         const di = indexMap[idx];
         if (di == null || !drivers[di]) return;
@@ -568,7 +555,7 @@ class RecoveryHandler {
         ? derivedFromSub
         : null;
 
-      // Distance
+      // Distance (existing)
       let distanceKm =
         this._calcDistanceKm(
           { lat: pickArr[1], lng: pickArr[0] },
@@ -621,7 +608,6 @@ class RecoveryHandler {
           tripProgress: 0,
           isCancelled: false,
           cancellationReason: null,
-          // Optional flags:
           isNightTime: data?.options?.isNightTime ?? undefined,
           roundTrip: data?.options?.roundTrip ?? undefined,
           helper: data?.options?.helper ?? undefined,
@@ -850,7 +836,7 @@ class RecoveryHandler {
         if (userId) {
           const cust = await User.findById(userId)
             .select(
-              "firstName lastName email phoneNumber selfieImage username avatarUrl"
+              "firstName lastName email phoneNumber selfieImage username avatarUrl pinnedDrivers favoriteDrivers"
             )
             .lean();
           customerProfile = buildCustomerProfile(cust);
@@ -963,7 +949,7 @@ class RecoveryHandler {
         }
       }
 
-      // NEW: Enrich with Google real-time ETA/distance (fallback to existing heuristic if Google key/fetch not available)
+      // Enrich nearby with Google ETA
       try {
         if (nearbyDrivers?.length) {
           nearbyDrivers = await augmentDriversWithGoogleEta(
@@ -971,37 +957,259 @@ class RecoveryHandler {
             pickupPoint
           );
         }
-      } catch {
-        // silently ignore, keep original distances/etaMinutes from getAvailableDrivers
+      } catch {}
+
+      // Room-based targeting
+      const baseRoom = `svc:${normKey("car recovery")}`;
+      const categoryRoom = `svc:${normKey("car recovery")}:${normKey(
+        serviceCategory
+      )}`;
+      const subKey = subServiceNormalized
+        ? normKey(subServiceNormalized)
+        : null;
+      const subCategoryRoom = subKey
+        ? `svc:${normKey("car recovery")}:${normKey(serviceCategory)}:${subKey}`
+        : null;
+
+      const getRoomMemberIds = (room) => {
+        try {
+          if (!room) return [];
+          if (this.webSocketService?.getRoomMembers) {
+            const ids = this.webSocketService.getRoomMembers(room);
+            return Array.isArray(ids) ? ids.map((x) => String(x)) : [];
+          }
+          const rs = this.webSocketService?.rooms || this.rooms;
+          const setLike =
+            rs?.get?.(room)?.members ||
+            rs?.[room]?.members ||
+            rs?.get?.(room) ||
+            rs?.[room];
+          if (!setLike) return [];
+          const arr = Array.isArray(setLike)
+            ? setLike
+            : typeof setLike.forEach === "function"
+            ? (() => {
+                const a = [];
+                setLike.forEach((v) => a.push(v));
+                return a;
+              })()
+            : [];
+          return arr
+            .map((x) => String(x?.userId || x?.id || x))
+            .filter(Boolean);
+        } catch {
+          return [];
+        }
+      };
+
+      let roomMemberIds = new Set();
+      const subMembers = subCategoryRoom
+        ? getRoomMemberIds(subCategoryRoom)
+        : [];
+      const catMembers = getRoomMemberIds(categoryRoom);
+      const baseMembers = getRoomMemberIds(baseRoom);
+      if (subMembers.length) roomMemberIds = new Set(subMembers);
+      else if (catMembers.length) roomMemberIds = new Set(catMembers);
+      else roomMemberIds = new Set(baseMembers);
+
+      // Flags
+      const pinnedOnly = !!(data?.dispatch?.pinnedOnly || data?.targetPinned);
+      const favoritesOnly = !!(
+        data?.dispatch?.favoritesOnly || data?.targetFavorites
+      );
+      const nearbyOnly = !!(data?.dispatch?.nearbyOnly || data?.targetNearby);
+
+      // Load user's pinned/favorite ids
+      let pinnedIds = [];
+      let favoriteIds = [];
+      try {
+        if (userId) {
+          const cust = await User.findById(userId)
+            .select("pinnedDrivers favoriteDrivers")
+            .lean();
+          pinnedIds = (cust?.pinnedDrivers || []).map(String);
+          favoriteIds = (cust?.favoriteDrivers || []).map(String);
+        }
+      } catch {}
+
+      // Busy/ongoing filter
+      const filterOutOngoing = async (ids) => {
+        if (!ids?.length) return new Set(ids || []);
+        const busy = await User.find({
+          _id: { $in: ids },
+          $or: [
+            { "driverStats.ongoing": { $gt: 0 } },
+            { "ongoingBookings.0": { $exists: true } },
+          ],
+        })
+          .select("_id")
+          .lean();
+        const busySet = new Set(busy.map((b) => String(b._id)));
+        return new Set(ids.filter((id) => !busySet.has(String(id))));
+      };
+
+      // Build nearby IDs
+      const nearbyIds = (nearbyDrivers || []).map((d) =>
+        String(d.id || d._id || d.userId || "")
+      );
+
+      // Intersect with room membership, then exclude ongoing
+      const intersect = (ids) =>
+        Array.from(
+          new Set((ids || []).filter((id) => roomMemberIds.has(String(id))))
+        );
+
+      const pinnedRoom = intersect(pinnedIds);
+      const favRoom = intersect(favoriteIds);
+      const nearbyRoom = intersect(nearbyIds);
+
+      const pinnedClean = await filterOutOngoing(pinnedRoom);
+      const favoriteClean = await filterOutOngoing(favRoom);
+      const nearbyCleanIds = await filterOutOngoing(nearbyRoom);
+
+      // Map nearbyCleanIds back to enriched nearby driver objects if present
+      const nearbyClean = (nearbyDrivers || []).filter((d) =>
+        nearbyCleanIds.has(String(d.id || d._id || d.userId || ""))
+      );
+
+      // Compose candidates per flags
+      let candidateDrivers = [];
+      if (pinnedOnly) {
+        const byId = new Map(
+          nearbyClean.map((d) => [String(d.id || d._id || ""), d])
+        );
+        candidateDrivers = Array.from(pinnedClean).map(
+          (id) => byId.get(id) || { id }
+        );
+      } else if (favoritesOnly) {
+        const byId = new Map(
+          nearbyClean.map((d) => [String(d.id || d._id || ""), d])
+        );
+        candidateDrivers = Array.from(favoriteClean).map(
+          (id) => byId.get(id) || { id }
+        );
+      } else if (nearbyOnly) {
+        candidateDrivers = nearbyClean;
+      } else {
+        const unionIds = new Set([
+          ...Array.from(pinnedClean),
+          ...Array.from(favoriteClean),
+          ...Array.from(nearbyCleanIds),
+        ]);
+        const byId = new Map(
+          nearbyClean.map((d) => [String(d.id || d._id || ""), d])
+        );
+        candidateDrivers = Array.from(unionIds).map(
+          (id) => byId.get(id) || { id }
+        );
       }
 
-      // Emit available drivers list to requester (now enriched)
+      // Ensure ETA/distance for ALL candidate drivers (if some came only by id)
+      try {
+        const missing = candidateDrivers
+          .map((d) => ({
+            id: String(d.id || d._id || d.userId || ""),
+            hasMetrics:
+              d.distanceMeters != null &&
+              d.etaSeconds != null &&
+              !Number.isNaN(d.distanceMeters) &&
+              !Number.isNaN(d.etaSeconds),
+          }))
+          .filter((x) => x.id && !x.hasMetrics);
+
+        if (missing.length) {
+          const ids = missing.map((m) => m.id);
+          const docs = await User.find({ _id: { $in: ids } })
+            .select("_id currentLocation")
+            .lean();
+          const synthetic = docs.map((u) => ({
+            id: String(u._id),
+            currentLocation: u.currentLocation || null,
+          }));
+          const enriched = await augmentDriversWithGoogleEta(
+            synthetic,
+            pickupPoint
+          );
+          const mapById = new Map(
+            enriched.map((e) => [String(e.id || e._id || ""), e])
+          );
+          candidateDrivers = candidateDrivers.map((d) => {
+            const cid = String(d.id || d._id || d.userId || "");
+            if (!cid) return d;
+            if (
+              d.distanceMeters == null ||
+              d.etaSeconds == null ||
+              Number.isNaN(d.distanceMeters) ||
+              Number.isNaN(d.etaSeconds)
+            ) {
+              const e = mapById.get(cid);
+              if (e && e.distanceMeters != null && e.etaSeconds != null) {
+                d.distanceMeters = Number(e.distanceMeters);
+                d.distanceText = String(e.distanceText || "");
+                d.etaSeconds = Number(e.etaSeconds);
+                d.etaText = String(e.etaText || "");
+              }
+            }
+            return d;
+          });
+        }
+      } catch {}
+
+      // Emit available drivers list to requester (kept)
       this.emitToClient(ws, {
         event: "carRecovery:driversAvailable",
         bookingId,
         data: {
-          drivers: nearbyDrivers || [],
-          count: nearbyDrivers?.length || 0,
+          drivers: candidateDrivers || [],
+          count: candidateDrivers?.length || 0,
           updatedAt: new Date(),
           dispatchMode: discoveryFilters?.preferredDispatch?.mode || null,
         },
       });
 
-      // Broadcast to service rooms (unchanged)
+      // Build dispatchedDrivers list for requester recovery.requested
+      const candidateIds = candidateDrivers
+        .map((d) => String(d.id || d._id || d.userId || ""))
+        .filter(Boolean);
+      let profiles = [];
       try {
-        const baseRoom = `svc:${normKey("car recovery")}`;
-        const categoryRoom = `svc:${normKey("car recovery")}:${normKey(
-          serviceCategory
-        )}`;
-        const subKey = subServiceNormalized
-          ? normKey(subServiceNormalized)
-          : null;
-        const subCategoryRoom = subKey
-          ? `svc:${normKey("car recovery")}:${normKey(
-              serviceCategory
-            )}:${subKey}`
-          : null;
+        if (candidateIds.length) {
+          profiles = await User.find({ _id: { $in: candidateIds } })
+            .select("_id firstName lastName email phoneNumber selfieImage")
+            .lean();
+        }
+      } catch {}
+      const profById = new Map(profiles.map((p) => [String(p._id), p]));
+      const pinnedSet = new Set(Array.from(pinnedClean || []));
+      const favSet = new Set(Array.from(favoriteClean || []));
+      const nearSet = new Set(Array.from(nearbyCleanIds || []));
+      const dispatchedDrivers = candidateIds.map((id) => {
+        const p = profById.get(id);
+        const sources = [];
+        if (pinnedSet.has(id)) sources.push("pinned");
+        if (favSet.has(id)) sources.push("favorite");
+        if (nearSet.has(id)) sources.push("nearby");
+        const m =
+          candidateDrivers.find(
+            (d) => String(d.id || d._id || d.userId || "") === id
+          ) || {};
+        const name = `${p?.firstName ?? ""} ${p?.lastName ?? ""}`.trim();
+        return {
+          id,
+          name: name || null,
+          email: p?.email || null,
+          phone: p?.phoneNumber || null,
+          image: p?.selfieImage || null,
+          sources,
+          distanceMeters: m.distanceMeters ?? null,
+          distanceText: m.distanceText ?? null,
+          etaSeconds: m.etaSeconds ?? null,
+          etaText: m.etaText ?? null,
+        };
+      });
 
+      // Broadcast to service rooms: keep only recovery.requested (removed duplicate legacy newRecoveryRequest broadcast)
+      try {
         const newEventPayload = {
           event: "recovery.requested",
           bookingId,
@@ -1020,11 +1228,22 @@ class RecoveryHandler {
             at: now,
           },
         };
-        const legacyEventPayload = {
-          event: "newRecoveryRequest",
+
+        if (this.webSocketService?.sendToRoom) {
+          this.webSocketService.sendToRoom(baseRoom, newEventPayload);
+          this.webSocketService.sendToRoom(categoryRoom, newEventPayload);
+          if (subCategoryRoom) {
+            this.webSocketService.sendToRoom(subCategoryRoom, newEventPayload);
+          }
+        }
+      } catch {}
+
+      // Send recovery.requested TO REQUESTER including dispatchedDrivers
+      try {
+        this.emitToClient(ws, {
+          event: "recovery.requested",
           bookingId,
           data: {
-            bookingId,
             serviceType,
             serviceCategory,
             pickupLocation: insertDoc.pickupLocation,
@@ -1034,32 +1253,47 @@ class RecoveryHandler {
             minFare,
             maxFare,
             currency: currencyFromConfig,
+            vehicleType: vehicleTypeDerived,
             customer: customerProfile,
-            at: now.toISOString(),
+            dispatchedDrivers,
+            at: now,
           },
-        };
-
-        if (this.webSocketService?.sendToRoom) {
-          this.webSocketService.sendToRoom(baseRoom, newEventPayload);
-          this.webSocketService.sendToRoom(baseRoom, legacyEventPayload);
-          this.webSocketService.sendToRoom(categoryRoom, newEventPayload);
-          this.webSocketService.sendToRoom(categoryRoom, legacyEventPayload);
-          if (subCategoryRoom) {
-            this.webSocketService.sendToRoom(subCategoryRoom, newEventPayload);
-            this.webSocketService.sendToRoom(
-              subCategoryRoom,
-              legacyEventPayload
-            );
-          }
-        }
+        });
       } catch {}
 
-      // NEW: Targeted notifications to each nearby driver with their personalized ETA/distance (like inDriver)
+      // Targeted notifications only to selected candidates:
+      // 1) recovery.requested (driver should also “see” it)
+      // 2) newRecoveryRequest with ETA/distance (single copy)
       try {
-        if (Array.isArray(nearbyDrivers) && this.webSocketService?.sendToUser) {
-          for (const d of nearbyDrivers) {
+        if (
+          Array.isArray(candidateDrivers) &&
+          this.webSocketService?.sendToUser
+        ) {
+          for (const d of candidateDrivers) {
             const driverId = String(d.id || d._id || "").trim();
             if (!driverId) continue;
+
+            // recovery.requested to driver
+            this.webSocketService.sendToUser(driverId, {
+              event: "recovery.requested",
+              bookingId,
+              data: {
+                serviceType,
+                serviceCategory,
+                pickupLocation: insertDoc.pickupLocation,
+                dropoffLocation: insertDoc.dropoffLocation,
+                distance: Number(distanceKm || 0),
+                estimatedFare: Number(estimatedFare || 0),
+                minFare,
+                maxFare,
+                currency: currencyFromConfig,
+                vehicleType: vehicleTypeDerived,
+                customer: customerProfile,
+                at: now,
+              },
+            });
+
+            // single newRecoveryRequest with ETA/distance
             this.webSocketService.sendToUser(driverId, {
               event: "newRecoveryRequest",
               bookingId,
@@ -1073,28 +1307,17 @@ class RecoveryHandler {
                 distance: Number(distanceKm || 0),
                 estimatedFare: Number(estimatedFare || 0),
                 currency: currencyFromConfig,
-                driverDistance: {
-                  meters:
-                    d.distanceMeters != null
-                      ? Number(d.distanceMeters)
-                      : Math.round((Number(d.distanceKm || 0) || 0) * 1000),
-                  text:
-                    d.distanceText ||
-                    (d.distanceKm != null
-                      ? `${Number(d.distanceKm).toFixed(1)} km`
-                      : null),
-                },
-                driverETA: {
-                  seconds:
-                    d.etaSeconds != null
-                      ? Number(d.etaSeconds)
-                      : Math.max(1, Number(d.etaMinutes || 0) * 60) || null,
-                  text:
-                    d.etaText ||
-                    (d.etaMinutes != null
-                      ? `${Math.max(1, Math.ceil(d.etaMinutes))} mins`
-                      : null),
-                },
+                driverDistance:
+                  d.distanceMeters != null
+                    ? {
+                        meters: Number(d.distanceMeters),
+                        text: d.distanceText || null,
+                      }
+                    : null,
+                driverETA:
+                  d.etaSeconds != null
+                    ? { seconds: Number(d.etaSeconds), text: d.etaText || null }
+                    : null,
                 at: new Date(),
               },
             });
