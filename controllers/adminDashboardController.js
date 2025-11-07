@@ -30,6 +30,143 @@ export const getAdminOverview = asyncHandler(async (req, res) => {
   }
 });
 
+// Driver Reports: total drivers, online drivers, unverified KYC
+export const getDriverReports = asyncHandler(async (req, res) => {
+  try {
+    const [total, online, unverifiedKyc] = await Promise.all([
+      User.countDocuments({ role: "driver" }),
+      User.countDocuments({ role: "driver", driverStatus: "online" }),
+      User.countDocuments({ role: "driver", kycStatus: { $ne: "approved" } }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: "Driver reports fetched successfully",
+      data: {
+        totals: {
+          totalDrivers: total,
+          onlineDrivers: online,
+          unverifiedKyc,
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Ride & Service Reports: totals, completed, cancelled, top service, peak hour, service-wise success rate
+export const getRideServiceReports = asyncHandler(async (req, res) => {
+  try {
+    const [total, completed, cancelled] = await Promise.all([
+      Booking.countDocuments({}),
+      Booking.countDocuments({ status: "completed" }),
+      Booking.countDocuments({ status: "cancelled" }),
+    ]);
+
+    // Peak usage time by hour of day
+    const peakHourAgg = await Booking.aggregate([
+      { $group: { _id: { $hour: "$createdAt" }, count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 1 },
+    ]);
+    const peakUsageTime = peakHourAgg[0]
+      ? { hour: peakHourAgg[0]._id, count: peakHourAgg[0].count }
+      : null;
+
+    // Service-wise breakdown (counts, completed/cancelled, successRate)
+    const servicesAgg = await Booking.aggregate([
+      {
+        $group: {
+          _id: "$serviceType",
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          serviceType: "$_id",
+          total: 1,
+          completed: 1,
+          cancelled: 1,
+          successRate: {
+            $cond: [
+              { $gt: ["$total", 0] },
+              { $divide: ["$completed", "$total"] },
+              0,
+            ],
+          },
+        },
+      },
+      { $sort: { total: -1 } },
+    ]);
+
+    const serviceTypeBreakdown = servicesAgg.map((s) => ({
+      ...s,
+      percentage: total > 0 ? s.total / total : 0,
+    }));
+    const topServiceType = serviceTypeBreakdown[0] || null;
+
+    res.status(200).json({
+      success: true,
+      message: "Ride & Service reports fetched successfully",
+      data: {
+        totals: {
+          totalBookings: total,
+          completedRides: completed,
+          cancelledRides: cancelled,
+        },
+        peakUsageTime,
+        topServiceType,
+        serviceTypeBreakdown,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Customer Reports: total, active (by recent bookings), inactive, verified/unverified KYC
+export const getAnalyticsReports = asyncHandler(async (req, res) => {
+  try {
+    const days = Math.max(1, parseInt(req.query?.days, 10) || 30);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const [totalCustomers, verifiedKyc, activeUserIds] = await Promise.all([
+      User.countDocuments({ role: "customer" }),
+      User.countDocuments({ role: "customer", kycStatus: "approved" }),
+      Booking.distinct("user", { createdAt: { $gte: since } }),
+    ]);
+
+    const activeCustomers = Array.isArray(activeUserIds)
+      ? await User.countDocuments({
+          role: "customer",
+          _id: { $in: activeUserIds },
+        })
+      : 0;
+    const inactiveCustomers = Math.max(0, totalCustomers - activeCustomers);
+
+    res.status(200).json({
+      success: true,
+      message: "Customer reports fetched successfully",
+      data: {
+        params: { days },
+        totals: {
+          totalCustomers,
+          activeCustomers,
+          inactiveCustomers,
+          verifiedKyc,
+          unverifiedKyc: Math.max(0, totalCustomers - verifiedKyc),
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 export const addChatKeywords = asyncHandler(async (req, res) => {
   const adminId = req.user?._id;
   const words = Array.isArray(req.body?.words) ? req.body.words : [];
@@ -37,11 +174,17 @@ export const addChatKeywords = asyncHandler(async (req, res) => {
     return res.status(401).json({ success: false, message: "Unauthorized" });
   }
   if (words.length === 0) {
-    return res.status(400).json({ success: false, message: "words array is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "words array is required" });
   }
 
   const normalized = words
-    .map((w) => String(w || "").trim().toLowerCase())
+    .map((w) =>
+      String(w || "")
+        .trim()
+        .toLowerCase()
+    )
     .filter((w) => w.length > 0);
 
   const admin = await User.findByIdAndUpdate(
@@ -62,14 +205,15 @@ export const getChatKeywords = asyncHandler(async (req, res) => {
   if (!adminId) {
     return res.status(401).json({ success: false, message: "Unauthorized" });
   }
-  const admin = await User.findById(adminId).select("adminSettings.chatKeywords").lean();
+  const admin = await User.findById(adminId)
+    .select("adminSettings.chatKeywords")
+    .lean();
   res.status(200).json({
     success: true,
     message: "Keywords fetched",
     data: { keywords: admin?.adminSettings?.chatKeywords || [] },
   });
 });
-  
 
 export const deleteChatKeyword = asyncHandler(async (req, res) => {
   const adminId = req.user?._id;
@@ -77,9 +221,13 @@ export const deleteChatKeyword = asyncHandler(async (req, res) => {
   if (!adminId) {
     return res.status(401).json({ success: false, message: "Unauthorized" });
   }
-  const target = String(word || "").trim().toLowerCase();
+  const target = String(word || "")
+    .trim()
+    .toLowerCase();
   if (!target) {
-    return res.status(400).json({ success: false, message: "word param is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "word param is required" });
   }
   const admin = await User.findByIdAndUpdate(
     adminId,
@@ -100,18 +248,19 @@ export const searchChatsByKeywords = asyncHandler(async (req, res) => {
   }
 
   const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
-  const limit = Math.max(1, Math.min(100, parseInt(req.query?.limit, 10) || 10));
+  const limit = Math.max(
+    1,
+    Math.min(100, parseInt(req.query?.limit, 10) || 10)
+  );
   const skip = (page - 1) * limit;
 
   // Source of keywords: current admin's list unless overridden via ?words=a,b
-  const override = typeof req.query?.words === "string" ? req.query.words.split(",") : [];
+  const override =
+    typeof req.query?.words === "string" ? req.query.words.split(",") : [];
   let keywords = override.length
     ? override
-    : (
-        (
-          await User.findById(adminId).select("adminSettings.chatKeywords").lean()
-        )?.adminSettings?.chatKeywords || []
-      );
+    : (await User.findById(adminId).select("adminSettings.chatKeywords").lean())
+        ?.adminSettings?.chatKeywords || [];
 
   keywords = keywords
     .map((w) => String(w || "").trim())
@@ -156,7 +305,9 @@ export const searchChatsByKeywords = asyncHandler(async (req, res) => {
             ? {
                 id: String(m.sender._id || m.sender || ""),
                 name:
-                  `${m.sender.firstName ?? ""} ${m.sender.lastName ?? ""}`.trim() ||
+                  `${m.sender.firstName ?? ""} ${
+                    m.sender.lastName ?? ""
+                  }`.trim() ||
                   m.sender.username ||
                   undefined,
                 role: m.sender.role,
@@ -267,9 +418,7 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
         : undefined;
     const hasChatsParam = req.query?.hasChats;
     const hasChats =
-      typeof hasChatsParam === "string"
-        ? hasChatsParam === "true"
-        : undefined;
+      typeof hasChatsParam === "string" ? hasChatsParam === "true" : undefined;
 
     const [totalBookings, totalCustomers, totalDrivers, bookingsWithChats] =
       await Promise.all([
@@ -303,7 +452,9 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
         Booking.countDocuments({ status: "completed" }),
         Booking.countDocuments({ status: "cancelled" }),
         Booking.countDocuments({ status: "pending" }),
-        Booking.countDocuments({ status: { $in: ["accepted", "started", "in_progress"] } }),
+        Booking.countDocuments({
+          status: { $in: ["accepted", "started", "in_progress"] },
+        }),
       ]);
 
       listCount = await Booking.countDocuments(bookingQuery);

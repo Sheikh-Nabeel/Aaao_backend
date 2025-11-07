@@ -14,6 +14,9 @@ import {
   getChatKeywords,
   deleteChatKeyword,
   searchChatsByKeywords,
+  getDriverReports,
+  getRideServiceReports,
+  getAnalyticsReports,
 } from "../controllers/adminDashboardController.js";
 
 const router = express.Router();
@@ -42,6 +45,11 @@ router.get("/dashboard/overview", getAdminOverview);
 
 // Admin dashboard - chats for a booking
 router.get("/dashboard/booking/:bookingId/chats", getBookingChats);
+
+// Admin dashboard - reports
+router.get("/dashboard/reports/drivers", getDriverReports);
+router.get("/dashboard/reports/rides-services", getRideServiceReports);
+router.get("/dashboard/reports/analytics", getAnalyticsReports); // optional ?days=30
 
 // Admin dashboard - chat keywords management
 router.post("/dashboard/keywords", addChatKeywords); // body: { words: string[] }
