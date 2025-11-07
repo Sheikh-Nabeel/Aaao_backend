@@ -30,6 +30,155 @@ export const getAdminOverview = asyncHandler(async (req, res) => {
   }
 });
 
+export const addChatKeywords = asyncHandler(async (req, res) => {
+  const adminId = req.user?._id;
+  const words = Array.isArray(req.body?.words) ? req.body.words : [];
+  if (!adminId) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+  if (words.length === 0) {
+    return res.status(400).json({ success: false, message: "words array is required" });
+  }
+
+  const normalized = words
+    .map((w) => String(w || "").trim().toLowerCase())
+    .filter((w) => w.length > 0);
+
+  const admin = await User.findByIdAndUpdate(
+    adminId,
+    { $addToSet: { "adminSettings.chatKeywords": { $each: normalized } } },
+    { new: true, select: "adminSettings.chatKeywords" }
+  ).lean();
+
+  res.status(200).json({
+    success: true,
+    message: "Keywords added",
+    data: { keywords: admin?.adminSettings?.chatKeywords || [] },
+  });
+});
+
+export const getChatKeywords = asyncHandler(async (req, res) => {
+  const adminId = req.user?._id;
+  if (!adminId) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+  const admin = await User.findById(adminId).select("adminSettings.chatKeywords").lean();
+  res.status(200).json({
+    success: true,
+    message: "Keywords fetched",
+    data: { keywords: admin?.adminSettings?.chatKeywords || [] },
+  });
+});
+  
+
+export const deleteChatKeyword = asyncHandler(async (req, res) => {
+  const adminId = req.user?._id;
+  const { word } = req.params;
+  if (!adminId) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+  const target = String(word || "").trim().toLowerCase();
+  if (!target) {
+    return res.status(400).json({ success: false, message: "word param is required" });
+  }
+  const admin = await User.findByIdAndUpdate(
+    adminId,
+    { $pull: { "adminSettings.chatKeywords": target } },
+    { new: true, select: "adminSettings.chatKeywords" }
+  ).lean();
+  res.status(200).json({
+    success: true,
+    message: "Keyword removed",
+    data: { keywords: admin?.adminSettings?.chatKeywords || [] },
+  });
+});
+
+export const searchChatsByKeywords = asyncHandler(async (req, res) => {
+  const adminId = req.user?._id;
+  if (!adminId) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+
+  const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query?.limit, 10) || 10));
+  const skip = (page - 1) * limit;
+
+  // Source of keywords: current admin's list unless overridden via ?words=a,b
+  const override = typeof req.query?.words === "string" ? req.query.words.split(",") : [];
+  let keywords = override.length
+    ? override
+    : (
+        (
+          await User.findById(adminId).select("adminSettings.chatKeywords").lean()
+        )?.adminSettings?.chatKeywords || []
+      );
+
+  keywords = keywords
+    .map((w) => String(w || "").trim())
+    .filter((w) => w.length > 0);
+
+  if (keywords.length === 0) {
+    return res.status(200).json({
+      success: true,
+      message: "No keywords set",
+      data: { page, limit, total: 0, items: [] },
+    });
+  }
+
+  // Build regex to match any keyword (case-insensitive)
+  const escaped = keywords.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "i");
+
+  // Find bookings that have any matching message
+  const query = { "messages.message": { $regex: regex } };
+  const total = await Booking.countDocuments(query);
+
+  const bookings = await Booking.find(query)
+    .select("_id messages")
+    .populate({
+      path: "messages.sender",
+      select: "firstName lastName username phoneNumber role selfieImage",
+      model: "User",
+    })
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  const items = bookings.map((b) => ({
+    bookingId: b._id,
+    messages: (b.messages || [])
+      .filter((m) => typeof m.message === "string" && regex.test(m.message))
+      .map((m) => ({
+        id: String(m._id || ""),
+        sender:
+          m.sender && typeof m.sender === "object"
+            ? {
+                id: String(m.sender._id || m.sender || ""),
+                name:
+                  `${m.sender.firstName ?? ""} ${m.sender.lastName ?? ""}`.trim() ||
+                  m.sender.username ||
+                  undefined,
+                role: m.sender.role,
+                phoneNumber: m.sender.phoneNumber,
+                avatar: m.sender.selfieImage || null,
+              }
+            : { id: String(m.sender || ""), role: m.senderRole || undefined },
+        senderRole: m.senderRole,
+        message: m.message,
+        messageType: m.messageType,
+        timestamp: m.timestamp,
+        readBy: m.readBy || [],
+      })),
+  }));
+
+  res.status(200).json({
+    success: true,
+    message: "Chats searched by keywords",
+    data: { page, limit, total, items, params: { words: keywords } },
+  });
+});
+
 export const getBookingChats = asyncHandler(async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -42,7 +191,7 @@ export const getBookingChats = asyncHandler(async (req, res) => {
     }
 
     const booking = await Booking.findById(bookingId)
-      .select("_id user driver messages")
+      .select("_id messages")
       .populate({
         path: "messages.sender",
         select: "firstName lastName username phoneNumber role selfieImage",
@@ -88,8 +237,6 @@ export const getBookingChats = asyncHandler(async (req, res) => {
       message: "Booking chats fetched successfully",
       data: {
         bookingId: booking._id,
-        userId: booking.user,
-        driverId: booking.driver,
         messages,
       },
     });
@@ -108,6 +255,21 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
       Math.min(100, parseInt(req.query?.limit, 10) || 10)
     );
     const skip = (page - 1) * limit;
+    const status = String(req.query?.status || "").toLowerCase();
+    const isActiveParam = req.query?.isActive;
+    const isActiveFilter =
+      typeof isActiveParam === "string"
+        ? isActiveParam === "true"
+          ? true
+          : isActiveParam === "false"
+          ? false
+          : undefined
+        : undefined;
+    const hasChatsParam = req.query?.hasChats;
+    const hasChats =
+      typeof hasChatsParam === "string"
+        ? hasChatsParam === "true"
+        : undefined;
 
     const [totalBookings, totalCustomers, totalDrivers, bookingsWithChats] =
       await Promise.all([
@@ -124,13 +286,88 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
 
     if (type === "bookings") {
       listType = "bookings";
-      listCount = totalBookings;
-      // FULL booking documents
-      list = await Booking.find({})
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean();
+      const bookingQuery = {};
+      if (hasChats === true) {
+        bookingQuery["messages.0"] = { $exists: true };
+      }
+      if (status) {
+        if (status === "ongoing") {
+          bookingQuery.status = { $in: ["accepted", "started", "in_progress"] };
+        } else {
+          bookingQuery.status = status;
+        }
+      }
+
+      // Counts (overall, not affected by filters)
+      const [completed, cancelled, pending, ongoing] = await Promise.all([
+        Booking.countDocuments({ status: "completed" }),
+        Booking.countDocuments({ status: "cancelled" }),
+        Booking.countDocuments({ status: "pending" }),
+        Booking.countDocuments({ status: { $in: ["accepted", "started", "in_progress"] } }),
+      ]);
+
+      listCount = await Booking.countDocuments(bookingQuery);
+
+      if (hasChats === true) {
+        // Minimal shape with chats only
+        const bookings = await Booking.find(bookingQuery)
+          .select("_id messages")
+          .populate({
+            path: "messages.sender",
+            select: "firstName lastName username phoneNumber role selfieImage",
+            model: "User",
+          })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean();
+
+        list = bookings.map((booking) => ({
+          bookingId: booking._id,
+          messages: (booking.messages || []).map((m) => ({
+            id: String(m._id || ""),
+            sender:
+              m.sender && typeof m.sender === "object"
+                ? {
+                    id: String(m.sender._id || m.sender || ""),
+                    name:
+                      `${m.sender.firstName ?? ""} ${
+                        m.sender.lastName ?? ""
+                      }`.trim() ||
+                      m.sender.username ||
+                      undefined,
+                    role: m.sender.role,
+                    phoneNumber: m.sender.phoneNumber,
+                    avatar: m.sender.selfieImage || null,
+                  }
+                : {
+                    id: String(m.sender || ""),
+                    role: m.senderRole || undefined,
+                  },
+            senderRole: m.senderRole,
+            message: m.message,
+            messageType: m.messageType,
+            timestamp: m.timestamp,
+            readBy: m.readBy || [],
+          })),
+        }));
+      } else {
+        // Full booking documents
+        list = await Booking.find(bookingQuery)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean();
+      }
+
+      // attach counts for bookings
+      var bookingStatusCounts = {
+        total: totalBookings,
+        completed,
+        cancelled,
+        ongoing,
+        pending,
+      };
     } else if (type === "customers") {
       listType = "customers";
       listCount = totalCustomers;
@@ -142,9 +379,15 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
         .lean();
     } else if (type === "drivers") {
       listType = "drivers";
-      listCount = totalDrivers;
-      // FULL driver docs filtered by role
-      list = await User.find({ role: "driver" })
+      const driverQuery = { role: "driver" };
+      if (status) {
+        driverQuery.driverStatus = status;
+      }
+      if (typeof isActiveFilter === "boolean") {
+        driverQuery.isActive = isActiveFilter;
+      }
+      listCount = await User.countDocuments(driverQuery);
+      list = await User.find(driverQuery)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -153,6 +396,15 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
 
     // Optional chats
     let chats = null;
+    let driverStatusCounts = null;
+    if (listType === "drivers") {
+      const base = { role: "driver" };
+      const [online, offline] = await Promise.all([
+        User.countDocuments({ ...base, driverStatus: "online" }),
+        User.countDocuments({ ...base, driverStatus: "offline" }),
+      ]);
+      driverStatusCounts = { online, offline };
+    }
     if (bookingId) {
       if (!mongoose.Types.ObjectId.isValid(String(bookingId))) {
         return res
@@ -160,7 +412,7 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
           .json({ success: false, message: "Invalid bookingId" });
       }
       const booking = await Booking.findById(bookingId)
-        .select("_id user driver messages")
+        .select("_id messages")
         .populate({
           path: "messages.sender",
           select: "firstName lastName username phoneNumber role selfieImage",
@@ -174,8 +426,6 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
       }
       chats = {
         bookingId: booking._id,
-        userId: booking.user,
-        driverId: booking.driver,
         messages: (booking.messages || []).map((m) => ({
           id: String(m._id || ""),
           sender:
@@ -216,7 +466,31 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
           bookingsWithChats,
         },
         list: listType
-          ? { type: listType, page, limit, total: listCount, items: list }
+          ? {
+              type: listType,
+              page,
+              limit,
+              total: listCount,
+              items: list,
+              params:
+                listType === "drivers"
+                  ? {
+                      status: status || null,
+                      isActive:
+                        typeof isActiveFilter === "boolean"
+                          ? isActiveFilter
+                          : null,
+                    }
+                  : listType === "bookings"
+                  ? { hasChats: hasChats === true, status: status || null }
+                  : null,
+              counts:
+                listType === "drivers"
+                  ? driverStatusCounts
+                  : listType === "bookings"
+                  ? bookingStatusCounts
+                  : null,
+            }
           : null,
         chats,
       },

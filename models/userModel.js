@@ -143,6 +143,9 @@ const userSchema = new mongoose.Schema(
         "adminmanagement",
       ],
     },
+    adminSettings: {
+      chatKeywords: { type: [String], default: [] },
+    },
     services: [
       {
         type: mongoose.Schema.Types.ObjectId,
