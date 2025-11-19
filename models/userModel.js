@@ -313,6 +313,11 @@ const userSchema = new mongoose.Schema(
         enum: ["retirement", "deceased"],
         default: null,
       },
+      progress: {
+        pgpPoints: { type: Number, default: 0 },
+        tgpPoints: { type: Number, default: 0 },
+        overallProgress: { type: Number, default: 0 }
+      },
       notes: [
         {
           note: { type: String, required: true },
@@ -688,6 +693,7 @@ userSchema.methods.checkMLMQualification = function () {
 };
 
 // Helper method to calculate TGP distribution from individual legs
+// Returns TGP from the top 3 legs (A, B, C) and from all other legs separately
 userSchema.methods.calculateIndividualLegTgpDistribution = async function () {
   const User = mongoose.model("User");
 
@@ -702,6 +708,8 @@ userSchema.methods.calculateIndividualLegTgpDistribution = async function () {
     return {
       hasMinimumLegs: false,
       legDistribution: [],
+      threeLegsTgp: 0,
+      otherLegsTgp: 0,
       userTotalTgp: this.qualificationPoints.tgp.accumulated,
     };
   }
@@ -731,23 +739,39 @@ userSchema.methods.calculateIndividualLegTgpDistribution = async function () {
       }
     }
 
-    const userTotalTgp = this.qualificationPoints.tgp.accumulated;
-    const legPercentage = userTotalTgp > 0 ? (legTgp / userTotalTgp) * 100 : 0;
-
     legDistribution.push({
       legId: directReferral._id,
       tgpPoints: legTgp,
-      percentage: legPercentage,
     });
   }
 
   // Sort legs by TGP (highest to lowest)
   legDistribution.sort((a, b) => b.tgpPoints - a.tgpPoints);
 
+  // Get top 3 legs (A, B, C)
+  const topThreeLegs = legDistribution.slice(0, 3);
+  const threeLegsTgp = topThreeLegs.reduce((sum, leg) => sum + leg.tgpPoints, 0);
+
+  // Get TGP from all other legs (4th leg onwards)
+  const otherLegs = legDistribution.slice(3);
+  const otherLegsTgp = otherLegs.reduce((sum, leg) => sum + leg.tgpPoints, 0);
+
+  const userTotalTgp = this.qualificationPoints.tgp.accumulated;
+
+  // Calculate percentages for top 3 legs (as percentage of total TGP)
+  const topThreeLegsWithPercentages = topThreeLegs.map((leg, index) => ({
+    legId: leg.legId,
+    tgpPoints: leg.tgpPoints,
+    percentage: userTotalTgp > 0 ? (leg.tgpPoints / userTotalTgp) * 100 : 0,
+    legLabel: index === 0 ? 'A' : index === 1 ? 'B' : 'C'
+  }));
+
   return {
     hasMinimumLegs: directReferrals.length >= 3,
-    legDistribution,
-    userTotalTgp: this.qualificationPoints.tgp.accumulated,
+    legDistribution: topThreeLegsWithPercentages,
+    threeLegsTgp: threeLegsTgp,
+    otherLegsTgp: otherLegsTgp,
+    userTotalTgp: userTotalTgp,
   };
 };
 
@@ -810,6 +834,12 @@ userSchema.methods.updateCRRRank = async function (crrRanks) {
   const tgpPoints = stats.tgp.accumulated;
   const pgpPoints = stats.pgp.accumulated;
 
+  // Get MLM config for leg split ratio
+  const MLM = mongoose.model("MLM");
+  const mlm = await MLM.findOne();
+  const legSplitRatio = mlm?.crrConfig?.legSplitRatio || { fromThreeLegs: 60, fromOtherLegs: 40 };
+  const legPercentages = mlm?.crrConfig?.legPercentages || { legA: 33.33, legB: 33.33, legC: 33.34 };
+
   // Calculate individual leg TGP distribution
   const legData = await this.calculateIndividualLegTgpDistribution();
 
@@ -823,18 +853,38 @@ userSchema.methods.updateCRRRank = async function (crrRanks) {
     const pgpMet = pgpPoints >= requirements.pgp;
     const tgpMet = tgpPoints >= requirements.tgp;
 
-    // Check individual leg percentage requirements
+    // Check leg requirements with new 60/40 split logic
     let legRequirementsMet = false;
     if (legData.hasMinimumLegs && legData.legDistribution.length >= 3) {
-      const legA = legData.legDistribution[0]; // Highest TGP leg
-      const legB = legData.legDistribution[1]; // Second highest TGP leg
-      const legC = legData.legDistribution[2]; // Third highest TGP leg
-
-      const legAMet = legA.percentage >= requirements.legPercentages.legA;
-      const legBMet = legB.percentage >= requirements.legPercentages.legB;
-      const legCMet = legC.percentage >= requirements.legPercentages.legC;
-
-      legRequirementsMet = legAMet && legBMet && legCMet;
+      const requiredTgp = requirements.tgp;
+      
+      // Calculate required TGP from 3 legs (60% of total required TGP)
+      const requiredTgpFromThreeLegs = (requiredTgp * legSplitRatio.fromThreeLegs) / 100;
+      
+      // Check if user has enough TGP from the 3 legs (A, B, C)
+      const hasEnoughFromThreeLegs = legData.threeLegsTgp >= requiredTgpFromThreeLegs;
+      
+      if (hasEnoughFromThreeLegs) {
+        // Now check if each leg (A, B, C) meets its percentage requirement
+        // The percentages are of the "fromThreeLegs" portion (60%)
+        // So if legA should be 40% of the 60%, that means legA should have 40% of requiredTgpFromThreeLegs
+        
+        const legA = legData.legDistribution.find(l => l.legLabel === 'A');
+        const legB = legData.legDistribution.find(l => l.legLabel === 'B');
+        const legC = legData.legDistribution.find(l => l.legLabel === 'C');
+        
+        // Calculate required TGP for each leg based on percentages of the 60% portion
+        const requiredTgpForLegA = (requiredTgpFromThreeLegs * legPercentages.legA) / 100;
+        const requiredTgpForLegB = (requiredTgpFromThreeLegs * legPercentages.legB) / 100;
+        const requiredTgpForLegC = (requiredTgpFromThreeLegs * legPercentages.legC) / 100;
+        
+        const legAMet = legA && legA.tgpPoints >= requiredTgpForLegA;
+        const legBMet = legB && legB.tgpPoints >= requiredTgpForLegB;
+        const legCMet = legC && legC.tgpPoints >= requiredTgpForLegC;
+        
+        legRequirementsMet = legAMet && legBMet && legCMet;
+      }
+      // If not enough from 3 legs, legRequirementsMet remains false
     }
 
     return pgpMet && tgpMet && legRequirementsMet;
@@ -1017,6 +1067,72 @@ userSchema.methods.getCRRRankHistory = function () {
   return this.crrRank.history.sort(
     (a, b) => new Date(b.achievedAt) - new Date(a.achievedAt)
   );
+};
+
+// Helper method to check if user meets HLR leg requirements
+userSchema.methods.checkHLRLegRequirements = async function (hlrConfig) {
+  const stats = this.getQualificationPointsStats();
+  const tgpPoints = stats.tgp.accumulated;
+  const pgpPoints = stats.pgp.accumulated;
+  
+  // Check basic PGP and TGP requirements
+  const pgpMet = pgpPoints >= hlrConfig.requirements.pgp;
+  const tgpMet = tgpPoints >= hlrConfig.requirements.tgp;
+  
+  if (!pgpMet || !tgpMet) {
+    return {
+      meetsRequirements: false,
+      pgpMet,
+      tgpMet,
+      legRequirementsMet: false,
+      reason: !pgpMet ? 'PGP requirement not met' : 'TGP requirement not met'
+    };
+  }
+  
+  // Get leg split ratio and percentages from config
+  const legSplitRatio = hlrConfig.legSplitRatio || { fromThreeLegs: 60, fromOtherLegs: 40 };
+  const legPercentages = hlrConfig.legPercentages || { legA: 33.33, legB: 33.33, legC: 33.34 };
+  
+  // Calculate individual leg TGP distribution
+  const legData = await this.calculateIndividualLegTgpDistribution();
+  
+  let legRequirementsMet = false;
+  
+  if (legData.hasMinimumLegs && legData.legDistribution.length >= 3) {
+    const requiredTgp = hlrConfig.requirements.tgp;
+    
+    // Calculate required TGP from 3 legs (60% of total required TGP)
+    const requiredTgpFromThreeLegs = (requiredTgp * legSplitRatio.fromThreeLegs) / 100;
+    
+    // Check if user has enough TGP from the 3 legs (A, B, C)
+    const hasEnoughFromThreeLegs = legData.threeLegsTgp >= requiredTgpFromThreeLegs;
+    
+    if (hasEnoughFromThreeLegs) {
+      // Now check if each leg (A, B, C) meets its percentage requirement
+      const legA = legData.legDistribution.find(l => l.legLabel === 'A');
+      const legB = legData.legDistribution.find(l => l.legLabel === 'B');
+      const legC = legData.legDistribution.find(l => l.legLabel === 'C');
+      
+      // Calculate required TGP for each leg based on percentages of the 60% portion
+      const requiredTgpForLegA = (requiredTgpFromThreeLegs * legPercentages.legA) / 100;
+      const requiredTgpForLegB = (requiredTgpFromThreeLegs * legPercentages.legB) / 100;
+      const requiredTgpForLegC = (requiredTgpFromThreeLegs * legPercentages.legC) / 100;
+      
+      const legAMet = legA && legA.tgpPoints >= requiredTgpForLegA;
+      const legBMet = legB && legB.tgpPoints >= requiredTgpForLegB;
+      const legCMet = legC && legC.tgpPoints >= requiredTgpForLegC;
+      
+      legRequirementsMet = legAMet && legBMet && legCMet;
+    }
+  }
+  
+  return {
+    meetsRequirements: pgpMet && tgpMet && legRequirementsMet,
+    pgpMet,
+    tgpMet,
+    legRequirementsMet,
+    legData: legRequirementsMet ? legData : null
+  };
 };
 
 // Wallet management methods

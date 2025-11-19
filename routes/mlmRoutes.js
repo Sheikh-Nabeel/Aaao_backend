@@ -46,6 +46,7 @@ import {
   // HLR Controller Functions
   getUserHLRProgress,
   getHLRLeaderboard,
+  getHLRLegConfiguration,
   updateHLRConfig,
   manuallyAwardHLR,
   getHLRManagement,
@@ -222,6 +223,12 @@ router.get("/hlr/progress/:userId", validateUserId, getUserHLRProgress);
 router.get("/hlr/leaderboard", getHLRLeaderboard);
 
 // Admin HLR Routes
+// Get HLR leg configuration (Public - can be accessed by anyone)
+router.get("/hlr/leg-configuration", getHLRLegConfiguration);
+
+// Get HLR leg configuration (Admin route - same as above but for consistency)
+router.get("/admin/hlr/leg-configuration", getHLRLegConfiguration);
+
 // Update HLR configuration (Admin only)
 router.put("/admin/hlr/config", updateHLRConfig);
 

@@ -7,7 +7,8 @@
     "start": "node ./index.js",
     "server": "nodemon ./index.js",
     "dev": "nodemon ./index.js",
-    "test:performance": "node ./tests/performance.test.js"
+    "test:performance": "node ./tests/performance.test.js",
+    "test:mlm": "node ./tests/testMlmDistributeRide.js"
   },
   "author": "",
   "license": "ISC",
