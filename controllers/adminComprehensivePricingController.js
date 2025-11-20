@@ -997,16 +997,6 @@ const getComprehensivePricing = async (req, res) => {
     }
     const json = config.toObject({ virtuals: true }) || {};
     json.serviceTypes = json.serviceTypes || {};
-    if (json.serviceTypes.carRecovery) {
-      json.serviceTypes.carRecovery = alignCarRecoveryToFlow(
-        json.serviceTypes.carRecovery
-      );
-    }
-    if (json.serviceTypes.shiftingMovers) {
-      json.serviceTypes.shiftingMovers = alignShiftingMoversToFlow(
-        json.serviceTypes.shiftingMovers
-      );
-    }
     res.status(200).json({ success: true, data: json });
   } catch (error) {
     res.status(500).json({
@@ -1421,7 +1411,6 @@ const bulkUpdatePricing = async (req, res) => {
     let normalized;
     if (Array.isArray(updates.flow)) {
       try {
-        orma;
         normalized = transformFlowToSchema(updates);
       } catch (e) {
         return res.status(400).json({ success: false, message: e.message });
@@ -2419,18 +2408,49 @@ const getPricingByQuery = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Only car-recovery is supported in this path" });
     }
 
-    const config = await ComprehensivePricing.findOne({ isActive: true });
+    const config = await ComprehensivePricing.findOne({ isActive: true }).lean();
     if (!config) {
       return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
     }
 
-    // Resolve WITHOUT writing; sanitize to plain JSON
-    const node = resolveCRNodeByKeys(config, service, subService);
-    const nodeClean = node && typeof node.toObject === "function"
-      ? node.toObject({ virtuals: false, getters: false })
-      : JSON.parse(JSON.stringify(node || {}));
+    // Map public service/sub-service keys to schema keys (no auto-creation)
+    const mapServiceKeyToSchema = (k) => {
+      if (k === "towingServices") return "towing";
+      if (k === "winchingServices") return "winching";
+      if (k === "roadsideAssistance") return "roadsideAssistance";
+      if (k === "specializedHeavyRecovery") return "specializedHeavyRecovery";
+      return k;
+    };
+    const mapSubKeyToSchema = (svc, sk) => {
+      if (svc === "towing") {
+        if (sk === "flatbedTowing" || sk === "flatbed") return "flatbed";
+        if (sk === "wheelLiftTowing" || sk === "wheelLift") return "wheelLift";
+      }
+      if (svc === "winching") {
+        if (sk === "onRoadWinching") return "onRoadWinching";
+        if (sk === "offRoadWinching") return "offRoadWinching";
+      }
+      if (svc === "roadsideAssistance") {
+        if (sk === "batteryJumpStart" || sk === "jumpstart") return "jumpstart";
+        if (sk === "fuelDelivery") return "fuelDelivery";
+      }
+      if (svc === "specializedHeavyRecovery") {
+        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic") return "luxuryExotic";
+        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision") return "accidentCollision";
+        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle") return "heavyDutyVehicle";
+        if (sk === "basementPullOut") return "basementPullOut";
+      }
+      return sk;
+    };
 
-    return res.status(200).json({ success: true, data: nodeClean });
+    const svcSchema = mapServiceKeyToSchema(service);
+    const subSchema = mapSubKeyToSchema(svcSchema, subService);
+
+    const leaf = (((config.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema];
+    if (!leaf) {
+      return res.status(404).json({ success: false, message: "Requested pricing node not found" });
+    }
+    return res.status(200).json({ success: true, data: leaf });
   } catch (error) {
     res.status(500).json({ success: false, message: "Error fetching pricing node", error: error.message });
   }
@@ -2552,26 +2572,18 @@ const updatePricingByQuery = async (req, res) => {
     const subSchema = mapSubKeyToSchema(svcSchema, subService);
     const dotPath = `serviceTypes.carRecovery.serviceTypes.${svcSchema}.subCategories.${subSchema}`;
 
-    // Fetch existing leaf (projection), merge, then atomic $set
-    const projection = { [dotPath]: 1 };
-    const existingDoc = await ComprehensivePricing.findOne({ isActive: true }, projection);
-    if (!existingDoc) {
+    const payload = { ...(req.body || {}) };
+
+    // Directly set the leaf (no auto-creation/merge/self-heal)
+    const updated = await ComprehensivePricing.findOneAndUpdate(
+      { isActive: true },
+      { $set: { [dotPath]: payload, lastUpdatedBy: adminId } },
+      { new: true, projection: { [dotPath]: 1 } }
+    );
+    if (!updated) {
       return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
     }
-    const existingLeaf = (((existingDoc.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema] || {};
-
-    const payload = { ...(req.body || {}) };
-    pruneUndefinedDeep(payload);
-    const merged = deepMergeReplaceArrays({ ...existingLeaf }, payload);
-
-    await ComprehensivePricing.updateOne(
-      { _id: existingDoc._id },
-      { $set: { [dotPath]: merged, lastUpdatedBy: adminId } }
-    );
-
-    // Return updated leaf only (same document)
-    const fresh = await ComprehensivePricing.findById(existingDoc._id, projection);
-    const updatedLeaf = (((fresh.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema] || {};
+    const updatedLeaf = (((updated.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema] || {};
     return res.status(200).json({ success: true, data: updatedLeaf });
   } catch (error) {
     res.status(500).json({
