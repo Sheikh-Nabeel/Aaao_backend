@@ -121,11 +121,11 @@ const mlmSchema = new mongoose.Schema({
       pgp: { type: Number, default: 0 }  // Personal Growth Points
     },
     
-    // Ride Type
+    // Ride Type (deprecated - system now auto-detects based on campaign conditions)
     rideType: {
       type: String,
       enum: ['personal', 'team', 'user_standard', 'driver_standard'],
-      required: true
+      required: false // No longer required - system auto-detects
     },
     
     timestamp: {
@@ -299,7 +299,14 @@ const mlmSchema = new mongoose.Schema({
     resetDay: { type: Number, default: 1 }, // 1st of each month
     pointValue: { type: Number, default: 1 }, // 1 PGP/TGP = 1 AED
     leaderboardUpdateInterval: { type: Number, default: 300000 }, // 5 minutes
-    // Global leg percentages for all CRR ranks (set by admin)
+    // Leg split ratio: percentage of TGP that must come from 3 legs (A, B, C)
+    // Remaining percentage can come from any other legs
+    legSplitRatio: { 
+      fromThreeLegs: { type: Number, default: 60 }, // 60% must come from legs A, B, C
+      fromOtherLegs: { type: Number, default: 40 }  // 40% can come from anywhere
+    },
+    // Global leg percentages for the 3 legs (A, B, C) - percentages of the "fromThreeLegs" portion
+    // These percentages should sum to 100% and represent how the 60% is divided among A, B, C
     legPercentages: {
       legA: { type: Number, default: 33.33 },
       legB: { type: Number, default: 33.33 },
@@ -391,6 +398,18 @@ const mlmSchema = new mongoose.Schema({
     requirements: {
       pgp: { type: Number, default: 200000 },
       tgp: { type: Number, default: 6000000 }
+    },
+    // Leg split ratio: percentage of TGP that must come from 3 legs (A, B, C)
+    // Remaining percentage can come from any other legs
+    legSplitRatio: { 
+      fromThreeLegs: { type: Number, default: 60 }, // 60% must come from legs A, B, C
+      fromOtherLegs: { type: Number, default: 40 }  // 40% can come from anywhere
+    },
+    // Leg percentages for the 3 legs (A, B, C) - percentages of the "fromThreeLegs" portion
+    legPercentages: {
+      legA: { type: Number, default: 33.33 },
+      legB: { type: Number, default: 33.33 },
+      legC: { type: Number, default: 33.34 }
     },
     rewardAmount: { type: Number, default: 60000 }, // AED
     qualifiedMembers: [{
@@ -517,7 +536,7 @@ mlmSchema.pre('save', function(next) {
 });
 
 // Method to add money to MLM system
-mlmSchema.methods.addMoney = function(userId, amount, rideId, rideType = 'personal') {
+mlmSchema.methods.addMoney = function(userId, amount, rideId) {
   console.log('addMoney method called with userId:', userId);
   console.log('this object:', this);
   console.log('this.transactions:', this.transactions);
@@ -618,11 +637,11 @@ mlmSchema.methods.addMoney = function(userId, amount, rideId, rideType = 'person
   };
   
   // Create a new transaction record
+  // Note: rideType is no longer used - system auto-detects campaign conditions
   const transaction = {
     userId,
     amount,
     rideId,
-    rideType,
     distribution: {
       // Main distribution
       ddr: distribution.ddr,

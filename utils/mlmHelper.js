@@ -573,13 +573,22 @@ const updateUserProgress = async (user, rideFare, distribution, mlm) => {
     if (rideFare >= 100) {
       user.hlrQualification.progress.pgpPoints += 50;
       
-      // Check if user qualifies for HLR
+      // Check if user qualifies for HLR (including leg requirements)
       const hlrConfig = mlm.hlrConfig;
-      if (user.hlrQualification.progress.pgpPoints >= hlrConfig.requiredPGP && 
-          user.hlrQualification.progress.tgpPoints >= hlrConfig.requiredTGP && 
+      // Use actual qualification points (not just progress points)
+      const currentPGP = user.qualificationPoints?.pgp?.accumulated || 0;
+      const currentTGP = user.qualificationPoints?.tgp?.accumulated || 0;
+      
+      // Check basic requirements first
+      if (currentPGP >= hlrConfig.requirements.pgp && 
+          currentTGP >= hlrConfig.requirements.tgp && 
           !user.hlrQualification.isQualified) {
-        user.hlrQualification.isQualified = true;
-        user.hlrQualification.qualifiedAt = new Date();
+        // Now check leg requirements
+        const legCheck = await user.checkHLRLegRequirements(hlrConfig);
+        if (legCheck.meetsRequirements) {
+          user.hlrQualification.isQualified = true;
+          user.hlrQualification.qualifiedAt = new Date();
+        }
       }
       
       // Calculate overall progress

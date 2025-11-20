@@ -148,48 +148,7 @@ export const cleanupDuplicateTransactions = asyncHandler(async (req, res) => {
 // Update global CRR leg percentages (Admin only)
 export const updateGlobalCRRLegPercentages = asyncHandler(async (req, res) => {
   try {
-    const { legPercentages } = req.body;
-
-    // Validate input structure
-    if (!legPercentages || typeof legPercentages !== 'object') {
-      return res.status(400).json({
-        success: false,
-        message: 'legPercentages object is required'
-      });
-    }
-
-    // Validate that we have exactly 3 legs (A, B, C)
-    const requiredLegs = ['legA', 'legB', 'legC'];
-    const providedLegs = Object.keys(legPercentages);
-    
-    if (providedLegs.length !== 3 || !requiredLegs.every(leg => providedLegs.includes(leg))) {
-      return res.status(400).json({
-        success: false,
-        message: 'legPercentages must contain exactly legA, legB, and legC'
-      });
-    }
-
-    // Validate percentage values
-    const percentageValues = Object.values(legPercentages);
-    const invalidValues = percentageValues.filter(val => 
-      typeof val !== 'number' || val < 0 || val > 100
-    );
-    
-    if (invalidValues.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'All leg percentages must be numbers between 0 and 100'
-      });
-    }
-
-    // Validate total percentage
-    const totalPercentage = percentageValues.reduce((sum, val) => sum + val, 0);
-    if (Math.abs(totalPercentage - 100) > 0.01) {
-      return res.status(400).json({
-        success: false,
-        message: `Total percentage must equal 100. Current total: ${totalPercentage}`
-      });
-    }
+    const { legPercentages, legSplitRatio } = req.body;
 
     // Get MLM document
     const mlm = await MLM.findOne();
@@ -200,23 +159,116 @@ export const updateGlobalCRRLegPercentages = asyncHandler(async (req, res) => {
       });
     }
 
-    // Update global leg percentages
+    // Initialize crrConfig if it doesn't exist
     if (!mlm.crrConfig) {
-      mlm.crrConfig = {};
+      mlm.crrConfig = {
+        monthlyReset: true,
+        resetDay: 1,
+        pointValue: 1,
+        leaderboardUpdateInterval: 300000,
+        legSplitRatio: { fromThreeLegs: 60, fromOtherLegs: 40 },
+        legPercentages: { legA: 33.33, legB: 33.33, legC: 33.34 }
+      };
     }
-    
-    mlm.crrConfig.legPercentages = {
-      legA: legPercentages.legA,
-      legB: legPercentages.legB,
-      legC: legPercentages.legC
-    };
+
+    // Update leg split ratio if provided
+    if (legSplitRatio !== undefined) {
+      if (typeof legSplitRatio !== 'object' || 
+          typeof legSplitRatio.fromThreeLegs !== 'number' || 
+          typeof legSplitRatio.fromOtherLegs !== 'number') {
+        return res.status(400).json({
+          success: false,
+          message: 'legSplitRatio must be an object with fromThreeLegs and fromOtherLegs as numbers'
+        });
+      }
+
+      const total = legSplitRatio.fromThreeLegs + legSplitRatio.fromOtherLegs;
+      if (Math.abs(total - 100) > 0.01) {
+        return res.status(400).json({
+          success: false,
+          message: `Leg split ratio must sum to 100. Current total: ${total}`
+        });
+      }
+
+      if (legSplitRatio.fromThreeLegs < 0 || legSplitRatio.fromThreeLegs > 100 ||
+          legSplitRatio.fromOtherLegs < 0 || legSplitRatio.fromOtherLegs > 100) {
+        return res.status(400).json({
+          success: false,
+          message: 'Leg split ratio values must be between 0 and 100'
+        });
+      }
+
+      mlm.crrConfig.legSplitRatio = {
+        fromThreeLegs: legSplitRatio.fromThreeLegs,
+        fromOtherLegs: legSplitRatio.fromOtherLegs
+      };
+    }
+
+    // Update leg percentages if provided
+    if (legPercentages !== undefined) {
+      // Validate input structure
+      if (typeof legPercentages !== 'object') {
+        return res.status(400).json({
+          success: false,
+          message: 'legPercentages must be an object'
+        });
+      }
+
+      // Validate that we have exactly 3 legs (A, B, C)
+      const requiredLegs = ['legA', 'legB', 'legC'];
+      const providedLegs = Object.keys(legPercentages);
+      
+      if (providedLegs.length !== 3 || !requiredLegs.every(leg => providedLegs.includes(leg))) {
+        return res.status(400).json({
+          success: false,
+          message: 'legPercentages must contain exactly legA, legB, and legC'
+        });
+      }
+
+      // Validate percentage values
+      const percentageValues = Object.values(legPercentages);
+      const invalidValues = percentageValues.filter(val => 
+        typeof val !== 'number' || val < 0 || val > 100
+      );
+      
+      if (invalidValues.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'All leg percentages must be numbers between 0 and 100'
+        });
+      }
+
+      // Validate total percentage
+      const totalPercentage = percentageValues.reduce((sum, val) => sum + val, 0);
+      if (Math.abs(totalPercentage - 100) > 0.01) {
+        return res.status(400).json({
+          success: false,
+          message: `Total leg percentages must equal 100. Current total: ${totalPercentage}`
+        });
+      }
+
+      mlm.crrConfig.legPercentages = {
+        legA: legPercentages.legA,
+        legB: legPercentages.legB,
+        legC: legPercentages.legC
+      };
+    }
+
+    // At least one of legPercentages or legSplitRatio must be provided
+    if (legPercentages === undefined && legSplitRatio === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Either legPercentages or legSplitRatio must be provided'
+      });
+    }
 
     await mlm.save();
 
     res.status(200).json({
       success: true,
-      message: 'Global CRR leg percentages updated successfully',
+      message: 'Global CRR leg configuration updated successfully',
       data: {
+        legSplitRatio: mlm.crrConfig.legSplitRatio,
         legPercentages: mlm.crrConfig.legPercentages,
         lastUpdated: mlm.updatedAt
       }
@@ -240,7 +292,11 @@ export const getCRRLegPercentages = asyncHandler(async (req, res) => {
       });
     }
 
-    // Get global leg percentages from crrConfig (applies to all ranks)
+    // Get global leg configuration from crrConfig (applies to all ranks)
+    const legSplitRatio = mlm.crrConfig?.legSplitRatio || {
+      fromThreeLegs: 60,
+      fromOtherLegs: 40
+    };
     const legPercentages = mlm.crrConfig?.legPercentages || {
       legA: 33.33,
       legB: 33.33,
@@ -250,6 +306,7 @@ export const getCRRLegPercentages = asyncHandler(async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
+        legSplitRatio,
         legPercentages,
         lastUpdated: mlm.updatedAt
       }
@@ -576,11 +633,10 @@ export const resetMLMData = asyncHandler(async (req, res) => {
 });
 
 // Ride completion MLM distribution
+// Simplified version: Adds PGP to user, TGP to upline sponsors, and MLM amount to MLM system
 export const distributeRideMLM = asyncHandler(async (req, res) => {
-  console.log('Starting distributeRideMLM function');
   try {
-    console.log('Request body:', JSON.stringify(req.body));
-    const { userId, driverId, rideId, totalFare, rideType } = req.body;
+    const { userId, driverId, rideId, totalFare } = req.body;
     
     if (!userId || !rideId || !totalFare) {
       return res.status(400).json({
@@ -616,10 +672,10 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     const mlmAmount = userMlmAmount + driverMlmAmount; // Total MLM amount (15%)
     
     // Calculate qualification points for TGP/PGP
-    // User and driver each get 50% of ride fare as PGP
+    // User gets PGP = 50% of totalFare (their own points from completing the ride)
     const pgpPoints = totalFare * 0.5;
-    // Upliners get equivalent TGP points (1 PGP = 1 TGP)
-    const tgpPoints = pgpPoints; // Same as PGP points
+    // Upline sponsors get TGP = 50% of totalFare (points from their downline's activity)
+    const tgpPoints = totalFare * 0.5;
     
     let mlm = await MLM.findOne();
     console.log('MLM found:', mlm ? 'Yes' : 'No');
@@ -714,6 +770,38 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     // Update user's CRR rank
     await user.updateCRRRank();
     
+    // Check and update HLR qualification for user
+    if (mlm.hlrConfig) {
+      const hlrConfig = mlm.hlrConfig;
+      const currentPGP = user.qualificationPoints?.pgp?.accumulated || 0;
+      const currentTGP = user.qualificationPoints?.tgp?.accumulated || 0;
+      
+      // Initialize HLR qualification if needed
+      if (!user.hlrQualification) {
+        user.hlrQualification = {
+          isQualified: false,
+          qualifiedAt: null,
+          rewardClaimed: false,
+          progress: {
+            pgpPoints: 0,
+            tgpPoints: 0,
+            overallProgress: 0
+          }
+        };
+      }
+      
+      // Check if user qualifies for HLR (including leg requirements)
+      if (currentPGP >= hlrConfig.requirements.pgp && 
+          currentTGP >= hlrConfig.requirements.tgp && 
+          !user.hlrQualification.isQualified) {
+        const legCheck = await user.checkHLRLegRequirements(hlrConfig);
+        if (legCheck.meetsRequirements) {
+          user.hlrQualification.isQualified = true;
+          user.hlrQualification.qualifiedAt = new Date();
+        }
+      }
+    }
+    
     let driver = null;
     if (driverId) {
       driver = await User.findById(driverId);
@@ -744,6 +832,38 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       
       // Update driver's CRR rank
       await driver.updateCRRRank();
+      
+      // Check and update HLR qualification for driver
+      if (mlm.hlrConfig) {
+        const hlrConfig = mlm.hlrConfig;
+        const currentPGP = driver.qualificationPoints?.pgp?.accumulated || 0;
+        const currentTGP = driver.qualificationPoints?.tgp?.accumulated || 0;
+        
+        // Initialize HLR qualification if needed
+        if (!driver.hlrQualification) {
+          driver.hlrQualification = {
+            isQualified: false,
+            qualifiedAt: null,
+            rewardClaimed: false,
+            progress: {
+              pgpPoints: 0,
+              tgpPoints: 0,
+              overallProgress: 0
+            }
+          };
+        }
+        
+        // Check if driver qualifies for HLR (including leg requirements)
+        if (currentPGP >= hlrConfig.requirements.pgp && 
+            currentTGP >= hlrConfig.requirements.tgp && 
+            !driver.hlrQualification.isQualified) {
+          const legCheck = await driver.checkHLRLegRequirements(hlrConfig);
+          if (legCheck.meetsRequirements) {
+            driver.hlrQualification.isQualified = true;
+            driver.hlrQualification.qualifiedAt = new Date();
+          }
+        }
+      }
     }
     
     // Get upline members (team sponsors) for both user and driver
@@ -762,11 +882,29 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     const driverUpline = driver ? await getUplineMembers(driverId, 4) : {};
     console.log('Driver upline members:', driverUpline);
     
+    // Check active BBR campaign to determine TGP distribution conditions
+    const activeBBRCampaign = mlm.bbrCampaigns?.current;
+    const campaignStartDate = activeBBRCampaign?.isActive ? new Date(activeBBRCampaign.startDate) : null;
+    
+    // Determine if user qualifies for TGP distribution to upline
+    // For newbie campaigns: only if user joined after campaign start
+    // For team/solo_or_team campaigns: always distribute TGP
+    const shouldDistributeTGPForUser = !activeBBRCampaign?.isActive || 
+      activeBBRCampaign.type === 'team' || 
+      activeBBRCampaign.type === 'solo_or_team' ||
+      (activeBBRCampaign.newbieRidesOnly && campaignStartDate && user.createdAt > campaignStartDate) ||
+      !activeBBRCampaign.newbieRidesOnly;
+    
     // Distribute TGP to user's upline team (sponsors get TGP from downline activity)
+    // Only if campaign conditions are met
     for (let level = 1; level <= 4; level++) {
-      const sponsor = userUpline[`level${level}`];
-      if (sponsor) {
-        // Add TGP points to sponsor
+      const sponsorRef = userUpline[`level${level}`];
+      if (sponsorRef && shouldDistributeTGPForUser) {
+        // Reload sponsor from database to avoid version conflicts
+        const sponsor = await User.findById(sponsorRef._id);
+        if (!sponsor) continue;
+        
+        // Add TGP points to sponsor (only if conditions are met)
         await sponsor.addQualificationPoints({
           points: tgpPoints,
           rideId,
@@ -776,6 +914,38 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
         
         // Update sponsor's CRR rank after adding TGP points
         await sponsor.updateCRRRank();
+        
+        // Check and update HLR qualification for sponsor (they might qualify after getting TGP)
+        if (mlm.hlrConfig) {
+          const hlrConfig = mlm.hlrConfig;
+          const currentPGP = sponsor.qualificationPoints?.pgp?.accumulated || 0;
+          const currentTGP = sponsor.qualificationPoints?.tgp?.accumulated || 0;
+          
+          // Initialize HLR qualification if needed
+          if (!sponsor.hlrQualification) {
+            sponsor.hlrQualification = {
+              isQualified: false,
+              qualifiedAt: null,
+              rewardClaimed: false,
+              progress: {
+                pgpPoints: 0,
+                tgpPoints: 0,
+                overallProgress: 0
+              }
+            };
+          }
+          
+          // Check if sponsor qualifies for HLR (including leg requirements)
+          if (currentPGP >= hlrConfig.requirements.pgp && 
+              currentTGP >= hlrConfig.requirements.tgp && 
+              !sponsor.hlrQualification.isQualified) {
+            const legCheck = await sponsor.checkHLRLegRequirements(hlrConfig);
+            if (legCheck.meetsRequirements) {
+              sponsor.hlrQualification.isQualified = true;
+              sponsor.hlrQualification.qualifiedAt = new Date();
+            }
+          }
+        }
         
         teamDistributions.push({
           sponsorId: sponsor._id,
@@ -810,15 +980,22 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
           ddrLevelAmount = userDdrAmount + driverDdrAmount;
         }
         
-        // Add to sponsor's wallet with transaction record
-        sponsor.wallet.balance += ddrLevelAmount;
-        sponsor.wallet.transactions.push({
-          type: 'credit',
-          amount: ddrLevelAmount,
-          description: `DDR Level ${level} earnings from ride completion`,
-          timestamp: new Date()
-        });
-        await sponsor.save();
+        // Reload sponsor again for DDR payment to avoid version conflicts
+        await User.updateOne(
+          { _id: sponsor._id },
+          {
+            $inc: { 'wallet.balance': ddrLevelAmount },
+            $set: { 'wallet.lastUpdated': new Date() },
+            $push: {
+              'wallet.transactions': {
+                type: 'credit',
+                amount: ddrLevelAmount,
+                description: `DDR Level ${level} earnings from ride completion`,
+                timestamp: new Date()
+              }
+            }
+          }
+        );
         
         ddrDistributions.push({
           sponsorId: sponsor._id,
@@ -835,71 +1012,12 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       }
     }
     
+    // Determine if driver qualifies for TGP distribution to upline
+    const shouldDistributeTGPForDriver = false;
+    
     // Distribute TGP to driver's upline team if driver exists and is different from user
-    if (driver && userId !== driverId) {
-      for (let level = 1; level <= 4; level++) {
-        const sponsor = driverUpline[`level${level}`];
-        if (sponsor) {
-          // Add TGP points to sponsor
-          await sponsor.addQualificationPoints({
-            points: tgpPoints,
-            rideId,
-            type: 'tgp', // Team members get TGP from downline activity
-            rideFare: totalFare
-          });
-          
-          // Update sponsor's CRR rank after adding TGP points
-          await sponsor.updateCRRRank();
-          
-          teamDistributions.push({
-            sponsorId: sponsor._id,
-            sponsorName: sponsor.username,
-            level,
-            points: tgpPoints,
-            type: 'tgp',
-            source: 'driver_activity'
-          });
-          
-          // Calculate DDR payment for this level based on MLM configuration
-          // Get the percentage for this level from MLM configuration
-          let levelPercentage = 0;
-          switch(level) {
-            case 1: levelPercentage = mlm.ddrLevel1; break;
-            case 2: levelPercentage = mlm.ddrLevel2; break;
-            case 3: levelPercentage = mlm.ddrLevel3; break;
-            case 4: levelPercentage = mlm.ddrLevel4; break;
-          }
-          
-          // Calculate the amount for this level - split between user and driver contributions
-          const userDdrAmount = (userMlmAmount * levelPercentage) / 100;
-          const driverDdrAmount = (driverMlmAmount * levelPercentage) / 100;
-          const ddrLevelAmount = userDdrAmount + driverDdrAmount;
-          
-          // Add to sponsor's wallet with transaction record
-          sponsor.wallet.balance += ddrLevelAmount;
-          sponsor.wallet.transactions.push({
-            type: 'credit',
-            amount: ddrLevelAmount,
-            description: `DDR Level ${level} earnings from driver ride completion`,
-            timestamp: new Date()
-          });
-          await sponsor.save();
-          
-          ddrDistributions.push({
-            sponsorId: sponsor._id,
-            sponsorName: sponsor.username,
-            level,
-            amount: {
-              total: ddrLevelAmount,
-              user: userDdrAmount,
-              driver: driverDdrAmount
-            },
-            percentage: levelPercentage,
-            source: 'ride_activity'
-          });
-        }
-      }
-    }
+    // Only if campaign conditions are met
+    if (shouldDistributeTGPForDriver) {}
 
     // Add the user's MLM amount to the MLM system
     // Ensure MLM model is properly initialized
@@ -941,16 +1059,16 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     let driverMlmDistribution = null;
     
     try {
-      // Process user MLM distribution
-      userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId, 'personal');
+      // Process user MLM distribution (no rideType needed - system auto-detects)
+      userMlmDistribution = mlm.addMoney(userId, userMlmAmount, rideId);
       
       // Add the driver's MLM amount to the MLM system if driver exists and is different from user
       if (driver && userId !== driverId) {
-        driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId, 'personal');
+        driverMlmDistribution = mlm.addMoney(driverId, driverMlmAmount, rideId);
       } else if (driver && userId === driverId) {
         // For personal rides (user = driver), add the driver's MLM amount to the same user's transaction
         // This prevents duplicate transactions for the same person
-        mlm.addMoney(userId, driverMlmAmount, rideId, 'driver_contribution');
+        mlm.addMoney(userId, driverMlmAmount, rideId);
       }
       
       // Save the MLM model
@@ -961,27 +1079,34 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
     }
 
     // Update BBR participation for the campaign
-    const activeBBRCampaign = mlm.bbrCampaigns?.current;
+    // System automatically detects campaign type and conditions
     
     // Declare variables at function scope to avoid "not defined" errors
     let shouldCountTeamRides = false;
     let shouldCountDriverTeamRides = false;
     
     if (activeBBRCampaign && activeBBRCampaign.isActive) {
-      const campaignStartDate = new Date(activeBBRCampaign.startDate);
+      // Automatically detect campaign conditions
+      // For newbie campaigns: only count if user joined after campaign start
+      // For team/solo_or_team campaigns: count team rides
+      // For solo campaigns: only count solo rides (no team rides)
       
-      // Update BBR participation automatically for all users
+      const campaignType = activeBBRCampaign.type || 'solo_or_team';
+      const isNewbieCampaign = activeBBRCampaign.newbieRidesOnly;
+      const isTeamCampaign = campaignType === 'team' || campaignType === 'solo_or_team';
       
-      if (activeBBRCampaign) {
-        // Calculate newbie check for team ride counting
-        const campaignStartDate = new Date(activeBBRCampaign.startDate);
-        shouldCountTeamRides = !activeBBRCampaign.newbieRidesOnly || (user.createdAt > campaignStartDate);
-        
-        if (driver && userId !== driverId) {
-          shouldCountDriverTeamRides = !activeBBRCampaign.newbieRidesOnly || (driver.createdAt > campaignStartDate);
-        }
-        // Initialize user's BBR participation if not exists
-        if (!user.bbrParticipation) {
+      // Determine if user's ride should count as team ride for upline
+      if (isTeamCampaign) {
+        shouldCountTeamRides = !isNewbieCampaign || (campaignStartDate && user.createdAt > campaignStartDate);
+      }
+      
+      // Determine if driver's ride should count as team ride for upline
+      if (driver && userId !== driverId && isTeamCampaign) {
+        shouldCountDriverTeamRides = !isNewbieCampaign || (campaignStartDate && driver.createdAt > campaignStartDate);
+      }
+      
+      // Initialize user's BBR participation if not exists
+      if (!user.bbrParticipation) {
           user.bbrParticipation = {
             currentCampaign: {
               campaignId: activeBBRCampaign._id,
@@ -1062,17 +1187,70 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
             driver.bbrParticipation.currentCampaign.soloRides + 
             (driver.bbrParticipation.currentCampaign.teamRides || 0);
           driver.bbrParticipation.currentCampaign.lastRideAt = new Date();
-          
-          await driver.save();
+          await User.updateOne(
+            { _id: driver._id },
+            { $set: { bbrParticipation: driver.bbrParticipation } }
+          );
         }
         
         // Process team rides for upliners with newbie check
         // Count rides for user's upline sponsors
         if (shouldCountTeamRides) {
           for (let level = 1; level <= 4; level++) {
-            const sponsor = userUpline[`level${level}`];
-            if (sponsor) {
-              // Initialize BBR participation if not exists
+            const sponsorRef = userUpline[`level${level}`];
+            if (!sponsorRef) continue;
+            const sponsor = await User.findById(sponsorRef._id);
+            if (!sponsor) continue;
+            if (!sponsor.bbrParticipation) {
+              sponsor.bbrParticipation = {
+                currentCampaign: {
+                  campaignId: activeBBRCampaign._id,
+                  totalRides: 0,
+                  soloRides: 0,
+                  teamRides: 0,
+                  achieved: false,
+                  joinedAt: new Date(),
+                  lastRideAt: null
+                },
+                totalWins: 0,
+                totalRewardsEarned: 0,
+                history: []
+              };
+            }
+            if (!sponsor.bbrParticipation.currentCampaign || 
+                !sponsor.bbrParticipation.currentCampaign.campaignId ||
+                sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
+              sponsor.bbrParticipation.currentCampaign = {
+                campaignId: activeBBRCampaign._id,
+                totalRides: 0,
+                soloRides: 0,
+                teamRides: 0,
+                achieved: false,
+                joinedAt: new Date(),
+                lastRideAt: null
+              };
+            }
+            sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
+            sponsor.bbrParticipation.currentCampaign.totalRides = 
+              (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
+              sponsor.bbrParticipation.currentCampaign.teamRides;
+            sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
+            await User.updateOne(
+              { _id: sponsor._id },
+              { $set: { bbrParticipation: sponsor.bbrParticipation } }
+            );
+          }
+        }
+        
+        // Count rides for driver's upline sponsors if driver is different from user
+        if (driver && userId !== driverId) {
+          const shouldCountDriverTeamRidesFlag = !activeBBRCampaign.newbieRidesOnly || (driver.createdAt > campaignStartDate);
+          if (shouldCountDriverTeamRidesFlag) {
+            for (let level = 1; level <= 4; level++) {
+              const sponsorRef = driverUpline[`level${level}`];
+              if (!sponsorRef) continue;
+              const sponsor = await User.findById(sponsorRef._id);
+              if (!sponsor) continue;
               if (!sponsor.bbrParticipation) {
                 sponsor.bbrParticipation = {
                   currentCampaign: {
@@ -1089,8 +1267,6 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
                   history: []
                 };
               }
-              
-              // Check if participating in current campaign
               if (!sponsor.bbrParticipation.currentCampaign || 
                   !sponsor.bbrParticipation.currentCampaign.campaignId ||
                   sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
@@ -1104,76 +1280,21 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
                   lastRideAt: null
                 };
               }
-              
-              // Increment team rides for sponsor
               sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
               sponsor.bbrParticipation.currentCampaign.totalRides = 
                 (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
                 sponsor.bbrParticipation.currentCampaign.teamRides;
               sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
-              
               await sponsor.save();
             }
           }
         }
-        
-        // Count rides for driver's upline sponsors if driver is different from user
-        if (driver && userId !== driverId) {
-          const shouldCountDriverTeamRides = !activeBBRCampaign.newbieRidesOnly || (driver.createdAt > campaignStartDate);
-          
-          if (shouldCountDriverTeamRides) {
-            for (let level = 1; level <= 4; level++) {
-              const sponsor = driverUpline[`level${level}`];
-              if (sponsor) {
-                // Initialize BBR participation if not exists
-                if (!sponsor.bbrParticipation) {
-                  sponsor.bbrParticipation = {
-                    currentCampaign: {
-                      campaignId: activeBBRCampaign._id,
-                      totalRides: 0,
-                      soloRides: 0,
-                      teamRides: 0,
-                      achieved: false,
-                      joinedAt: new Date(),
-                      lastRideAt: null
-                    },
-                    totalWins: 0,
-                    totalRewardsEarned: 0,
-                    history: []
-                  };
-                }
-                
-                // Check if participating in current campaign
-                if (!sponsor.bbrParticipation.currentCampaign || 
-                    !sponsor.bbrParticipation.currentCampaign.campaignId ||
-                    sponsor.bbrParticipation.currentCampaign.campaignId.toString() !== activeBBRCampaign._id.toString()) {
-                  sponsor.bbrParticipation.currentCampaign = {
-                    campaignId: activeBBRCampaign._id,
-                    totalRides: 0,
-                    soloRides: 0,
-                    teamRides: 0,
-                    achieved: false,
-                    joinedAt: new Date(),
-                    lastRideAt: null
-                  };
-                }
-                
-                // Increment team rides for sponsor
-                sponsor.bbrParticipation.currentCampaign.teamRides = (sponsor.bbrParticipation.currentCampaign.teamRides || 0) + 1;
-                sponsor.bbrParticipation.currentCampaign.totalRides = 
-                  (sponsor.bbrParticipation.currentCampaign.soloRides || 0) + 
-                  sponsor.bbrParticipation.currentCampaign.teamRides;
-                sponsor.bbrParticipation.currentCampaign.lastRideAt = new Date();
-                
-                await sponsor.save();
-              }
-            }
-          }
-        }
       }
-      
-      await user.save();
-    }
+    
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { bbrParticipation: user.bbrParticipation } }
+    );
 
     // Return the complete distribution information
     res.status(200).json({
@@ -2317,7 +2438,9 @@ export const getCRRRankConfig = asyncHandler(async (req, res) => {
       monthlyReset: true,
       resetDay: 1,
       pointValue: 1,
-      leaderboardUpdateInterval: 300000
+      leaderboardUpdateInterval: 300000,
+      legSplitRatio: { fromThreeLegs: 60, fromOtherLegs: 40 },
+      legPercentages: { legA: 33.33, legB: 33.33, legC: 33.34 }
     };
 
     res.status(200).json({
@@ -3064,7 +3187,7 @@ export const getMLMFields = asyncHandler(async (req, res) => {
 // Add money to MLM system
 export const addMoneyToMLM = asyncHandler(async (req, res) => {
   try {
-    const { userId, amount, rideId, rideType } = req.body;
+    const { userId, amount, rideId } = req.body;
 
     if (!userId || !amount || !rideId) {
       return res.status(400).json({
@@ -3089,7 +3212,8 @@ export const addMoneyToMLM = asyncHandler(async (req, res) => {
       });
     }
 
-    const distribution = mlm.addMoney(userId, amount, rideId, rideType);
+    // System auto-detects campaign conditions - no rideType needed
+    const distribution = mlm.addMoney(userId, amount, rideId);
     await mlm.save();
 
     // Distribute Regional Ambassador earnings automatically
@@ -3886,7 +4010,7 @@ export const getBBRLeaderboard = asyncHandler(async (req, res) => {
             name: `${user.firstName} ${user.lastName}`,
             role: user.role, // Include user role (customer or driver)
             rides: user.totalRides,
-            rideType: user.role === 'driver' ? 'driver' : 'standard', // Add ride type based on user role
+            // rideType removed - system auto-detects campaign conditions
             status: user.isQualified ? 'Achieved' : 'Locked',
             reward: currentCampaign.reward.amount
           };
@@ -4354,15 +4478,19 @@ export const getUserHLRProgress = asyncHandler(async (req, res) => {
     const tgpProgress = Math.min((currentTGP / hlrConfig.requirements.tgp) * 100, 100);
     const overallProgress = Math.min(((pgpProgress + tgpProgress) / 2), 100);
     
-    // Check if user is qualified
-    const isQualified = currentPGP >= hlrConfig.requirements.pgp && 
-                       currentTGP >= hlrConfig.requirements.tgp;
+    // Check if user is qualified (including leg requirements)
+    const legCheck = await user.checkHLRLegRequirements(hlrConfig);
+    const isQualified = legCheck.meetsRequirements;
     
     // Calculate age and retirement eligibility
     const currentAge = user.dateOfBirth ? 
       Math.floor((new Date() - new Date(user.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 0;
     const isRetirementEligible = currentAge >= hlrConfig.retirementAge;
     const isRewardClaimed = userQualification?.rewardClaimed || false;
+
+    // Get leg configuration
+    const legSplitRatio = hlrConfig.legSplitRatio || { fromThreeLegs: 60, fromOtherLegs: 40 };
+    const legPercentages = hlrConfig.legPercentages || { legA: 33.33, legB: 33.33, legC: 33.34 };
 
     res.status(200).json({
       success: true,
@@ -4372,6 +4500,10 @@ export const getUserHLRProgress = asyncHandler(async (req, res) => {
           requiredTGP: hlrConfig.requirements.tgp,
           retirementAge: hlrConfig.retirementAge,
           rewardAmount: hlrConfig.rewardAmount
+        },
+        legConfiguration: {
+          legSplitRatio,
+          legPercentages
         },
         progress: {
           currentPGP,
@@ -4850,10 +4982,45 @@ export const distributeBBRRewards = asyncHandler(async (req, res) => {
   }
 });
 
+// Get HLR leg configuration (Admin and Public)
+export const getHLRLegConfiguration = asyncHandler(async (req, res) => {
+  try {
+    const mlm = await MLM.findOne();
+    if (!mlm) {
+      return res.status(404).json({
+        success: false,
+        message: "MLM system not found"
+      });
+    }
+
+    const hlrConfig = mlm.hlrConfig || {};
+    
+    // Get leg configuration with defaults
+    const legSplitRatio = hlrConfig.legSplitRatio || { fromThreeLegs: 60, fromOtherLegs: 40 };
+    const legPercentages = hlrConfig.legPercentages || { legA: 33.33, legB: 33.33, legC: 33.34 };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        legSplitRatio,
+        legPercentages,
+        lastUpdated: mlm.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error("Error getting HLR leg configuration:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting HLR leg configuration",
+      error: error.message
+    });
+  }
+});
+
 // Admin: Update HLR configuration
 export const updateHLRConfig = asyncHandler(async (req, res) => {
   try {
-    const { requiredPGP, requiredTGP, retirementAge, rewardAmount } = req.body;
+    const { requiredPGP, requiredTGP, retirementAge, rewardAmount, legSplitRatio, legPercentages } = req.body;
     
     const mlm = await MLM.findOne();
     if (!mlm) {
@@ -4863,11 +5030,58 @@ export const updateHLRConfig = asyncHandler(async (req, res) => {
       });
     }
 
+    // Initialize HLR config if it doesn't exist
+    if (!mlm.hlrConfig) {
+      mlm.hlrConfig = {
+        retirementAge: 55,
+        requirements: { pgp: 200000, tgp: 6000000 },
+        legSplitRatio: { fromThreeLegs: 60, fromOtherLegs: 40 },
+        legPercentages: { legA: 33.33, legB: 33.33, legC: 33.34 },
+        rewardAmount: 60000
+      };
+    }
+
     // Update HLR configuration
     if (requiredPGP !== undefined) mlm.hlrConfig.requirements.pgp = requiredPGP;
     if (requiredTGP !== undefined) mlm.hlrConfig.requirements.tgp = requiredTGP;
     if (retirementAge !== undefined) mlm.hlrConfig.retirementAge = retirementAge;
     if (rewardAmount !== undefined) mlm.hlrConfig.rewardAmount = rewardAmount;
+    
+    // Update leg split ratio
+    if (legSplitRatio !== undefined) {
+      if (typeof legSplitRatio.fromThreeLegs === 'number' && typeof legSplitRatio.fromOtherLegs === 'number') {
+        const total = legSplitRatio.fromThreeLegs + legSplitRatio.fromOtherLegs;
+        if (Math.abs(total - 100) > 0.01) {
+          return res.status(400).json({
+            success: false,
+            message: `Leg split ratio must sum to 100. Current total: ${total}`
+          });
+        }
+        mlm.hlrConfig.legSplitRatio = {
+          fromThreeLegs: legSplitRatio.fromThreeLegs,
+          fromOtherLegs: legSplitRatio.fromOtherLegs
+        };
+      }
+    }
+    
+    // Update leg percentages
+    if (legPercentages !== undefined) {
+      if (typeof legPercentages === 'object' && legPercentages.legA !== undefined && 
+          legPercentages.legB !== undefined && legPercentages.legC !== undefined) {
+        const total = legPercentages.legA + legPercentages.legB + legPercentages.legC;
+        if (Math.abs(total - 100) > 0.01) {
+          return res.status(400).json({
+            success: false,
+            message: `Leg percentages must sum to 100. Current total: ${total}`
+          });
+        }
+        mlm.hlrConfig.legPercentages = {
+          legA: legPercentages.legA,
+          legB: legPercentages.legB,
+          legC: legPercentages.legC
+        };
+      }
+    }
 
     await mlm.save();
 
@@ -4921,12 +5135,11 @@ export const manuallyAwardHLR = asyncHandler(async (req, res) => {
       });
     }
 
-    // Check if user is already qualified
+    // Check if user is already qualified (including leg requirements)
+    const legCheck = await user.checkHLRLegRequirements(mlm.hlrConfig);
+    const isQualified = legCheck.meetsRequirements;
     const currentPGP = user.qualificationPoints?.pgp?.accumulated || 0;
     const currentTGP = user.qualificationPoints?.tgp?.accumulated || 0;
-    
-    const isQualified = currentPGP >= mlm.hlrConfig.requirements.pgp && 
-                       currentTGP >= mlm.hlrConfig.requirements.tgp;
 
     if (!isQualified) {
       return res.status(400).json({
@@ -5072,10 +5285,22 @@ export const getHLRManagement = asyncHandler(async (req, res) => {
     .limit(10)
     .select('firstName lastName country hlrQualification.claimedAt hlrQualification.claimReason');
 
+    // Get leg configuration
+    const legSplitRatio = hlrConfig.legSplitRatio || { fromThreeLegs: 60, fromOtherLegs: 40 };
+    const legPercentages = hlrConfig.legPercentages || { legA: 33.33, legB: 33.33, legC: 33.34 };
+
     res.status(200).json({
       success: true,
       data: {
-        config: hlrConfig,
+        config: {
+          ...hlrConfig,
+          legSplitRatio,
+          legPercentages
+        },
+        legConfiguration: {
+          legSplitRatio,
+          legPercentages
+        },
         statistics: {
           totalQualified,
           totalRewardsClaimed,
