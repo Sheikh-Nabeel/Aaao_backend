@@ -2372,48 +2372,109 @@ const getPricingByQuery = async (req, res, next) => {
   try {
     const q = req.query || {};
 
-    // Shifting & Movers (read-only)
-    const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
-    if (svcType === "shiftingMovers") {
-      const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (q.category === "shiftingMovers") {
+      const config = await ComprehensivePricing.findOne({
+        isActive: true,
+      }).lean();
       if (!config) {
-        return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
+        return res.status(404).json({
+          success: false,
+          message: "Pricing configuration not found",
+        });
       }
-      const sm = (config.serviceTypes && config.serviceTypes.shiftingMovers) || {};
-      const catKey = moversMapQuery.categoryKey(q.moversCategory || q.categoryKey);
-      if (catKey) {
-        const node = (sm.categories && sm.categories[catKey]) || {};
-        return res.status(200).json({ success: true, data: node });
+
+      const sm = config.serviceTypes?.shiftingMovers;
+      if (!sm) {
+        return res.status(404).json({
+          success: false,
+          message: "Shifting & Movers configuration not found",
+        });
       }
-      return res.status(200).json({ success: true, data: sm });
+
+      // Map service names
+      const serviceMap = {
+        small: "smallMover",
+        medium: "mediumMover",
+        heavy: "heavyMover",
+      };
+
+      const serviceKey = serviceMap[q.service] || q.service;
+
+      if (q.service) {
+        // Return specific service if requested
+        if (!sm.categories?.[serviceKey]) {
+          return res.status(404).json({
+            success: false,
+            message: `Service '${q.service}' not found in Shifting & Movers`,
+          });
+        }
+
+        // Return the complete pricing structure for the service
+        return res.status(200).json({
+          success: true,
+          data: {
+            category: "shiftingMovers",
+            service: serviceKey,
+            node: {
+              ...sm,
+              selectedCategory: sm.categories[serviceKey],
+            },
+          },
+        });
+      }
+
+      // Return all services if no specific one requested
+      return res.status(200).json({
+        success: true,
+        data: {
+          category: "shiftingMovers",
+          node: sm,
+        },
+      });
     }
 
     // Car Recovery selective GET
     const category = crMapQuery.category(q.category);
     const service = crMapQuery.service(q.service);
-    const subService = crMapQuery.subService(q["sub-service"] ?? q.subService, service);
+    const subService = crMapQuery.subService(
+      q["sub-service"] ?? q.subService,
+      service
+    );
 
-    const anySelectiveProvided = q.category != null || q.service != null || q["sub-service"] != null || q.subService != null;
+    const anySelectiveProvided =
+      q.category != null ||
+      q.service != null ||
+      q["sub-service"] != null ||
+      q.subService != null;
     if (!category || !service || !subService) {
       if (anySelectiveProvided) {
         return res.status(400).json({
           success: false,
-          message: "Missing or invalid category, service, or sub-service. Expected category=carRecovery, service=towingServices|winchingServices|roadsideAssistance|specializedHeavyRecovery, sub-service per service.",
+          message:
+            "Missing or invalid category, service, or sub-service. Expected category=carRecovery, service=towingServices|winchingServices|roadsideAssistance|specializedHeavyRecovery, sub-service per service.",
         });
       }
       // Fallback to full GET (already aligned)
       return getComprehensivePricing(req, res, next);
     }
     if (category !== "carRecovery") {
-      return res.status(400).json({ success: false, message: "Only car-recovery is supported in this path" });
+      return res.status(400).json({
+        success: false,
+        message: "Only car-recovery is supported in this path",
+      });
     }
 
-    const config = await ComprehensivePricing.findOne({ isActive: true }).lean();
+    const config = await ComprehensivePricing.findOne({
+      isActive: true,
+    }).lean();
     if (!config) {
-      return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Comprehensive pricing configuration not found",
+      });
     }
 
-    // Map public service/sub-service keys to schema keys (no auto-creation)
+    // Map public service/sub-service keys to schema keys
     const mapServiceKeyToSchema = (k) => {
       if (k === "towingServices") return "towing";
       if (k === "winchingServices") return "winching";
@@ -2421,6 +2482,7 @@ const getPricingByQuery = async (req, res, next) => {
       if (k === "specializedHeavyRecovery") return "specializedHeavyRecovery";
       return k;
     };
+
     const mapSubKeyToSchema = (svc, sk) => {
       if (svc === "towing") {
         if (sk === "flatbedTowing" || sk === "flatbed") return "flatbed";
@@ -2435,9 +2497,12 @@ const getPricingByQuery = async (req, res, next) => {
         if (sk === "fuelDelivery") return "fuelDelivery";
       }
       if (svc === "specializedHeavyRecovery") {
-        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic") return "luxuryExotic";
-        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision") return "accidentCollision";
-        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle") return "heavyDutyVehicle";
+        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic")
+          return "luxuryExotic";
+        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision")
+          return "accidentCollision";
+        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle")
+          return "heavyDutyVehicle";
         if (sk === "basementPullOut") return "basementPullOut";
       }
       return sk;
@@ -2446,13 +2511,25 @@ const getPricingByQuery = async (req, res, next) => {
     const svcSchema = mapServiceKeyToSchema(service);
     const subSchema = mapSubKeyToSchema(svcSchema, subService);
 
-    const leaf = (((config.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema];
+    const leaf = (((config.serviceTypes || {}).carRecovery || {})
+      .serviceTypes || {})[svcSchema]?.subCategories?.[subSchema];
     if (!leaf) {
-      return res.status(404).json({ success: false, message: "Requested pricing node not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Requested pricing node not found",
+      });
     }
-    return res.status(200).json({ success: true, data: leaf });
+    return res.status(200).json({
+      success: true,
+      data: leaf,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Error fetching pricing node", error: error.message });
+    console.error("Error in getPricingByQuery:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching pricing node",
+      error: error.message,
+    });
   }
 };
 
@@ -2462,56 +2539,111 @@ const updatePricingByQuery = async (req, res) => {
   try {
     const q = req.query || {};
 
-    // Shifting & Movers
-    const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
-    if (svcType === "shiftingMovers") {
+    if (q.category === "shiftingMovers") {
+      if (!q.service) {
+        return res.status(400).json({
+          success: false,
+          message: "Service parameter is required for Shifting & Movers update",
+        });
+      }
+
+      // Map service names
+      const serviceMap = {
+        small: "smallMover",
+        medium: "mediumMover",
+        heavy: "heavyMover",
+      };
+
+      const serviceKey = serviceMap[q.service] || q.service;
       const adminId = req.user?.id || req.user?._id || null;
       const config = await ComprehensivePricing.findOne({ isActive: true });
+
       if (!config) {
         return res.status(404).json({
           success: false,
-          message: "Comprehensive pricing configuration not found",
+          message: "Pricing configuration not found",
         });
       }
-      config.serviceTypes = config.serviceTypes || {};
-      config.serviceTypes.shiftingMovers =
-        config.serviceTypes.shiftingMovers || {};
+
+      // Initialize if not exists
+      if (!config.serviceTypes) config.serviceTypes = {};
+      if (!config.serviceTypes.shiftingMovers) {
+        config.serviceTypes.shiftingMovers = {
+          enabled: true,
+          vehicleCost: {
+            startFare: 0,
+            coverageKm: 0,
+            perKmRate: 0,
+          },
+          basicServices: {},
+          pickupLocationPolicy: {},
+          dropoffLocationPolicy: {},
+          packingFares: {},
+          fixingFares: {},
+          loadingUnloadingFares: {},
+          categories: {
+            smallMover: {},
+            mediumMover: {},
+            heavyMover: {},
+          },
+        };
+      }
+
       const sm = config.serviceTypes.shiftingMovers;
-      sm.categories = sm.categories || {
-        smallMover: {},
-        mediumMover: {},
-        heavyMover: {},
+      const payload = req.body || {};
+
+      // Update the specific service category
+      if (!sm.categories) sm.categories = {};
+      sm.categories[serviceKey] = {
+        ...(sm.categories[serviceKey] || {}),
+        ...payload,
+        updatedAt: new Date(),
       };
 
-      const catKey = moversMapQuery.categoryKey(
-        q.moversCategory || q.categoryKey
-      );
-      const payload = { ...(req.body || {}) };
-      pruneUndefinedDeep(payload);
+      // If updating the entire config
+      if (payload.enabled !== undefined) sm.enabled = payload.enabled;
+      if (payload.vehicleCost)
+        sm.vehicleCost = { ...(sm.vehicleCost || {}), ...payload.vehicleCost };
+      if (payload.basicServices)
+        sm.basicServices = {
+          ...(sm.basicServices || {}),
+          ...payload.basicServices,
+        };
+      if (payload.pickupLocationPolicy)
+        sm.pickupLocationPolicy = {
+          ...(sm.pickupLocationPolicy || {}),
+          ...payload.pickupLocationPolicy,
+        };
+      if (payload.dropoffLocationPolicy)
+        sm.dropoffLocationPolicy = {
+          ...(sm.dropoffLocationPolicy || {}),
+          ...payload.dropoffLocationPolicy,
+        };
+      if (payload.packingFares)
+        sm.packingFares = {
+          ...(sm.packingFares || {}),
+          ...payload.packingFares,
+        };
+      if (payload.fixingFares)
+        sm.fixingFares = { ...(sm.fixingFares || {}), ...payload.fixingFares };
+      if (payload.loadingUnloadingFares)
+        sm.loadingUnloadingFares = {
+          ...(sm.loadingUnloadingFares || {}),
+          ...payload.loadingUnloadingFares,
+        };
 
-      if (catKey) {
-        sm.categories[catKey] = sm.categories[catKey] || {};
-        deepMergeReplaceArrays(sm.categories[catKey], payload);
-        config.lastUpdatedBy = adminId;
-        await config.save();
-        return res.status(200).json({
-          success: true,
-          message: "Movers category updated",
-          data: {
-            serviceType: "shiftingMovers",
-            categoryKey: catKey,
-            node: sm.categories[catKey],
-          },
-        });
-      }
-
-      deepMergeReplaceArrays(sm, payload);
+      config.markModified("serviceTypes");
       config.lastUpdatedBy = adminId;
       await config.save();
+
       return res.status(200).json({
         success: true,
-        message: "Shifting & Movers updated",
-        data: { serviceType: "shiftingMovers", node: sm },
+        message: "Shifting & Movers pricing updated successfully",
+        data: {
+          category: "shiftingMovers",
+          service: serviceKey,
+          node: sm,
+        },
       });
     }
 
@@ -2538,7 +2670,7 @@ const updatePricingByQuery = async (req, res) => {
 
     const adminId = req.user?.id || req.user?._id || null;
 
-    // Atomic update using dot-path; no in-memory save, no markModified
+    // Map service keys to schema
     const mapServiceKeyToSchema = (k) => {
       if (k === "towingServices") return "towing";
       if (k === "winchingServices") return "winching";
@@ -2546,6 +2678,7 @@ const updatePricingByQuery = async (req, res) => {
       if (k === "specializedHeavyRecovery") return "specializedHeavyRecovery";
       return k;
     };
+
     const mapSubKeyToSchema = (svcKey, sk) => {
       if (svcKey === "towing") {
         if (sk === "flatbedTowing" || sk === "flatbed") return "flatbed";
@@ -2560,9 +2693,12 @@ const updatePricingByQuery = async (req, res) => {
         if (sk === "fuelDelivery") return "fuelDelivery";
       }
       if (svcKey === "specializedHeavyRecovery") {
-        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic") return "luxuryExotic";
-        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision") return "accidentCollision";
-        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle") return "heavyDutyVehicle";
+        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic")
+          return "luxuryExotic";
+        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision")
+          return "accidentCollision";
+        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle")
+          return "heavyDutyVehicle";
         if (sk === "basementPullOut") return "basementPullOut";
       }
       return sk;
@@ -2573,19 +2709,39 @@ const updatePricingByQuery = async (req, res) => {
     const dotPath = `serviceTypes.carRecovery.serviceTypes.${svcSchema}.subCategories.${subSchema}`;
 
     const payload = { ...(req.body || {}) };
+    payload.updatedAt = new Date();
 
-    // Directly set the leaf (no auto-creation/merge/self-heal)
+    // Directly set the leaf
     const updated = await ComprehensivePricing.findOneAndUpdate(
       { isActive: true },
-      { $set: { [dotPath]: payload, lastUpdatedBy: adminId } },
+      {
+        $set: {
+          [dotPath]: payload,
+          lastUpdatedBy: adminId,
+          updatedAt: new Date(),
+        },
+      },
       { new: true, projection: { [dotPath]: 1 } }
     );
+
     if (!updated) {
-      return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Comprehensive pricing configuration not found",
+      });
     }
-    const updatedLeaf = (((updated.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema] || {};
-    return res.status(200).json({ success: true, data: updatedLeaf });
+
+    const updatedLeaf =
+      (((updated.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[
+        svcSchema
+      ]?.subCategories?.[subSchema] || {};
+
+    return res.status(200).json({
+      success: true,
+      data: updatedLeaf,
+    });
   } catch (error) {
+    console.error("Error in updatePricingByQuery:", error);
     res.status(500).json({
       success: false,
       message: "Error updating pricing node",
