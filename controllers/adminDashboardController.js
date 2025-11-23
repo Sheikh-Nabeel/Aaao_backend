@@ -55,27 +55,66 @@ export const getDriverReports = asyncHandler(async (req, res) => {
   }
 });
 
-// Ride & Service Reports: totals, completed, cancelled, top service, peak hour, service-wise success rate
+// Ride & Service Reports with date filtering: totals, completed, cancelled, top service, peak hour, service-wise success rate
 export const getRideServiceReports = asyncHandler(async (req, res) => {
   try {
+    // Parse date range (default: last 30 days)
+    const fromDate = req.query.from 
+      ? new Date(req.query.from) 
+      : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    fromDate.setHours(0, 0, 0, 0);
+    
+    const toDate = req.query.to 
+      ? new Date(req.query.to)
+      : new Date();
+    toDate.setHours(23, 59, 59, 999);
+    
+    // Parse day filter (today/last 7 days/last 30 days)
+    let dateFilter = { $gte: fromDate, $lte: toDate };
+    const dayParam = req.query.day;
+    
+    if (dayParam === 'today') {
+      const today = new Date();
+      dateFilter = { 
+        $gte: new Date(today.setHours(0, 0, 0, 0)),
+        $lte: new Date(today.setHours(23, 59, 59, 999))
+      };
+    } else if (dayParam === 'last7days') {
+      dateFilter = { 
+        $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        $lte: new Date()
+      };
+    } else if (dayParam === 'last30days') {
+      dateFilter = { 
+        $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        $lte: new Date()
+      };
+    }
+    
+    // Base match for all queries
+    const baseMatch = { createdAt: dateFilter };
+    
     const [total, completed, cancelled] = await Promise.all([
-      Booking.countDocuments({}),
-      Booking.countDocuments({ status: "completed" }),
-      Booking.countDocuments({ status: "cancelled" }),
+      Booking.countDocuments(baseMatch),
+      Booking.countDocuments({ ...baseMatch, status: "completed" }),
+      Booking.countDocuments({ ...baseMatch, status: "cancelled" }),
     ]);
 
     // Peak usage time by hour of day
     const peakHourAgg = await Booking.aggregate([
+      { $match: baseMatch },
       { $group: { _id: { $hour: "$createdAt" }, count: { $sum: 1 } } },
       { $sort: { count: -1 } },
       { $limit: 1 },
     ]);
+    
     const peakUsageTime = peakHourAgg[0]
       ? { hour: peakHourAgg[0]._id, count: peakHourAgg[0].count }
       : null;
 
     // Service-wise breakdown (counts, completed/cancelled, successRate)
     const servicesAgg = await Booking.aggregate([
+      { $match: baseMatch },
       {
         $group: {
           _id: "$serviceType",
@@ -107,16 +146,40 @@ export const getRideServiceReports = asyncHandler(async (req, res) => {
       ...s,
       percentage: total > 0 ? s.total / total : 0,
     }));
+    
     const topServiceType = serviceTypeBreakdown[0] || null;
+    
+    // Get distinct cities and service types for filters
+    const [cities, serviceTypes] = await Promise.all([
+      Booking.distinct("pickupAddress.city", baseMatch),
+      Booking.distinct("serviceType", baseMatch)
+    ]);
 
     res.status(200).json({
       success: true,
       message: "Ride & Service reports fetched successfully",
       data: {
+        params: {
+          dateRange: { 
+            from: dateFilter.$gte, 
+            to: dateFilter.$lte 
+          },
+          filters: {
+            day: dayParam,
+            from: req.query.from,
+            to: req.query.to
+          },
+          availableFilters: {
+            cities: cities.filter(Boolean),
+            serviceTypes: serviceTypes.filter(Boolean)
+          }
+        },
         totals: {
           totalBookings: total,
           completedRides: completed,
           cancelledRides: cancelled,
+          completionRate: total > 0 ? (completed / total) * 100 : 0,
+          cancellationRate: total > 0 ? (cancelled / total) * 100 : 0
         },
         peakUsageTime,
         topServiceType,
@@ -128,39 +191,107 @@ export const getRideServiceReports = asyncHandler(async (req, res) => {
   }
 });
 
-// Customer Reports: total, active (by recent bookings), inactive, verified/unverified KYC
+// Customer Reports: total, active, inactive, blocked, verified/unverified KYC with date range
 export const getAnalyticsReports = asyncHandler(async (req, res) => {
   try {
-    const days = Math.max(1, parseInt(req.query?.days, 10) || 30);
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
-    const [totalCustomers, verifiedKyc, activeUserIds] = await Promise.all([
-      User.countDocuments({ role: "customer" }),
-      User.countDocuments({ role: "customer", kycStatus: "approved" }),
-      Booking.distinct("user", { createdAt: { $gte: since } }),
+    // Parse date range (default: last 30 days)
+    const fromDate = req.query.from 
+      ? new Date(req.query.from) 
+      : new Date();
+    fromDate.setHours(0, 0, 0, 0);
+    
+    const toDate = req.query.to 
+      ? new Date(req.query.to)
+      : new Date();
+    toDate.setHours(23, 59, 59, 999);
+    
+    // Status filter (all/active/inactive/blocked)
+    const status = req.query.status || 'all';
+    
+    // Base query for customers
+    const baseQuery = { role: "customer" };
+    
+    // Add status filter if specified
+    let statusQuery = {};
+    if (status === 'active') {
+      // Active customers have bookings in the date range
+      const activeUserIds = await Booking.distinct("user", { 
+        createdAt: { $gte: fromDate, $lte: toDate } 
+      });
+      statusQuery._id = { $in: activeUserIds };
+    } else if (status === 'inactive') {
+      // Inactive customers have no bookings in the date range
+      const activeUserIds = await Booking.distinct("user", { 
+        createdAt: { $gte: fromDate, $lte: toDate } 
+      });
+      statusQuery._id = { $nin: activeUserIds };
+    } else if (status === 'blocked') {
+      // Blocked customers (assuming there's an isBlocked field)
+      statusQuery.isBlocked = true;
+    }
+    
+    // Combine base and status queries
+    const userQuery = { ...baseQuery, ...statusQuery };
+    
+    // Get counts in parallel
+    const [
+      totalCustomers, 
+      activeUserIds, 
+      verifiedKyc,
+      blockedCount
+    ] = await Promise.all([
+      // Total customers matching the filter
+      User.countDocuments(userQuery),
+      
+      // Active customers (have bookings in date range)
+      Booking.distinct("user", { 
+        createdAt: { $gte: fromDate, $lte: toDate } 
+      }),
+      
+      // Verified KYC customers
+      User.countDocuments({ 
+        ...userQuery, 
+        kycStatus: "approved" 
+      }),
+      
+      // Blocked customers count (if not already filtered by status)
+      status === 'blocked' ? 0 : User.countDocuments({ 
+        ...baseQuery, 
+        isBlocked: true 
+      })
     ]);
-
-    const activeCustomers = Array.isArray(activeUserIds)
-      ? await User.countDocuments({
-          role: "customer",
-          _id: { $in: activeUserIds },
-        })
-      : 0;
+    
+    // Calculate active/inactive counts
+    const activeCustomers = Array.isArray(activeUserIds) ? activeUserIds.length : 0;
     const inactiveCustomers = Math.max(0, totalCustomers - activeCustomers);
+    
+    // Get city distribution (for dropdown)
+    const cities = await User.distinct("city", { role: "customer" });
+    
+    // Get service types (for dropdown)
+    const serviceTypes = await Booking.distinct("serviceType");
 
     res.status(200).json({
       success: true,
-      message: "Customer reports fetched successfully",
+      message: "Customer analytics fetched successfully",
       data: {
-        params: { days },
+        params: { 
+          dateRange: { from: fromDate, to: toDate },
+          status,
+          availableFilters: {
+            cities: cities.filter(Boolean), // Remove any null/undefined
+            serviceTypes: serviceTypes.filter(Boolean)
+          }
+        },
         totals: {
           totalCustomers,
           activeCustomers,
           inactiveCustomers,
+          blockedCustomers: status === 'blocked' ? totalCustomers : blockedCount,
           verifiedKyc,
-          unverifiedKyc: Math.max(0, totalCustomers - verifiedKyc),
-        },
-      },
+          unverifiedKyc: Math.max(0, totalCustomers - verifiedKyc)
+        }
+      }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
