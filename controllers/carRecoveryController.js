@@ -637,19 +637,57 @@ export const unpinDriver = asyncHandler(async (req, res) => {
   }
 });
 
+// Get driver stats (ratings and completed rides)
+async function getDriverStats(driverIds) {
+  const stats = await Booking.aggregate([
+    {
+      $match: {
+        driverId: { $in: driverIds },
+        status: 'completed'
+      }
+    },
+    {
+      $group: {
+        _id: '$driverId',
+        totalRides: { $sum: 1 },
+        averageRating: { $avg: '$driverRating' }
+      }
+    }
+  ]);
+
+  return stats.reduce((acc, stat) => {
+    acc[stat._id.toString()] = {
+      totalRides: stat.totalRides,
+      averageRating: stat.averageRating ? parseFloat(stat.averageRating.toFixed(1)) : 0
+    };
+    return acc;
+  }, {});
+}
+
 // NEW: List pinned drivers
 export const getPinnedDrivers = asyncHandler(async (req, res) => {
   try {
     const me = await User.findById(req.user._id)
       .select("pinnedDrivers")
-      .populate("pinnedDrivers", "firstName lastName username email phoneNumber driverStatus currentLocation")
-      .lean();
+      .populate({
+        path: 'pinnedDrivers',
+        select: 'firstName lastName username email phoneNumber driverStatus currentLocation profileImage rating',
+        options: { lean: true }
+      });
 
     const list = me?.pinnedDrivers || [];
-    const ids = list.map((d) => d._id);
-    const vehicles = await Vehicle.find({ userId: { $in: ids } })
-      .select("userId serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
-      .lean();
+    if (list.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const driverIds = list.map(d => d._id);
+    const [vehicles, stats] = await Promise.all([
+      Vehicle.find({ userId: { $in: driverIds } })
+        .select("userId serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
+        .lean(),
+      getDriverStats(driverIds)
+    ]);
+
     const byUser = vehicles.reduce((acc, v) => {
       const key = String(v.userId);
       (acc[key] = acc[key] || []).push(v);
@@ -657,30 +695,42 @@ export const getPinnedDrivers = asyncHandler(async (req, res) => {
     }, {});
 
     const data = list
-      .map((d) => ({
-        id: String(d._id),
-        name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
-        username: d.username,
-        email: d.email,
-        phoneNumber: d.phoneNumber,
-        driverStatus: d.driverStatus,
-        currentLocation: d.currentLocation || null,
-        vehicles: (byUser[String(d._id)] || []).map((v) => ({
-          serviceType: v.serviceType || null,
-          serviceCategory: v.serviceCategory || null,
-          vehicleType: v.vehicleType || null,
-          vehicleMakeModel: v.vehicleMakeModel || null,
-          vehicleColor: v.vehicleColor || null,
-          vehiclePlateNumber: v.vehiclePlateNumber || null,
-          status: v.status || null,
-          isActive: v.isActive ?? null,
-        })),
-      }))
+      .map((d) => {
+        const driverStats = stats[d._id.toString()] || { totalRides: 0, averageRating: 0 };
+        return {
+          id: String(d._id),
+          name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
+          username: d.username,
+          email: d.email,
+          phoneNumber: d.phoneNumber,
+          driverStatus: d.driverStatus,
+          currentLocation: d.currentLocation || null,
+          profileImage: d.profileImage || null,
+          rating: d.rating || 0,
+          totalCompletedRides: driverStats.totalRides,
+          averageRating: driverStats.averageRating,
+          vehicles: (byUser[String(d._id)] || []).map((v) => ({
+            serviceType: v.serviceType || null,
+            serviceCategory: v.serviceCategory || null,
+            vehicleType: v.vehicleType || null,
+            vehicleMakeModel: v.vehicleMakeModel || null,
+            vehicleColor: v.vehicleColor || null,
+            vehiclePlateNumber: v.vehiclePlateNumber || null,
+            status: v.status || null,
+            isActive: v.isActive ?? null,
+          })),
+        };
+      })
       .filter((d) => Array.isArray(d.vehicles) && d.vehicles.length > 0);
 
     return res.json({ success: true, data });
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Error fetching pinned drivers", error: error.message });
+    console.error('Error in getPinnedDrivers:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Error fetching pinned drivers", 
+      error: error.message 
+    });
   }
 });
 
@@ -754,43 +804,66 @@ export const getFavoriteDrivers = asyncHandler(async (req, res) => {
   try {
     const me = await User.findById(req.user._id)
       .select("favoriteDrivers")
-      .populate("favoriteDrivers", "firstName lastName username email phoneNumber driverStatus currentLocation")
-      .lean();
+      .populate({
+        path: 'favoriteDrivers',
+        select: 'firstName lastName username email phoneNumber driverStatus currentLocation profileImage rating',
+        options: { lean: true }
+      });
 
     const list = me?.favoriteDrivers || [];
-    const ids = list.map((d) => d._id);
-    const vehicles = await Vehicle.find({ userId: { $in: ids } })
-      .select("userId serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
-      .lean();
+    if (list.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const driverIds = list.map(d => d._id);
+    const [vehicles, stats] = await Promise.all([
+      Vehicle.find({ userId: { $in: driverIds } })
+        .select("userId serviceType serviceCategory vehicleType vehicleMakeModel vehicleColor vehiclePlateNumber status isActive")
+        .lean(),
+      getDriverStats(driverIds)
+    ]);
+
     const byUser = vehicles.reduce((acc, v) => {
       const key = String(v.userId);
       (acc[key] = acc[key] || []).push(v);
       return acc;
     }, {});
 
-    const data = list.map((d) => ({
-      id: String(d._id),
-      name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
-      username: d.username,
-      email: d.email,
-      phoneNumber: d.phoneNumber,
-      driverStatus: d.driverStatus,
-      currentLocation: d.currentLocation || null,
-      vehicles: (byUser[String(d._id)] || []).map((v) => ({
-        serviceType: v.serviceType || null,
-        serviceCategory: v.serviceCategory || null,
-        vehicleType: v.vehicleType || null,
-        vehicleMakeModel: v.vehicleMakeModel || null,
-        vehicleColor: v.vehicleColor || null,
-        vehiclePlateNumber: v.vehiclePlateNumber || null,
-        status: v.status || null,
-        isActive: v.isActive ?? null,
-      })),
-    }));
+    const data = list.map((d) => {
+      const driverStats = stats[d._id.toString()] || { totalRides: 0, averageRating: 0 };
+      return {
+        id: String(d._id),
+        name: `${d.firstName ?? ""} ${d.lastName ?? ""}`.trim(),
+        username: d.username,
+        email: d.email,
+        phoneNumber: d.phoneNumber,
+        driverStatus: d.driverStatus,
+        currentLocation: d.currentLocation || null,
+        profileImage: d.profileImage || null,
+        rating: d.rating || 0,
+        totalCompletedRides: driverStats.totalRides,
+        averageRating: driverStats.averageRating,
+        vehicles: (byUser[String(d._id)] || []).map((v) => ({
+          serviceType: v.serviceType || null,
+          serviceCategory: v.serviceCategory || null,
+          vehicleType: v.vehicleType || null,
+          vehicleMakeModel: v.vehicleMakeModel || null,
+          vehicleColor: v.vehicleColor || null,
+          vehiclePlateNumber: v.vehiclePlateNumber || null,
+          status: v.status || null,
+          isActive: v.isActive ?? null,
+        })),
+      };
+    });
 
     return res.json({ success: true, data });
   } catch (error) {
-    return res.status(500).json({ success: false, message: "Error fetching favorite drivers", error: error.message });
+    console.error('Error in getFavoriteDrivers:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Error fetching favorite drivers", 
+      error: error.message 
+    });
   }
 });
 
