@@ -2125,10 +2125,10 @@ const crMapQuery = {
   subService(v, serviceKey) {
     const s = String(v || "").trim();
     const k = s.toLowerCase().replace(/\s+/g, "-");
-    const T = MAP_KEYS.carRecovery.categories["towing services"];
-    const W = MAP_KEYS.carRecovery.categories["winching services"];
-    const R = MAP_KEYS.carRecovery.categories["roadside assistance"];
-    const S = MAP_KEYS.carRecovery.categories["specialized/heavy recovery"];
+    const T = MAP_KEYS.carRecovery.categories["towing services"]; // towingServices
+    const W = MAP_KEYS.carRecovery.categories["winching services"]; // winchingServices
+    const R = MAP_KEYS.carRecovery.categories["roadside assistance"]; // roadsideAssistance
+    const S = MAP_KEYS.carRecovery.categories["specialized/heavy recovery"]; // specializedHeavyRecovery
 
     if (serviceKey === T) {
       if (s === "flatbedTowing" || k === "flatbed-towing" || k === "flatbed")
@@ -2372,48 +2372,286 @@ const getPricingByQuery = async (req, res, next) => {
   try {
     const q = req.query || {};
 
-    // Shifting & Movers (read-only)
-    const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
-    if (svcType === "shiftingMovers") {
-      const config = await ComprehensivePricing.findOne({ isActive: true });
+    if (q.category === "shiftingMovers") {
+      const config = await ComprehensivePricing.findOne({
+        isActive: true,
+      }).lean();
       if (!config) {
-        return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
+        return res.status(404).json({
+          success: false,
+          message: "Pricing configuration not found",
+        });
       }
-      const sm = (config.serviceTypes && config.serviceTypes.shiftingMovers) || {};
-      const catKey = moversMapQuery.categoryKey(q.moversCategory || q.categoryKey);
-      if (catKey) {
-        const node = (sm.categories && sm.categories[catKey]) || {};
-        return res.status(200).json({ success: true, data: node });
+
+      const sm = config.serviceTypes?.shiftingMovers;
+      if (!sm) {
+        return res.status(404).json({
+          success: false,
+          message: "Shifting & Movers configuration not found",
+        });
       }
-      return res.status(200).json({ success: true, data: sm });
+
+      // Map service names
+      const serviceMap = {
+        small: "smallMover",
+        medium: "mediumMover",
+        heavy: "heavyMover",
+      };
+
+      const serviceKey = serviceMap[q.service] || q.service;
+
+      if (q.service) {
+        // Return specific service if requested
+        if (!sm.categories?.[serviceKey]) {
+          return res.status(404).json({
+            success: false,
+            message: `Service '${q.service}' not found in Shifting & Movers`,
+          });
+        }
+
+        // Return the complete pricing structure for the service
+        return res.status(200).json({
+          success: true,
+          data: {
+            category: "shiftingMovers",
+            service: serviceKey,
+            node: {
+              ...sm,
+              selectedCategory: sm.categories[serviceKey],
+            },
+          },
+        });
+      }
+
+      // Return all services if no specific one requested
+      return res.status(200).json({
+        success: true,
+        data: {
+          category: "shiftingMovers",
+          node: sm,
+        },
+      });
+    }
+
+    // Handle carCab and bike services
+    if (q.category === "carCab" || q.category === "bike") {
+      const serviceType = q.category;
+      const serviceKey = q.service;
+
+      const config = await ComprehensivePricing.findOne({
+        isActive: true,
+      }).lean();
+      if (!config) {
+        return res.status(404).json({
+          success: false,
+          message: "Pricing configuration not found",
+        });
+      }
+
+      const serviceConfig = config.serviceTypes?.[serviceType];
+      if (!serviceConfig) {
+        // If service config doesn't exist, return default structure
+        const defaultServices = {
+          carCab: [
+            {
+              key: "economy",
+              label: "Economy",
+              info: "Standard car cab service",
+            },
+            {
+              key: "premium",
+              label: "Premium",
+              info: "Premium car cab service",
+            },
+            { key: "luxury", label: "Luxury", info: "Luxury car cab service" },
+          ],
+          bike: [
+            {
+              key: "standard",
+              label: "Standard",
+              info: "Standard bike service",
+            },
+            { key: "premium", label: "Premium", info: "Premium bike service" },
+          ],
+        };
+
+        const defaultConfig = {
+          enabled: true,
+          subServices: defaultServices[serviceType] || [],
+          vehicleTypes: {},
+          helpers: {
+            packingHelper: { enabled: false, price: 0 },
+            loadingUnloadingHelper: { enabled: false, price: 0 },
+            fixingHelper: { enabled: false, price: 0 },
+          },
+          roundTrip: {
+            discount: 0,
+            freeStayMinutes: 0,
+          },
+        };
+
+        if (serviceKey) {
+          const serviceData = defaultConfig.subServices.find(
+            (s) => s.key === serviceKey
+          ) || {
+            key: serviceKey,
+            label: serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1),
+            info: `${serviceKey} ${serviceType} service`,
+          };
+
+          return res.status(200).json({
+            success: true,
+            data: {
+              category: serviceType,
+              service: serviceKey,
+              node: {
+                ...defaultConfig,
+                selectedService: serviceData,
+              },
+            },
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          data: {
+            category: serviceType,
+            node: defaultConfig,
+          },
+        });
+      }
+
+      // If service key is provided, find and return specific service
+      if (serviceKey) {
+        // For bike service, return only the specific bike data
+        if (serviceType === 'bike') {
+          const bikeData = serviceConfig.vehicleTypes?.[serviceKey];
+          
+          if (!bikeData) {
+            return res.status(404).json({
+              success: false,
+              message: `Bike type '${serviceKey}' not found`,
+            });
+          }
+
+          return res.status(200).json({
+            success: true,
+            data: {
+              ...bikeData,
+              key: serviceKey,
+              label: bikeData.label || serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1),
+              enabled: serviceConfig.enabled ?? true
+            }
+          });
+        }
+        
+        // For carCab, return only the specific vehicle data
+        if (serviceType === 'carCab') {
+          const vehicleData = serviceConfig.vehicleTypes?.[serviceKey];
+          
+          if (!vehicleData) {
+            return res.status(404).json({
+              success: false,
+              message: `Vehicle type '${serviceKey}' not found in carCab`,
+            });
+          }
+
+          return res.status(200).json({
+            success: true,
+            data: {
+              ...vehicleData,
+              key: serviceKey,
+              label: vehicleData.label || serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1),
+              enabled: serviceConfig.enabled ?? true
+            }
+          });
+        } else {
+          // For other service types, keep the existing subServices logic
+          let serviceData = serviceConfig.subServices?.find(
+            (s) => s.key === serviceKey
+          );
+
+          if (!serviceData && serviceKey) {
+            serviceData = {
+              key: serviceKey,
+              label: serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1),
+              info: `${serviceKey} ${serviceType} service`,
+            };
+          }
+
+          if (!serviceData) {
+            return res.status(404).json({
+              success: false,
+              message: `Service '${serviceKey}' not found in ${serviceType}`,
+            });
+          }
+
+          return res.status(200).json({
+            success: true,
+            data: {
+              category: serviceType,
+              service: serviceKey,
+              node: {
+                ...serviceConfig,
+                selectedService: serviceData,
+              },
+            },
+          });
+        }
+      }
+
+      // No specific service requested, return all services
+      return res.status(200).json({
+        success: true,
+        data: {
+          category: serviceType,
+          node: serviceConfig,
+        },
+      });
     }
 
     // Car Recovery selective GET
     const category = crMapQuery.category(q.category);
     const service = crMapQuery.service(q.service);
-    const subService = crMapQuery.subService(q["sub-service"] ?? q.subService, service);
+    const subService = crMapQuery.subService(
+      q["sub-service"] ?? q.subService,
+      service
+    );
 
-    const anySelectiveProvided = q.category != null || q.service != null || q["sub-service"] != null || q.subService != null;
+    const anySelectiveProvided =
+      q.category != null ||
+      q.service != null ||
+      q["sub-service"] != null ||
+      q.subService != null;
     if (!category || !service || !subService) {
       if (anySelectiveProvided) {
         return res.status(400).json({
           success: false,
-          message: "Missing or invalid category, service, or sub-service. Expected category=carRecovery, service=towingServices|winchingServices|roadsideAssistance|specializedHeavyRecovery, sub-service per service.",
+          message:
+            "Missing or invalid category, service, or sub-service. Expected category=carRecovery, service=towingServices|winchingServices|roadsideAssistance|specializedHeavyRecovery, sub-service per service.",
         });
       }
       // Fallback to full GET (already aligned)
       return getComprehensivePricing(req, res, next);
     }
     if (category !== "carRecovery") {
-      return res.status(400).json({ success: false, message: "Only car-recovery is supported in this path" });
+      return res.status(400).json({
+        success: false,
+        message: "Only car-recovery is supported in this path",
+      });
     }
 
-    const config = await ComprehensivePricing.findOne({ isActive: true }).lean();
+    const config = await ComprehensivePricing.findOne({
+      isActive: true,
+    }).lean();
     if (!config) {
-      return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Comprehensive pricing configuration not found",
+      });
     }
 
-    // Map public service/sub-service keys to schema keys (no auto-creation)
+    // Map public service/sub-service keys to schema keys
     const mapServiceKeyToSchema = (k) => {
       if (k === "towingServices") return "towing";
       if (k === "winchingServices") return "winching";
@@ -2421,6 +2659,7 @@ const getPricingByQuery = async (req, res, next) => {
       if (k === "specializedHeavyRecovery") return "specializedHeavyRecovery";
       return k;
     };
+
     const mapSubKeyToSchema = (svc, sk) => {
       if (svc === "towing") {
         if (sk === "flatbedTowing" || sk === "flatbed") return "flatbed";
@@ -2435,9 +2674,12 @@ const getPricingByQuery = async (req, res, next) => {
         if (sk === "fuelDelivery") return "fuelDelivery";
       }
       if (svc === "specializedHeavyRecovery") {
-        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic") return "luxuryExotic";
-        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision") return "accidentCollision";
-        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle") return "heavyDutyVehicle";
+        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic")
+          return "luxuryExotic";
+        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision")
+          return "accidentCollision";
+        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle")
+          return "heavyDutyVehicle";
         if (sk === "basementPullOut") return "basementPullOut";
       }
       return sk;
@@ -2446,13 +2688,25 @@ const getPricingByQuery = async (req, res, next) => {
     const svcSchema = mapServiceKeyToSchema(service);
     const subSchema = mapSubKeyToSchema(svcSchema, subService);
 
-    const leaf = (((config.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema];
+    const leaf = (((config.serviceTypes || {}).carRecovery || {})
+      .serviceTypes || {})[svcSchema]?.subCategories?.[subSchema];
     if (!leaf) {
-      return res.status(404).json({ success: false, message: "Requested pricing node not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Requested pricing node not found",
+      });
     }
-    return res.status(200).json({ success: true, data: leaf });
+    return res.status(200).json({
+      success: true,
+      data: leaf,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Error fetching pricing node", error: error.message });
+    console.error("Error in getPricingByQuery:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching pricing node",
+      error: error.message,
+    });
   }
 };
 
@@ -2462,60 +2716,397 @@ const updatePricingByQuery = async (req, res) => {
   try {
     const q = req.query || {};
 
-    // Shifting & Movers
-    const svcType = moversMapQuery.serviceType(q.serviceType || q.category);
-    if (svcType === "shiftingMovers") {
+    if (q.category === "carCab" || q.category === "bike") {
+      const serviceType = q.category;
+      const serviceKey = q.service;
       const adminId = req.user?.id || req.user?._id || null;
       const config = await ComprehensivePricing.findOne({ isActive: true });
+
       if (!config) {
         return res.status(404).json({
           success: false,
-          message: "Comprehensive pricing configuration not found",
+          message: "Pricing configuration not found",
         });
       }
-      config.serviceTypes = config.serviceTypes || {};
-      config.serviceTypes.shiftingMovers =
-        config.serviceTypes.shiftingMovers || {};
-      const sm = config.serviceTypes.shiftingMovers;
-      sm.categories = sm.categories || {
-        smallMover: {},
-        mediumMover: {},
-        heavyMover: {},
+
+      // Define default services structure
+      const defaultServices = {
+        carCab: [
+          {
+            key: "economy",
+            label: "Economy",
+            info: "Standard car cab service",
+            baseFare: 0,
+            perKmRate: 0,
+            perMinuteRate: 0,
+            minimumFare: 0,
+            commissionRate: 0,
+            isActive: true,
+          },
+          {
+            key: "premium",
+            label: "Premium",
+            info: "Premium car cab service",
+            baseFare: 0,
+            perKmRate: 0,
+            perMinuteRate: 0,
+            minimumFare: 0,
+            commissionRate: 0,
+            isActive: true,
+          },
+        ],
+        bike: [
+          {
+            key: "standard",
+            label: "Standard",
+            info: "Standard bike service",
+            baseFare: 0,
+            perKmRate: 0,
+            perMinuteRate: 0,
+            minimumFare: 0,
+            isActive: true,
+          },
+        ],
       };
 
-      const catKey = moversMapQuery.categoryKey(
-        q.moversCategory || q.categoryKey
-      );
-      const payload = { ...(req.body || {}) };
-      pruneUndefinedDeep(payload);
-
-      if (catKey) {
-        sm.categories[catKey] = sm.categories[catKey] || {};
-        deepMergeReplaceArrays(sm.categories[catKey], payload);
-        config.lastUpdatedBy = adminId;
-        await config.save();
-        return res.status(200).json({
-          success: true,
-          message: "Movers category updated",
-          data: {
-            serviceType: "shiftingMovers",
-            categoryKey: catKey,
-            node: sm.categories[catKey],
+      // Initialize service config if it doesn't exist
+      if (!config.serviceTypes) config.serviceTypes = {};
+      if (!config.serviceTypes[serviceType]) {
+        config.serviceTypes[serviceType] = {
+          enabled: true,
+          subServices: defaultServices[serviceType] || [],
+          vehicleTypes: {},
+          helpers: {
+            packingHelper: { enabled: false, price: 0 },
+            loadingUnloadingHelper: { enabled: false, price: 0 },
+            fixingHelper: { enabled: false, price: 0 },
           },
+          roundTrip: {
+            discount: 0,
+            freeStayMinutes: 0,
+          },
+        };
+      }
+
+      const serviceConfig = config.serviceTypes[serviceType];
+      const payload = req.body || {};
+
+      // Handle service-specific updates
+      if (serviceKey) {
+        // For carCab, update the specific vehicle type
+        if (serviceType === 'carCab') {
+          // Initialize vehicleTypes if not exists
+          if (!serviceConfig.vehicleTypes) {
+            serviceConfig.vehicleTypes = {
+              economy: { baseFare: 100, perKmRate: 10, perMinuteRate: 0.8, label: 'Economy' },
+              sedan: { baseFare: 50, perKmRate: 12, perMinuteRate: 1, label: 'Sedan' },
+              suv: { baseFare: 70, perKmRate: 15, perMinuteRate: 1.2, label: 'SUV' },
+              luxury: { baseFare: 100, perKmRate: 20, perMinuteRate: 1.5, label: 'Luxury' }
+            };
+          }
+          
+          // Initialize other required fields if not exists
+          if (!serviceConfig.peakHours) {
+            serviceConfig.peakHours = {
+              morning: { start: '07:00', end: '10:00', surcharge: 1.2 },
+              evening: { start: '17:00', end: '20:00', surcharge: 1.3 }
+            };
+          }
+          
+          if (!serviceConfig.airportServices) {
+            serviceConfig.airportServices = {
+              pickupFee: 20,
+              waitingTime: {
+                freeMinutes: 30,
+                perMinuteCharge: 1.5
+              }
+            };
+          }
+          
+          if (!serviceConfig.additionalCharges) {
+            serviceConfig.additionalCharges = {
+              tollFees: 'Actual',
+              parkingFees: 'Actual',
+              nightSurcharge: {
+                percentage: 20,
+                startTime: '22:00',
+                endTime: '06:00'
+              }
+            };
+          }
+          
+          if (!serviceConfig.cancellationPolicy) {
+            serviceConfig.cancellationPolicy = {
+              freeCancellation: '5 minutes after booking',
+              lateCancellationFee: 50
+            };
+          }
+          
+          // Update the specific vehicle type if payload contains vehicle data
+          if (payload.baseFare || payload.perKmRate || payload.perMinuteRate) {
+            if (!serviceConfig.vehicleTypes[serviceKey]) {
+              serviceConfig.vehicleTypes[serviceKey] = {
+                label: serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1)
+              };
+            }
+            
+            // Update vehicle type data
+            serviceConfig.vehicleTypes[serviceKey] = {
+              ...serviceConfig.vehicleTypes[serviceKey],
+              baseFare: payload.baseFare !== undefined ? payload.baseFare : serviceConfig.vehicleTypes[serviceKey]?.baseFare || 0,
+              perKmRate: payload.perKmRate !== undefined ? payload.perKmRate : serviceConfig.vehicleTypes[serviceKey]?.perKmRate || 0,
+              perMinuteRate: payload.perMinuteRate !== undefined ? payload.perMinuteRate : serviceConfig.vehicleTypes[serviceKey]?.perMinuteRate || 0,
+              minimumFare: payload.minimumFare !== undefined ? payload.minimumFare : serviceConfig.vehicleTypes[serviceKey]?.minimumFare || 0,
+              label: payload.label || serviceConfig.vehicleTypes[serviceKey]?.label || serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1),
+              updatedAt: new Date()
+            };
+          }
+          
+          // Update other configurations if provided
+          if (payload.peakHours) {
+            serviceConfig.peakHours = { ...serviceConfig.peakHours, ...payload.peakHours };
+          }
+          
+          if (payload.airportServices) {
+            serviceConfig.airportServices = { 
+              ...serviceConfig.airportServices, 
+              ...payload.airportServices 
+            };
+          }
+          
+          if (payload.additionalCharges) {
+            serviceConfig.additionalCharges = { 
+              ...serviceConfig.additionalCharges, 
+              ...payload.additionalCharges 
+            };
+          }
+          
+          if (payload.cancellationPolicy) {
+            serviceConfig.cancellationPolicy = { 
+              ...serviceConfig.cancellationPolicy, 
+              ...payload.cancellationPolicy 
+            };
+          }
+        } else {
+          // For other service types, keep the existing logic
+          if (!serviceConfig.subServices || !Array.isArray(serviceConfig.subServices)) {
+            serviceConfig.subServices = [];
+          }
+
+          // Ensure we have a valid array before using findIndex
+          const serviceIndex = (serviceConfig.subServices || []).findIndex(
+            (s) => s && s.key === serviceKey
+          ) || -1;
+
+          const defaultService = {
+            key: serviceKey,
+            label: serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1),
+            info: `${serviceKey} ${serviceType} service`,
+            baseFare: 0,
+            perKmRate: 0,
+            perMinuteRate: 0,
+            minimumFare: 0,
+            commissionRate: 0,
+            isActive: true,
+            updatedAt: new Date(),
+          };
+
+          const serviceData = {
+            ...defaultService,
+            ...(serviceIndex >= 0 ? serviceConfig.subServices[serviceIndex] : {}),
+            ...(payload.selectedService || {}),
+            key: serviceKey,
+            updatedAt: new Date(),
+          };
+
+          if (serviceIndex >= 0) {
+            serviceConfig.subServices[serviceIndex] = serviceData;
+          } else {
+            serviceConfig.subServices.push(serviceData);
+          }
+        }
+      }
+
+      // Update service-wide configurations
+      if (payload.enabled !== undefined)
+        serviceConfig.enabled = payload.enabled;
+
+      // Update vehicle types
+      if (payload.vehicleTypes) {
+        if (!serviceConfig.vehicleTypes) serviceConfig.vehicleTypes = {};
+        Object.entries(payload.vehicleTypes).forEach(([key, value]) => {
+          serviceConfig.vehicleTypes[key] = {
+            ...(serviceConfig.vehicleTypes[key] || {}),
+            ...value,
+            updatedAt: new Date(),
+          };
         });
       }
 
-      deepMergeReplaceArrays(sm, payload);
+      // Update helpers and round trip
+      if (payload.helpers) {
+        serviceConfig.helpers = {
+          ...(serviceConfig.helpers || {}),
+          ...payload.helpers,
+        };
+      }
+
+      if (payload.roundTrip) {
+        serviceConfig.roundTrip = {
+          ...(serviceConfig.roundTrip || {}),
+          ...payload.roundTrip,
+        };
+      }
+
+      // Save changes
+      config.markModified("serviceTypes");
       config.lastUpdatedBy = adminId;
       await config.save();
+
+      // Prepare response
+      const response = {
+        success: true,
+        message: serviceKey
+          ? `${serviceType} service '${serviceKey}' updated successfully`
+          : `${serviceType} configuration updated successfully`,
+        data: {
+          category: serviceType,
+          service: serviceKey,
+          node: serviceConfig,
+        },
+      };
+
+      if (serviceKey) {
+        if (serviceType === 'carCab' || serviceType === 'bike') {
+          // For carCab and bike, get the updated vehicle type
+          const updatedVehicle = serviceConfig.vehicleTypes?.[serviceKey];
+          if (updatedVehicle) {
+            // Create a clean response with only necessary data
+            const responseData = {
+              baseFare: updatedVehicle.baseFare,
+              perKmRate: updatedVehicle.perKmRate,
+              perMinuteRate: updatedVehicle.perMinuteRate || 0,
+              minimumFare: updatedVehicle.minimumFare || serviceConfig.minimumFare || 0,
+              label: updatedVehicle.label || serviceKey.charAt(0).toUpperCase() + serviceKey.slice(1),
+              info: updatedVehicle.info || '',
+              nightCharges: updatedVehicle.nightCharges || {},
+              key: serviceKey,
+              enabled: serviceConfig.enabled !== false // default to true if not set
+            };
+
+            // Add additional fields if they exist
+            if (updatedVehicle.waitingCharges) responseData.waitingCharges = updatedVehicle.waitingCharges;
+            if (updatedVehicle.peakHours) responseData.peakHours = updatedVehicle.peakHours;
+            if (updatedVehicle.additionalCharges) responseData.additionalCharges = updatedVehicle.additionalCharges;
+            if (updatedVehicle.cancellationPolicy) responseData.cancellationPolicy = updatedVehicle.cancellationPolicy;
+
+            response.data.node = responseData;
+          }
+        } else {
+          // For other service types, use subServices
+          const updatedService = serviceConfig.subServices?.find(
+            (s) => s && s.key === serviceKey
+          );
+          if (updatedService) {
+            response.data.node = {
+              ...updatedService,
+              enabled: serviceConfig.enabled !== false
+            };
+          }
+        }
+      }
+
+      return res.status(200).json(response);
+    }
+
+    if (q.category === "shiftingMovers") {
+      if (!q.service) {
+        return res.status(400).json({
+          success: false,
+          message: "Service parameter is required for Shifting & Movers update",
+        });
+      }
+
+      const serviceMap = {
+        small: "smallMover",
+        medium: "mediumMover",
+        heavy: "heavyMover",
+      };
+
+      const serviceKey = serviceMap[q.service] || q.service;
+      const adminId = req.user?.id || req.user?._id || null;
+      const config = await ComprehensivePricing.findOne({ isActive: true });
+
+      if (!config) {
+        return res.status(404).json({
+          success: false,
+          message: "Pricing configuration not found",
+        });
+      }
+
+      // Initialize if not exists
+      if (!config.serviceTypes) config.serviceTypes = {};
+      if (!config.serviceTypes.shiftingMovers) {
+        config.serviceTypes.shiftingMovers = {
+          enabled: true,
+          vehicleCost: {
+            startFare: 0,
+            coverageKm: 0,
+            perKmRate: 0,
+          },
+          basicServices: {},
+          pickupLocationPolicy: {},
+          dropoffLocationPolicy: {},
+          packingFares: {},
+          fixingFares: {},
+          loadingUnloadingFares: {},
+          categories: {
+            smallMover: {},
+            mediumMover: {},
+            heavyMover: {},
+          },
+        };
+      }
+
+      const sm = config.serviceTypes.shiftingMovers;
+      const payload = req.body || {};
+
+      // Update the specific service category
+      if (!sm.categories) sm.categories = {};
+      sm.categories[serviceKey] = {
+        ...(sm.categories[serviceKey] || {}),
+        ...payload,
+        updatedAt: new Date(),
+      };
+
+      // Update other configurations
+      if (payload.enabled !== undefined) sm.enabled = payload.enabled;
+      if (payload.vehicleCost) {
+        sm.vehicleCost = {
+          ...(sm.vehicleCost || {}),
+          ...payload.vehicleCost,
+        };
+      }
+      // Update other sections similarly...
+
+      config.markModified("serviceTypes");
+      config.lastUpdatedBy = adminId;
+      await config.save();
+
       return res.status(200).json({
         success: true,
-        message: "Shifting & Movers updated",
-        data: { serviceType: "shiftingMovers", node: sm },
+        message: "Shifting & Movers pricing updated successfully",
+        data: {
+          category: "shiftingMovers",
+          service: serviceKey,
+          node: sm,
+        },
       });
     }
 
-    // Car Recovery
+    // =============================================
+    // 3. Handle Car Recovery
+    // =============================================
     const category = crMapQuery.category(q.category);
     const service = crMapQuery.service(q.service);
     const subService = crMapQuery.subService(
@@ -2538,57 +3129,48 @@ const updatePricingByQuery = async (req, res) => {
 
     const adminId = req.user?.id || req.user?._id || null;
 
-    // Atomic update using dot-path; no in-memory save, no markModified
-    const mapServiceKeyToSchema = (k) => {
-      if (k === "towingServices") return "towing";
-      if (k === "winchingServices") return "winching";
-      if (k === "roadsideAssistance") return "roadsideAssistance";
-      if (k === "specializedHeavyRecovery") return "specializedHeavyRecovery";
-      return k;
-    };
-    const mapSubKeyToSchema = (svcKey, sk) => {
-      if (svcKey === "towing") {
-        if (sk === "flatbedTowing" || sk === "flatbed") return "flatbed";
-        if (sk === "wheelLiftTowing" || sk === "wheelLift") return "wheelLift";
-      }
-      if (svcKey === "winching") {
-        if (sk === "onRoadWinching") return "onRoadWinching";
-        if (sk === "offRoadWinching") return "offRoadWinching";
-      }
-      if (svcKey === "roadsideAssistance") {
-        if (sk === "batteryJumpStart" || sk === "jumpstart") return "jumpstart";
-        if (sk === "fuelDelivery") return "fuelDelivery";
-      }
-      if (svcKey === "specializedHeavyRecovery") {
-        if (sk === "luxuryExoticCarRecovery" || sk === "luxuryExotic") return "luxuryExotic";
-        if (sk === "accidentCollisionRecovery" || sk === "accidentCollision") return "accidentCollision";
-        if (sk === "heavyDutyVehicleRecovery" || sk === "heavyDutyVehicle") return "heavyDutyVehicle";
-        if (sk === "basementPullOut") return "basementPullOut";
-      }
-      return sk;
-    };
-
+    // Map service keys to schema
     const svcSchema = mapServiceKeyToSchema(service);
     const subSchema = mapSubKeyToSchema(svcSchema, subService);
     const dotPath = `serviceTypes.carRecovery.serviceTypes.${svcSchema}.subCategories.${subSchema}`;
 
     const payload = { ...(req.body || {}) };
+    payload.updatedAt = new Date();
 
-    // Directly set the leaf (no auto-creation/merge/self-heal)
+    // Directly set the leaf
     const updated = await ComprehensivePricing.findOneAndUpdate(
       { isActive: true },
-      { $set: { [dotPath]: payload, lastUpdatedBy: adminId } },
+      {
+        $set: {
+          [dotPath]: payload,
+          lastUpdatedBy: adminId,
+          updatedAt: new Date(),
+        },
+      },
       { new: true, projection: { [dotPath]: 1 } }
     );
+
     if (!updated) {
-      return res.status(404).json({ success: false, message: "Comprehensive pricing configuration not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Comprehensive pricing configuration not found",
+      });
     }
-    const updatedLeaf = (((updated.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[svcSchema]?.subCategories?.[subSchema] || {};
-    return res.status(200).json({ success: true, data: updatedLeaf });
+
+    const updatedLeaf =
+      (((updated.serviceTypes || {}).carRecovery || {}).serviceTypes || {})[
+        svcSchema
+      ]?.subCategories?.[subSchema] || {};
+
+    return res.status(200).json({
+      success: true,
+      data: updatedLeaf,
+    });
   } catch (error) {
+    console.error("Error in updatePricingByQuery:", error);
     res.status(500).json({
       success: false,
-      message: "Error updating pricing node",
+      message: "Error updating pricing configuration",
       error: error.message,
     });
   }

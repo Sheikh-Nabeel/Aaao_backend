@@ -3,6 +3,88 @@ import mongoose from "mongoose";
 import Booking from "../models/bookingModel.js";
 import User from "../models/userModel.js";
 
+const buildDateFilter = (query, field = "createdAt") => {
+  let filter = {};
+  const { from, to, day } = query;
+
+  if (day === "today") {
+    const today = new Date();
+    filter[field] = {
+      $gte: new Date(today.setHours(0, 0, 0, 0)),
+      $lte: new Date(today.setHours(23, 59, 59, 999)),
+    };
+  } else if (day === "yesterday") {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    filter[field] = {
+      $gte: new Date(yesterday.setHours(0, 0, 0, 0)),
+      $lte: new Date(yesterday.setHours(23, 59, 59, 999)),
+    };
+  } else if (day === "last7days") {
+    filter[field] = {
+      $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      $lte: new Date(),
+    };
+  } else if (day === "last30days") {
+    filter[field] = {
+      $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      $lte: new Date(),
+    };
+  } else if (from || to) {
+    filter[field] = {};
+    if (from) {
+      const fromDate = new Date(from);
+      fromDate.setHours(0, 0, 0, 0);
+      filter[field].$gte = fromDate;
+    }
+    if (to) {
+      const toDate = new Date(to);
+      toDate.setHours(23, 59, 59, 999);
+      filter[field].$lte = toDate;
+    }
+  } else {
+    // Default to last 30 days if no date range specified
+    filter[field] = {
+      $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      $lte: new Date(),
+    };
+  }
+
+  return filter;
+};
+
+const generateReport = async (
+  model,
+  match = {},
+  group = null,
+  project = null,
+  sort = {}
+) => {
+  const pipeline = [];
+
+  // Add match stage if provided
+  if (Object.keys(match).length > 0) {
+    pipeline.push({ $match: match });
+  }
+
+  // Add group stage if provided
+  if (group) {
+    pipeline.push({ $group: group });
+  }
+
+  // Add project stage if provided
+  if (project) {
+    pipeline.push({ $project: project });
+  }
+
+  // Add sort stage if provided
+  if (Object.keys(sort).length > 0) {
+    pipeline.push({ $sort: sort });
+  }
+
+  return model.aggregate(pipeline);
+};
+
 export const getAdminOverview = asyncHandler(async (req, res) => {
   try {
     const [totalBookings, totalCustomers, totalDrivers, bookingsWithChats] =
@@ -30,140 +112,418 @@ export const getAdminOverview = asyncHandler(async (req, res) => {
   }
 });
 
-// Driver Reports: total drivers, online drivers, unverified KYC
 export const getDriverReports = asyncHandler(async (req, res) => {
   try {
-    const [total, online, unverifiedKyc] = await Promise.all([
-      User.countDocuments({ role: "driver" }),
-      User.countDocuments({ role: "driver", driverStatus: "online" }),
-      User.countDocuments({ role: "driver", kycStatus: { $ne: "approved" } }),
+    const { status, kyc, city, vehicleType, from, to, day } = req.query;
+
+    // Build base query
+    const query = { role: "driver" };
+
+    // Apply filters
+    if (status) {
+      query.driverStatus = status;
+    }
+
+    if (kyc) {
+      if (kyc === "approved") {
+        query.kycStatus = "approved";
+      } else if (kyc === "pending") {
+        query.kycStatus = "pending";
+      } else if (kyc === "rejected") {
+        query.kycStatus = "rejected";
+      } else if (kyc === "unverified") {
+        query.$or = [
+          { kycStatus: { $exists: false } },
+          { kycStatus: { $in: [null, ""] } },
+        ];
+      }
+    }
+
+    if (city) {
+      query["address.city"] = city;
+    }
+
+    if (vehicleType) {
+      query.vehicleType = vehicleType;
+    }
+
+    // Apply date filter
+    if (from || to || day) {
+      const dateFilter = buildDateFilter({ from, to, day });
+      query.createdAt = dateFilter.createdAt;
+    }
+
+    // Get counts in parallel
+    const [
+      total,
+      online,
+      offline,
+      inRide,
+      available,
+      kycApproved,
+      kycPending,
+      kycRejected,
+    ] = await Promise.all([
+      User.countDocuments(query),
+      User.countDocuments({ ...query, driverStatus: "online" }),
+      User.countDocuments({ ...query, driverStatus: "offline" }),
+      User.countDocuments({ ...query, driverStatus: "in_ride" }),
+      User.countDocuments({ ...query, driverStatus: "available" }),
+      User.countDocuments({ ...query, kycStatus: "approved" }),
+      User.countDocuments({ ...query, kycStatus: "pending" }),
+      User.countDocuments({ ...query, kycStatus: "rejected" }),
+    ]);
+
+    // Get driver distribution by status
+    const statusDistribution = await generateReport(
+      User,
+      query,
+      { _id: "$driverStatus", count: { $sum: 1 } },
+      { _id: 0, status: "$_id", count: 1 }
+    );
+
+    // Get driver distribution by vehicle type
+    const vehicleDistribution = await generateReport(
+      User,
+      { ...query, vehicleType: { $exists: true, $ne: null } },
+      { _id: "$vehicleType", count: { $sum: 1 } },
+      { _id: 0, vehicleType: "$_id", count: 1 }
+    );
+
+    // Get signup trend (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const signupTrend = await generateReport(
+      User,
+      {
+        ...query,
+        createdAt: { $gte: thirtyDaysAgo },
+      },
+      {
+        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+        count: { $sum: 1 },
+      },
+      { _id: 0, date: "$_id", count: 1 },
+      { date: 1 }
+    );
+
+    // Get distinct values for filters
+    const [cities, vehicleTypes] = await Promise.all([
+      User.distinct("address.city", query),
+      User.distinct("vehicleType", query),
     ]);
 
     res.status(200).json({
       success: true,
       message: "Driver reports fetched successfully",
       data: {
-        totals: {
+        params: {
+          filters: req.query,
+          availableFilters: {
+            cities: cities.filter(Boolean),
+            vehicleTypes: vehicleTypes.filter(Boolean),
+          },
+        },
+        summary: {
           totalDrivers: total,
           onlineDrivers: online,
-          unverifiedKyc,
+          offlineDrivers: offline,
+          inRideDrivers: inRide,
+          availableDrivers: available,
+          kycStatus: {
+            approved: kycApproved,
+            pending: kycPending,
+            rejected: kycRejected,
+            unverified: total - (kycApproved + kycPending + kycRejected),
+          },
         },
+        distributions: {
+          byStatus: statusDistribution,
+          byVehicleType: vehicleDistribution,
+        },
+        signupTrend,
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Error in getDriverReports:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch driver reports",
+      error: error.message,
+    });
   }
 });
 
-// Ride & Service Reports: totals, completed, cancelled, top service, peak hour, service-wise success rate
+// Get ride and service reports with dynamic filtering
 export const getRideServiceReports = asyncHandler(async (req, res) => {
   try {
-    const [total, completed, cancelled] = await Promise.all([
-      Booking.countDocuments({}),
-      Booking.countDocuments({ status: "completed" }),
-      Booking.countDocuments({ status: "cancelled" }),
+    const {
+      status,
+      serviceType,
+      city,
+      paymentMethod,
+      minAmount,
+      maxAmount,
+      from,
+      to,
+      day,
+    } = req.query;
+
+    // Build base query
+    const query = buildDateFilter({ from, to, day });
+
+    // Apply additional filters
+    if (status) {
+      query.status = status;
+    }
+
+    if (serviceType) {
+      query.serviceType = serviceType;
+    }
+
+    if (city) {
+      query["pickupAddress.city"] = city;
+    }
+
+    if (paymentMethod) {
+      query.paymentMethod = paymentMethod;
+    }
+
+    if (minAmount || maxAmount) {
+      query.totalFare = {};
+      if (minAmount) {
+        query.totalFare.$gte = parseFloat(minAmount);
+      }
+      if (maxAmount) {
+        query.totalFare.$lte = parseFloat(maxAmount);
+      }
+    }
+
+    // Get total counts
+    const [total, completed, cancelled, inProgress] = await Promise.all([
+      Booking.countDocuments(query),
+      Booking.countDocuments({ ...query, status: "completed" }),
+      Booking.countDocuments({ ...query, status: "cancelled" }),
+      Booking.countDocuments({
+        ...query,
+        status: { $in: ["accepted", "started", "in_progress"] },
+      }),
     ]);
 
-    // Peak usage time by hour of day
-    const peakHourAgg = await Booking.aggregate([
-      { $group: { _id: { $hour: "$createdAt" }, count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 1 },
-    ]);
-    const peakUsageTime = peakHourAgg[0]
-      ? { hour: peakHourAgg[0]._id, count: peakHourAgg[0].count }
-      : null;
-
-    // Service-wise breakdown (counts, completed/cancelled, successRate)
-    const servicesAgg = await Booking.aggregate([
+    // Get revenue metrics
+    const revenueMetrics = await generateReport(
+      Booking,
+      { ...query, status: "completed" },
       {
-        $group: {
-          _id: "$serviceType",
-          total: { $sum: 1 },
-          completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
-          cancelled: { $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] } },
+        _id: null,
+        totalRevenue: { $sum: "$totalFare" },
+        avgFare: { $avg: "$totalFare" },
+        minFare: { $min: "$totalFare" },
+        maxFare: { $max: "$totalFare" },
+      }
+    );
+
+    // Get service type breakdown
+    const serviceBreakdown = await generateReport(
+      Booking,
+      query,
+      {
+        _id: "$serviceType",
+        count: { $sum: 1 },
+        completed: {
+          $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] },
         },
+        cancelled: {
+          $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] },
+        },
+        revenue: { $sum: "$totalFare" },
+        avgFare: { $avg: "$totalFare" },
       },
       {
-        $project: {
-          _id: 0,
-          serviceType: "$_id",
-          total: 1,
-          completed: 1,
-          cancelled: 1,
-          successRate: {
-            $cond: [
-              { $gt: ["$total", 0] },
-              { $divide: ["$completed", "$total"] },
-              0,
-            ],
-          },
+        _id: 0,
+        serviceType: "$_id",
+        total: "$count",
+        completed: 1,
+        cancelled: 1,
+        revenue: 1,
+        avgFare: 1,
+        completionRate: {
+          $cond: [
+            { $gt: ["$count", 0] },
+            { $divide: ["$completed", "$count"] },
+            0,
+          ],
         },
       },
-      { $sort: { total: -1 } },
-    ]);
+      { total: -1 }
+    );
 
-    const serviceTypeBreakdown = servicesAgg.map((s) => ({
-      ...s,
-      percentage: total > 0 ? s.total / total : 0,
-    }));
-    const topServiceType = serviceTypeBreakdown[0] || null;
+    // Get hourly distribution
+    const hourlyDistribution = await generateReport(
+      Booking,
+      query,
+      { _id: { $hour: "$createdAt" }, count: { $sum: 1 } },
+      { _id: 0, hour: "$_id", count: 1 },
+      { hour: 1 }
+    );
+
+    // Get distinct values for filters
+    const [cities, serviceTypes, paymentMethods] = await Promise.all([
+      Booking.distinct("pickupAddress.city", query),
+      Booking.distinct("serviceType", query),
+      Booking.distinct("paymentMethod", query),
+    ]);
 
     res.status(200).json({
       success: true,
       message: "Ride & Service reports fetched successfully",
       data: {
-        totals: {
+        params: {
+          dateRange: query.createdAt || {},
+          filters: req.query,
+          availableFilters: {
+            cities: cities.filter(Boolean),
+            serviceTypes: serviceTypes.filter(Boolean),
+            paymentMethods: paymentMethods.filter(Boolean),
+          },
+        },
+        summary: {
           totalBookings: total,
           completedRides: completed,
           cancelledRides: cancelled,
+          inProgressRides: inProgress,
+          completionRate: total > 0 ? (completed / total) * 100 : 0,
+          cancellationRate: total > 0 ? (cancelled / total) * 100 : 0,
+          ...(revenueMetrics[0] || {}),
         },
-        peakUsageTime,
-        topServiceType,
-        serviceTypeBreakdown,
+        serviceBreakdown,
+        hourlyDistribution,
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Error in getRideServiceReports:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch ride service reports",
+      error: error.message,
+    });
   }
 });
 
-// Customer Reports: total, active (by recent bookings), inactive, verified/unverified KYC
+// Get analytics reports with dynamic filtering
 export const getAnalyticsReports = asyncHandler(async (req, res) => {
   try {
-    const days = Math.max(1, parseInt(req.query?.days, 10) || 30);
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const { period = "month", from, to } = req.query;
 
-    const [totalCustomers, verifiedKyc, activeUserIds] = await Promise.all([
-      User.countDocuments({ role: "customer" }),
-      User.countDocuments({ role: "customer", kycStatus: "approved" }),
-      Booking.distinct("user", { createdAt: { $gte: since } }),
-    ]);
+    // Build date range
+    let dateFilter = {};
+    if (from || to) {
+      if (from) {
+        const fromDate = new Date(from);
+        fromDate.setHours(0, 0, 0, 0);
+        dateFilter.$gte = fromDate;
+      }
+      if (to) {
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999);
+        dateFilter.$lte = toDate;
+      }
+    } else {
+      // Default to last 30 days
+      const defaultFrom = new Date();
+      defaultFrom.setDate(defaultFrom.getDate() - 30);
+      defaultFrom.setHours(0, 0, 0, 0);
 
-    const activeCustomers = Array.isArray(activeUserIds)
-      ? await User.countDocuments({
-          role: "customer",
-          _id: { $in: activeUserIds },
-        })
-      : 0;
-    const inactiveCustomers = Math.max(0, totalCustomers - activeCustomers);
+      dateFilter = {
+        $gte: defaultFrom,
+        $lte: new Date(),
+      };
+    }
+
+    // User analytics
+    const userAnalytics = await generateReport(
+      User,
+      {
+        role: { $in: ["user", "driver"] },
+        createdAt: dateFilter,
+      },
+      {
+        _id: {
+          role: "$role",
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+        },
+        count: { $sum: 1 },
+      },
+      {
+        _id: 0,
+        role: "$_id.role",
+        date: "$_id.date",
+        count: 1,
+      },
+      { role: 1, date: 1 }
+    );
+
+    // Booking analytics
+    const bookingAnalytics = await generateReport(
+      Booking,
+      {
+        status: "completed",
+        createdAt: dateFilter,
+      },
+      {
+        _id: {
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+        },
+        count: { $sum: 1 },
+        revenue: { $sum: "$totalFare" },
+      },
+      {
+        _id: 0,
+        date: "$_id.date",
+        count: 1,
+        revenue: 1,
+      },
+      { date: 1 }
+    );
+
+    // Payment method distribution
+    const paymentDistribution = await generateReport(
+      Booking,
+      {
+        status: "completed",
+        createdAt: dateFilter,
+      },
+      {
+        _id: "$paymentMethod",
+        count: { $sum: 1 },
+        amount: { $sum: "$totalFare" },
+      },
+      {
+        _id: 0,
+        paymentMethod: "$_id",
+        count: 1,
+        amount: 1,
+      }
+    );
 
     res.status(200).json({
       success: true,
-      message: "Customer reports fetched successfully",
+      message: "Analytics reports fetched successfully",
       data: {
-        params: { days },
-        totals: {
-          totalCustomers,
-          activeCustomers,
-          inactiveCustomers,
-          verifiedKyc,
-          unverifiedKyc: Math.max(0, totalCustomers - verifiedKyc),
-        },
+        dateRange: dateFilter,
+        userAnalytics,
+        bookingAnalytics,
+        paymentDistribution,
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Error in getAnalyticsReports:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch analytics reports",
+      error: error.message,
+    });
   }
 });
 
@@ -650,3 +1010,4 @@ export const getAdminDashboard = asyncHandler(async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
