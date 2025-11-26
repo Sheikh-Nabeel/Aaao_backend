@@ -263,6 +263,41 @@ const userSchema = new mongoose.Schema(
     wallet: {
       balance: { type: Number, default: 0 },
       lastUpdated: { type: Date, default: Date.now },
+      status: { type: String, enum: ["active", "frozen"], default: "active" },
+      onHold: { type: Number, default: 0 },
+      freezeInfo: {
+        isFrozen: { type: Boolean, default: false },
+        reason: { type: String, default: null },
+        triggeredBy: { type: String, default: null },
+        triggeredAt: { type: Date },
+        reverifyNeeded: { type: Boolean, default: false }
+      },
+      withdrawalRequests: {
+        type: [
+          {
+            amount: { type: Number, required: true },
+            status: { type: String, enum: ["pending", "approved", "rejected", "paused"], default: "pending" },
+            method: { type: String, default: "bank_transfer" },
+            accountLabel: { type: String, default: "" },
+            requestedAt: { type: Date, default: Date.now },
+            processedAt: { type: Date },
+            adminNote: { type: String, default: "" }
+          }
+        ],
+        default: []
+      },
+      alerts: {
+        type: [
+          {
+            type: { type: String, default: "info" },
+            message: { type: String, required: true },
+            createdAt: { type: Date, default: Date.now },
+            resolved: { type: Boolean, default: false },
+            resolvedAt: { type: Date }
+          }
+        ],
+        default: []
+      },
       transactions: {
         type: [
           {
@@ -270,6 +305,14 @@ const userSchema = new mongoose.Schema(
             type: { type: String, enum: ["credit", "debit"], required: true },
             description: { type: String, required: true },
             timestamp: { type: Date, default: Date.now },
+            source: { type: String, default: "system" },
+            bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking" },
+            adminNote: { type: String, default: "" },
+            tags: { type: [String], default: [] },
+            adminBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+            adminName: { type: String },
+            adminEmail: { type: String },
+            adjustmentType: { type: String, enum: ["Bonus", "Penalty", "Refund"], default: null }
           },
         ],
         default: [],

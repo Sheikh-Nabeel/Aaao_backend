@@ -766,6 +766,25 @@ export const distributeRideMLM = asyncHandler(async (req, res) => {
       type: 'pgp',
       rideFare: totalFare
     });
+
+    const bookingIdRef = mongoose.Types.ObjectId.isValid(rideId) ? new mongoose.Types.ObjectId(rideId) : undefined;
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $push: {
+          'wallet.transactions': {
+            amount: totalFare,
+            type: 'debit',
+            description: `Ride payment for ride ${rideId}`,
+            timestamp: new Date(),
+            source: 'ride_payment',
+            bookingId: bookingIdRef,
+            tags: ['ride','payment']
+          }
+        },
+        $set: { 'wallet.lastUpdated': new Date() }
+      }
+    );
     
     // Update user's CRR rank
     await user.updateCRRRank();
